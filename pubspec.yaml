@@ -1,0 +1,24 @@
+name: gentech_chat
+description: Личный чат-клиент для DeepSeek и OpenAI-совместимых API.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: any
+  shared_preferences: any
+  google_fonts: any
+  flutter_markdown_plus: any
+  markdown: any
+  flutter_highlight: any
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
