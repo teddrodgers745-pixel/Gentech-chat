@@ -151,10 +151,7 @@ ThemeData buildTheme(Palette p) {
     canvasColor: p.bg,
   );
 
-  TextTheme textTheme = base.textTheme;
-  try {
-    textTheme = GoogleFonts.getTextTheme('Inter', base.textTheme);
-  } catch (_) {}
+  final TextTheme textTheme = base.textTheme;
 
   return base.copyWith(
     textTheme: textTheme.apply(bodyColor: p.text, displayColor: p.text),
