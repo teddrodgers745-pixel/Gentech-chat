@@ -355,6 +355,8 @@ class _ChatScreenState extends State<ChatScreen> {
                   hintText: 'Сообщение',
                   hintStyle: TextStyle(color: p.muted),
                   border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
                   contentPadding: const EdgeInsets.symmetric(vertical: 10),
                 ),
               ),

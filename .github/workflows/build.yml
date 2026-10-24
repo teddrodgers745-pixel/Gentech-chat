@@ -34,7 +34,13 @@ jobs:
           fi
           sed -i 's|android:label="[^"]*"|android:label="GenTech Chat"|' "$MANIFEST"
 
+      - name: Apply Android patch (permissions, label, id, splash background)
+        run: python3 tools/android_patch.py
+
       - run: flutter pub get
+
+      - name: Analyze Code
+        run: flutter analyze
 
       - run: flutter build apk --release
 
