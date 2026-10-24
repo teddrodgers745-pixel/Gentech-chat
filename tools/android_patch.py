@@ -28,6 +28,7 @@ STYLES_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
     <style name="LaunchTheme" parent="@android:style/{launch_parent}">
         <item name="android:windowBackground">{bg}</item>
         <item name="android:windowSplashScreenBackground">{bg}</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@mipmap/ic_launcher</item>
         <item name="android:forceDarkAllowed">false</item>
         <item name="android:windowFullscreen">false</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
