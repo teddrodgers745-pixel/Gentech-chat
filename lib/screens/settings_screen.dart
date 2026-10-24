@@ -96,7 +96,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   /// Импорт: JSON из буфера обмена -> новые пресеты в Storage.
   Future<void> _importPresets() async {
-    final clip = await Clipboard.getData(Clipboard.kText);
+    final clip = await Clipboard.getData(Clipboard.kTextPlain);
     if (!mounted) return;
     final text = (clip?.text ?? '').trim();
     if (text.isEmpty) {
