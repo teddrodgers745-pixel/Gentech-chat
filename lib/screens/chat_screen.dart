@@ -2,9 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../api.dart';
 import '../app_state.dart';
 import '../models.dart';
+import '../services/chat_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
@@ -20,7 +20,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _input = TextEditingController();
   final ScrollController _scroll = ScrollController();
-  final ChatApi _api = ChatApi();
+  final ChatService _chatService = ChatService();
 
   // Щипок двумя пальцами: меняем размер шрифта, а не масштаб картинки.
   final Map<int, Offset> _pts = {};
@@ -35,7 +35,7 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void dispose() {
     _uiTimer?.cancel();
-    _api.cancel();
+    _chatService.cancel();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -134,7 +134,7 @@ class _ChatScreenState extends State<ChatScreen> {
     await _runCompletion(chat);
   }
 
-  void _stop() => _api.cancel();
+  void _stop() => _chatService.cancel();
 
   Future<void> _runCompletion(Chat chat) async {
     final reply = ChatMessage(id: newId(), role: 'assistant');
@@ -156,7 +156,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     String? error;
     try {
-      await for (final ch in _api.stream(
+      await for (final ch in _chatService.streamCompletion(
         baseUrl: settings.baseUrl,
         apiKey: settings.apiKey.trim(),
         model: settings.model.trim(),
@@ -166,10 +166,10 @@ class _ChatScreenState extends State<ChatScreen> {
         reply.reasoning += ch.reasoning;
         _scheduleUi();
       }
-    } on ApiException catch (e) {
+    } on ChatServiceException catch (e) {
       error = e.message;
     } catch (e) {
-      if (!_api.wasCancelled) error = 'Ошибка соединения: $e';
+      if (!_chatService.wasCancelled) error = 'Ошибка соединения: $e';
     }
 
     _uiTimer?.cancel();
