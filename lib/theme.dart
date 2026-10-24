@@ -327,5 +327,3 @@ ThemeData buildTheme(Palette p) {
     ),
   );
 }
-
-=== конец lib/theme.dart
