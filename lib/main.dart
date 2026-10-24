@@ -15,6 +15,7 @@ Future<void> main() async {
   await storage.init();
   await settings.load();
   await store.load();
+  await presets.load();
   runApp(const GenTechChatApp());
 }
 

@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/chat.dart';
+import '../models/preset.dart';
 import '../models/provider.dart';
 
 class Storage {
@@ -34,27 +35,6 @@ class Storage {
     }
   }
 
-  Future<dynamic> getJson(String key) async {
-    try {
-      final s = _prefs?.getString(key);
-      if (s == null) return null;
-      return s;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<bool> setJson(String key, dynamic value) async {
-    try {
-      if (value is String) {
-        return await _prefs?.setString(key, value) ?? false;
-      }
-      return false;
-    } catch (_) {
-      return false;
-    }
-  }
-
   // Provider methods
   Future<Provider?> getProvider() async {
     try {
@@ -73,6 +53,58 @@ class Storage {
     } catch (_) {
       return false;
     }
+  }
+
+  // Preset methods
+  Future<List<Preset>> getPresets() async {
+    try {
+      final s = _prefs?.getString('presets');
+      if (s == null) return [];
+      final list = jsonDecode(s) as List;
+      return list
+          .map((e) => Preset.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<bool> setPresets(List<Preset> presets) async {
+    try {
+      return await _prefs?.setString(
+            'presets',
+            jsonEncode(presets.map((p) => p.toJson()).toList()),
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<String?> getActivePresetId() async {
+    try {
+      return _prefs?.getString('activePresetId');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> setActivePresetId(String? id) async {
+    try {
+      return await _prefs?.setString('activePresetId', id ?? '') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Preset?> getActivePreset() async {
+    final id = await getActivePresetId();
+    if (id == null || id.isEmpty) return null;
+    final all = await getPresets();
+    for (final p in all) {
+      if (p.id == id) return p;
+    }
+    return null;
   }
 
   // Chat list methods

@@ -38,6 +38,8 @@ class ChatService {
     required String apiKey,
     required String model,
     required List<Map<String, String>> messages,
+    bool stream = true,
+    double? temperature,
   }) async* {
     _wasCancelled = false;
     final client = http.Client();
@@ -54,13 +56,32 @@ class ChatService {
       req.body = jsonEncode({
         'model': model,
         'messages': messages,
-        'stream': true,
+        'stream': stream,
+        if (temperature != null) 'temperature': temperature,
       });
 
       final resp = await client.send(req).timeout(const Duration(seconds: 60));
       if (resp.statusCode != 200) {
         final body = await resp.stream.bytesToString();
         throw ChatServiceException(_describeError(resp.statusCode, body));
+      }
+
+      // Без стриминга: обычный запрос, ответ приходит одним куском.
+      if (!stream) {
+        final body = await resp.stream.bytesToString();
+        String content = '';
+        String reasoning = '';
+        try {
+          final j = jsonDecode(body) as Map<String, dynamic>;
+          final choices = j['choices'] as List?;
+          if (choices != null && choices.isNotEmpty) {
+            final msg = (choices[0] as Map)['message'] as Map?;
+            content = (msg?['content'] as String?) ?? '';
+            reasoning = (msg?['reasoning_content'] as String?) ?? '';
+          }
+        } catch (_) {}
+        yield StreamChunk(content, reasoning);
+        return;
       }
 
       final lines =

@@ -1,15 +1,141 @@
+// Copyright (c) 2026 Minkail. All rights reserved.
+
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'core/storage.dart';
 import 'models.dart';
+import 'models/preset.dart';
 import 'theme.dart';
 
 final AppSettings settings = AppSettings();
 final ChatStore store = ChatStore();
+final PresetStore presets = PresetStore();
 
 String newId() => DateTime.now().microsecondsSinceEpoch.toString();
+
+/// Итоговая конфигурация запроса: активный пресет либо глобальные настройки.
+class EffectiveConfig {
+  final String baseUrl;
+  final String apiKey;
+  final String model;
+  final String systemPrompt;
+  final bool stream;
+  final double? temperature;
+
+  const EffectiveConfig({
+    required this.baseUrl,
+    required this.apiKey,
+    required this.model,
+    required this.systemPrompt,
+    required this.stream,
+    required this.temperature,
+  });
+}
+
+/// Активный пресет имеет приоритет; если он не выбран —
+/// работают прежние настройки (совместимость со старыми данными).
+EffectiveConfig effectiveConfig() {
+  final pr = presets.active;
+  if (pr != null) {
+    return EffectiveConfig(
+      baseUrl: pr.baseUrl.trim(),
+      apiKey: pr.apiKey.trim(),
+      model: pr.model.trim(),
+      systemPrompt: pr.systemPrompt,
+      stream: pr.stream,
+      temperature: pr.temperature,
+    );
+  }
+  return EffectiveConfig(
+    baseUrl: settings.baseUrl.trim(),
+    apiKey: settings.apiKey.trim(),
+    model: settings.model.trim(),
+    systemPrompt: settings.systemPrompt,
+    stream: true,
+    temperature: null,
+  );
+}
+
+class PresetStore extends ChangeNotifier {
+  final List<Preset> _items = [];
+  String _activeId = '';
+
+  List<Preset> get items => List.unmodifiable(_items);
+
+  Preset? get active {
+    for (final p in _items) {
+      if (p.id == _activeId) return p;
+    }
+    return null;
+  }
+
+  Preset? byId(String id) {
+    for (final p in _items) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  Future<void> load() async {
+    final raw = await storage.getString('presets');
+    if (raw != null) {
+      try {
+        final list = jsonDecode(raw) as List;
+        _items
+          ..clear()
+          ..addAll(list
+              .map((e) => Preset.fromJson(Map<String, dynamic>.from(e as Map)))
+              .toList());
+      } catch (_) {}
+    }
+    _activeId = await storage.getString('activePresetId') ?? '';
+    if (active == null) _activeId = '';
+  }
+
+  Future<void> _persist() async {
+    await storage.setString(
+      'presets',
+      jsonEncode(_items.map((p) => p.toJson()).toList()),
+    );
+  }
+
+  Future<void> setActive(String id) async {
+    if (byId(id) == null) return;
+    _activeId = id;
+    await storage.setString('activePresetId', id);
+    notifyListeners();
+  }
+
+  Future<void> clearActive() async {
+    _activeId = '';
+    await storage.setString('activePresetId', '');
+    notifyListeners();
+  }
+
+  Future<void> upsert(Preset preset) async {
+    final i = _items.indexWhere((x) => x.id == preset.id);
+    if (i >= 0) {
+      _items[i] = preset;
+    } else {
+      _items.add(preset);
+    }
+    await _persist();
+    notifyListeners();
+  }
+
+  Future<void> remove(String id) async {
+    _items.removeWhere((x) => x.id == id);
+    if (_activeId == id) {
+      _activeId = '';
+      await storage.setString('activePresetId', '');
+    }
+    await _persist();
+    notifyListeners();
+  }
+}
 
 class AppSettings extends ChangeNotifier {
   String apiKey = '';
