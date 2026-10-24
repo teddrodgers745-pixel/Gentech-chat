@@ -8,6 +8,8 @@ import '../services/chat_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
+import 'preset_edit_screen.dart';
+import 'presets_sheet.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -102,13 +104,22 @@ class _ChatScreenState extends State<ChatScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  void _showPresets() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => const PresetsSheet(),
+    );
+  }
+
   // ---------- отправка ----------
 
   Future<void> _send() async {
     final txt = _input.text.trim();
     if (txt.isEmpty || _streaming) return;
-    if (settings.apiKey.trim().isEmpty) {
-      _snack('Сначала введите API-ключ в настройках');
+    if (effectiveConfig().apiKey.isEmpty) {
+      _snack('Сначала введите API-ключ в настройках или в пресете');
       return;
     }
     final chat = store.current ?? store.createChat();
@@ -124,8 +135,8 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _regenerate() async {
     final chat = store.current;
     if (chat == null || chat.messages.isEmpty || _streaming) return;
-    if (settings.apiKey.trim().isEmpty) {
-      _snack('Сначала введите API-ключ в настройках');
+    if (effectiveConfig().apiKey.isEmpty) {
+      _snack('Сначала введите API-ключ в настройках или в пресете');
       return;
     }
     if (chat.messages.last.role == 'assistant') chat.messages.removeLast();
@@ -143,11 +154,12 @@ class _ChatScreenState extends State<ChatScreen> {
     store.touch(chat);
     _toEnd();
 
+    final cfg = effectiveConfig();
     final msgs = <Map<String, String>>[
-      if (settings.systemPrompt.trim().isNotEmpty)
+      if (cfg.systemPrompt.trim().isNotEmpty)
         <String, String>{
           'role': 'system',
-          'content': settings.systemPrompt.trim(),
+          'content': cfg.systemPrompt.trim(),
         },
       for (final m in chat.messages)
         if (!identical(m, reply) && m.content.isNotEmpty)
@@ -157,10 +169,12 @@ class _ChatScreenState extends State<ChatScreen> {
     String? error;
     try {
       await for (final ch in _chatService.streamCompletion(
-        baseUrl: settings.baseUrl,
-        apiKey: settings.apiKey.trim(),
-        model: settings.model.trim(),
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        model: cfg.model,
         messages: msgs,
+        stream: cfg.stream,
+        temperature: cfg.temperature,
       )) {
         reply.content += ch.content;
         reply.reasoning += ch.reasoning;
@@ -192,17 +206,27 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge(<Listenable>[store, settings]),
+      listenable: Listenable.merge(<Listenable>[store, settings, presets]),
       builder: (context, _) {
         final chat = store.current;
         final p = settings.palette;
         return Scaffold(
           appBar: AppBar(
-            title: Text(
-              chat?.title ?? 'Новый чат',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+            toolbarHeight: 76,
+            title: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  chat?.title ?? 'Новый чат',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      fontSize: 17, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 3),
+                PresetChip(onTap: _showPresets),
+              ],
             ),
             actions: [
               IconButton(
@@ -316,7 +340,12 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             const SizedBox(height: 8),
-            Text(settings.model, style: TextStyle(color: p.muted)),
+            Text(
+              effectiveConfig().model.trim().isEmpty
+                  ? 'Модель не задана'
+                  : effectiveConfig().model,
+              style: TextStyle(color: p.muted),
+            ),
             const SizedBox(height: 16),
             Text(
               'Сведите или разведите два пальца в чате, чтобы изменить размер текста.',
