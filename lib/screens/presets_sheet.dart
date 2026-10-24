@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../models.dart';
-import '../theme.dart';
 import 'preset_edit_screen.dart';
 
 /// Чип с названием активного пресета в AppBar (под названием чата).

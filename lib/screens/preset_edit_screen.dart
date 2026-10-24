@@ -192,7 +192,6 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
             const SizedBox(height: 8),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              activeColor: p.accent,
               title: const Text('Потоковый вывод (SSE)'),
               subtitle: Text(
                 'Ответ появляется по мере генерации',

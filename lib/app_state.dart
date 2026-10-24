@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/storage.dart';
 import 'models.dart';
-import 'models/preset.dart';
 import 'theme.dart';
 
 final AppSettings settings = AppSettings();
