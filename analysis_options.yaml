@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Minkail. All rights reserved.
+# Minimal analyzer config: flutter_lints is not a dependency,
+# so the generated include must not be used here.
+analyzer:
+  exclude:
+    - build/**
+    - android/**
+linter:
+  rules:
+    prefer_const_constructors: true
+    prefer_final_locals: true
+    avoid_print: false
