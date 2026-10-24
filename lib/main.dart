@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 
-import 'app_state.dart';
+import 'app_state.dart'
 import 'core/storage.dart';
 import 'screens/chat_screen.dart';
 import 'theme.dart';
@@ -152,9 +153,9 @@ class _SparklesPainter extends CustomPainter {
   void _drawSparkle(Canvas canvas, Paint paint, Offset center, double radius) {
     final path = Path();
     const spikes = 4;
-    final angleStep = 2 * 3.1415926535 / spikes;
+    final angleStep = 2 * pi / spikes;
     for (int i = 0; i < spikes; i++) {
-      final angle = i * angleStep - 3.1415926535 / 4; // поворот 45°
+      final angle = i * angleStep - pi / 4; // поворот 45°
       final outer = Offset(
         center.dx + radius * cos(angle),
         center.dy + radius * sin(angle),
