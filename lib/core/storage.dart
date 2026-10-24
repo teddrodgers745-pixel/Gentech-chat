@@ -1,6 +1,10 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:convert';
+
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/provider.dart';
 
 class Storage {
   SharedPreferences? _prefs;
@@ -45,6 +49,26 @@ class Storage {
         return await _prefs?.setString(key, value) ?? false;
       }
       return false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Provider methods
+  Future<Provider?> getProvider() async {
+    try {
+      final s = _prefs?.getString('provider');
+      if (s == null) return null;
+      final map = jsonDecode(s) as Map<String, dynamic>;
+      return Provider.fromJson(map);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> setProvider(Provider provider) async {
+    try {
+      return await _prefs?.setString('provider', jsonEncode(provider.toJson())) ?? false;
     } catch (_) {
       return false;
     }
