@@ -1,6 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
+import '../core/storage.dart';
+import '../models.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
 
@@ -58,6 +63,81 @@ class _SettingsScreenState extends State<SettingsScreen> {
       mdl: _model.text.trim(),
       sys: _sys.text,
     );
+  }
+
+  void _snack(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// Экспорт: все пресеты из Storage -> JSON без API-ключей -> буфер обмена.
+  Future<void> _exportPresets() async {
+    final list = await storage.getPresets();
+    if (!mounted) return;
+    if (list.isEmpty) {
+      _snack('Пресетов пока нет');
+      return;
+    }
+    final data = <Map<String, dynamic>>[];
+    for (final pr in list) {
+      final j = pr.toJson();
+      j['apiKey'] = ''; // ключи не покидают устройство
+      data.add(j);
+    }
+    final payload = jsonEncode(<String, dynamic>{
+      'app': 'GenTech Chat',
+      'type': 'presets',
+      'version': 1,
+      'presets': data,
+    });
+    await Clipboard.setData(ClipboardData(text: payload));
+    if (!mounted) return;
+    _snack('Скопировано пресетов: ${list.length} (без API-ключей)');
+  }
+
+  /// Импорт: JSON из буфера обмена -> новые пресеты в Storage.
+  Future<void> _importPresets() async {
+    final clip = await Clipboard.getData(Clipboard.kText);
+    if (!mounted) return;
+    final text = (clip?.text ?? '').trim();
+    if (text.isEmpty) {
+      _snack('Буфер обмена пуст');
+      return;
+    }
+    try {
+      final decoded = jsonDecode(text);
+      final List<dynamic> list;
+      if (decoded is List) {
+        list = decoded;
+      } else if (decoded is Map && decoded['presets'] is List) {
+        list = decoded['presets'] as List;
+      } else {
+        throw const FormatException('no presets');
+      }
+      var added = 0;
+      for (final item in list) {
+        if (item is! Map) continue;
+        final src = Preset.fromJson(Map<String, dynamic>.from(item));
+        await presets.upsert(Preset(
+          id: newId(),
+          name: src.name.trim().isEmpty ? 'Импортированный пресет' : src.name,
+          providerId: src.providerId,
+          baseUrl: src.baseUrl,
+          apiKey: '', // ключи не переносятся
+          model: src.model,
+          stream: src.stream,
+          temperature: src.temperature,
+          systemPrompt: src.systemPrompt,
+        ));
+        added++;
+      }
+      if (!mounted) return;
+      setState(() {});
+      _snack(
+        added > 0 ? 'Импортировано пресетов: $added' : 'В JSON нет пресетов',
+      );
+    } catch (_) {
+      _snack('Не удалось импортировать: неверный формат JSON');
+    }
   }
 
   InputDecoration _dec(Palette p, String label, {String? hint, Widget? suffix}) {
@@ -287,6 +367,39 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 12),
               Text(
                 'Размер текста также меняется щипком двумя пальцами прямо в чате.',
+                style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+              _section(p, 'ПРЕСЕТЫ'),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _exportPresets,
+                      icon: const Icon(Icons.upload_outlined, size: 18),
+                      label: const Text(
+                        'Экспорт пресетов',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _importPresets,
+                      icon: const Icon(Icons.download_outlined, size: 18),
+                      label: const Text(
+                        'Импорт пресетов',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Экспорт копирует JSON всех пресетов в буфер обмена без API-ключей. Импорт добавляет пресеты из JSON в буфере обмена.',
                 style: TextStyle(color: p.muted, fontSize: 13),
               ),
             ],
