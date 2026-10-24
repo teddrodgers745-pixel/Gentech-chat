@@ -4,6 +4,7 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/chat.dart';
 import '../models/provider.dart';
 
 class Storage {
@@ -69,6 +70,49 @@ class Storage {
   Future<bool> setProvider(Provider provider) async {
     try {
       return await _prefs?.setString('provider', jsonEncode(provider.toJson())) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Chat list methods
+  Future<List<Chat>> getChats() async {
+    try {
+      final s = _prefs?.getString('chats');
+      if (s == null) return [];
+      final list = jsonDecode(s) as List;
+      return list
+          .map((e) => Chat.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<bool> setChats(List<Chat> chats) async {
+    try {
+      return await _prefs?.setString(
+            'chats',
+            jsonEncode(chats.map((c) => c.toJson()).toList()),
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Current chat ID methods
+  Future<String?> getCurrentChatId() async {
+    try {
+      return _prefs?.getString('currentChat');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> setCurrentChatId(String? id) async {
+    try {
+      return await _prefs?.setString('currentChat', id ?? '') ?? false;
     } catch (_) {
       return false;
     }
