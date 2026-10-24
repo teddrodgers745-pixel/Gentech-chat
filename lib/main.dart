@@ -1,11 +1,15 @@
+// Copyright (c) 2026 Minkail. All rights reserved.
+
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
+import 'core/storage.dart';
 import 'screens/chat_screen.dart';
 import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await storage.init();
   await settings.load();
   await store.load();
   runApp(const GenTechChatApp());
