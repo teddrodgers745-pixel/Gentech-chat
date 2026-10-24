@@ -257,11 +257,11 @@ ThemeData buildTheme(Palette p) {
       ),
       errorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(20),
-        borderSide: BorderSide(color: const Color(0xFFB3261E), width: 1),
+        borderSide: const BorderSide(color: Color(0xFFB3261E), width: 1),
       ),
       focusedErrorBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(20),
-        borderSide: BorderSide(color: const Color(0xFFB3261E), width: 2),
+        borderSide: const BorderSide(color: Color(0xFFB3261E), width: 2),
       ),
     ),
     chipTheme: ChipThemeData(
