@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/chat.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
+import '../models/tool.dart';
 
 class Storage {
   SharedPreferences? _prefs;
@@ -105,6 +106,32 @@ class Storage {
       if (p.id == id) return p;
     }
     return null;
+  }
+
+  // Tool methods
+  Future<List<Tool>> getTools() async {
+    try {
+      final s = _prefs?.getString('tools');
+      if (s == null) return [];
+      final list = jsonDecode(s) as List;
+      return list
+          .map((e) => Tool.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<bool> setTools(List<Tool> tools) async {
+    try {
+      return await _prefs?.setString(
+            'tools',
+            jsonEncode(tools.map((t) => t.toJson()).toList()),
+          ) ??
+          false;
+    } catch (_) {
+      return false;
+    }
   }
 
   // Chat list methods

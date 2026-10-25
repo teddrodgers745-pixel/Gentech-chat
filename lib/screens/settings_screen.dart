@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../core/storage.dart';
 import '../models.dart';
 import '../theme.dart';
+import '../ui/screens/tools_screen.dart';
 import '../widgets/message_view.dart';
 
 const String _sampleMd = '''
@@ -368,6 +369,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Text(
                 'Размер текста также меняется щипком двумя пальцами прямо в чате.',
                 style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+              _section(p, 'ИНСТРУМЕНТЫ'),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.build_outlined, color: p.accent),
+                title: const Text('Инструменты'),
+                subtitle: Text(
+                  'Внешние инструменты, которые модель сможет вызывать',
+                  style: TextStyle(color: p.muted, fontSize: 12),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ToolsScreen()),
+                ),
               ),
               _section(p, 'ПРЕСЕТЫ'),
               Row(
