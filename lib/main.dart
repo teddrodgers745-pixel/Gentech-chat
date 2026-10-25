@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'core/storage.dart';
+import 'models/tool.dart';
 import 'screens/chat_screen.dart';
 import 'theme.dart';
 
@@ -15,7 +16,34 @@ Future<void> main() async {
   await settings.load();
   await store.load();
   await presets.load();
+  await _seedDefaultTools();
   runApp(const GenTechChatApp());
+}
+
+/// При первом запуске добавляем готовый тестовый инструмент «Погода»
+/// (открытый погодный эндпоинт, метод GET). Флаг в хранилище гарантирует,
+/// что пользовательские инструменты никогда не перезаписываются повторно.
+Future<void> _seedDefaultTools() async {
+  try {
+    if (await storage.getString('toolsSeeded') != null) return;
+    final tools = await storage.getTools();
+    if (tools.isEmpty) {
+      tools.add(Tool(
+        id: newId(),
+        name: 'Погода',
+        description: 'Текущая погода: температура и ветер по открытому API.',
+        endpoint:
+            'https://api.open-meteo.com/v1/forecast?latitude=55.75&longitude=37.61&current_weather=true',
+        method: 'GET',
+        parametersSchema:
+            '{"type": "object", "properties": {}, "required": []}',
+      ));
+      await storage.setTools(tools);
+    }
+    await storage.setString('toolsSeeded', '1');
+  } catch (_) {
+    // Хранилище недоступно — не блокируем запуск приложения.
+  }
 }
 
 class GenTechChatApp extends StatelessWidget {

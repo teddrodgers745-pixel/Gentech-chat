@@ -178,10 +178,11 @@ class _ChatScreenState extends State<ChatScreen> {
           'content': cfg.systemPrompt.trim(),
         },
       for (final m in chat.messages)
-        if (!identical(m, reply) && m.content.isNotEmpty)
+        if (!identical(m, reply) && !m.isToolCall && m.content.isNotEmpty)
           <String, String>{'role': m.role, 'content': m.content},
     ];
 
+    ChatMessage? toolMsg;
     String? error;
     try {
       final tools = await _activeTools();
@@ -194,6 +195,26 @@ class _ChatScreenState extends State<ChatScreen> {
         temperature: cfg.temperature,
         tools: tools,
       )) {
+        if (ch.toolName != null) {
+          // Специальное сообщение-вызов инструмента: создаётся при старте
+          // вызова и обновляется по завершении (готово/ошибка).
+          if (ch.toolStatus == toolStatusRunning) {
+            toolMsg = ChatMessage(
+              id: newId(),
+              role: 'tool_call',
+              toolName: ch.toolName ?? '',
+              toolArgs: ch.toolArgs ?? '',
+              toolStatus: toolStatusRunning,
+            );
+            chat.messages.add(toolMsg);
+          } else if (toolMsg != null) {
+            toolMsg
+              ..toolResult = ch.toolResult ?? ''
+              ..toolStatus = ch.toolStatus ?? toolStatusDone;
+          }
+          _scheduleUi();
+          continue;
+        }
         reply.content += ch.content;
         reply.reasoning += ch.reasoning;
         _scheduleUi();

@@ -9,6 +9,7 @@ import 'package:markdown/markdown.dart' as md;
 import '../app_state.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'tool_call_card.dart';
 
 /// Одно сообщение: пользовательское или ответ модели.
 class MessageView extends StatelessWidget {
@@ -30,6 +31,10 @@ class MessageView extends StatelessWidget {
       builder: (context, _) {
         final p = settings.palette;
         final size = settings.fontSizeN.value;
+
+        if (message.isToolCall) {
+          return ToolCallCard(message: message);
+        }
 
         if (message.role == 'user') {
           return Container(

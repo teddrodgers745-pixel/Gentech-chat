@@ -5,12 +5,34 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../models/chat_message.dart';
 import '../models/tool.dart';
 
 class StreamChunk {
   final String content;
   final String reasoning;
-  const StreamChunk(this.content, this.reasoning);
+
+  /// Поля события вызова инструмента (заполняются только для таких событий).
+  final String? toolName;
+  final String? toolArgs;
+  final String? toolStatus;
+  final String? toolResult;
+
+  const StreamChunk(
+    this.content,
+    this.reasoning, {
+    this.toolName,
+    this.toolArgs,
+    this.toolStatus,
+    this.toolResult,
+  });
+}
+
+/// Итог выполнения инструмента: признак успеха и текст для модели и интерфейса.
+class ToolOutcome {
+  final bool ok;
+  final String text;
+  const ToolOutcome(this.ok, this.text);
 }
 
 class ChatServiceException implements Exception {
@@ -139,17 +161,38 @@ class ChatService {
 
       for (final call in resolved) {
         if (_wasCancelled) return;
+        final args =
+            call.arguments.trim().isEmpty ? '{}' : call.arguments.trim();
+        // Сообщаем интерфейсу о начале вызова: появится карточка «выполняется».
+        yield StreamChunk(
+          '',
+          '',
+          toolName: call.name,
+          toolArgs: args,
+          toolStatus: toolStatusRunning,
+        );
         final tool = _findTool(tools, call.name);
-        String result;
+        final ToolOutcome outcome;
         if (tool == null) {
-          result = 'Ошибка: инструмент "${call.name}" не найден.';
+          outcome = const ToolOutcome(
+            false,
+            'Ошибка: инструмент не найден среди доступных.',
+          );
         } else {
-          result = await _executeTool(tool, call.arguments);
+          outcome = await _executeTool(tool, call.arguments);
         }
+        // Сообщаем интерфейсу итог: карточка переключается на готово/ошибка.
+        yield StreamChunk(
+          '',
+          '',
+          toolName: call.name,
+          toolStatus: outcome.ok ? toolStatusDone : toolStatusError,
+          toolResult: outcome.text,
+        );
         history.add({
           'role': 'tool',
           'tool_call_id': call.id,
-          'content': result,
+          'content': outcome.text,
         });
       }
     }
@@ -345,7 +388,7 @@ class ChatService {
 
   /// Выполнение инструмента: GET (аргументы в query) или POST (JSON-тело).
   /// Любая ошибка возвращается текстом — приложение не падает.
-  Future<String> _executeTool(Tool tool, String argumentsRaw) async {
+  Future<ToolOutcome> _executeTool(Tool tool, String argumentsRaw) async {
     Map<String, dynamic> args = <String, dynamic>{};
     final raw = argumentsRaw.trim();
     if (raw.isNotEmpty) {
@@ -353,7 +396,10 @@ class ChatService {
         final d = jsonDecode(raw);
         if (d is Map) args = Map<String, dynamic>.from(d);
       } catch (_) {
-        return 'Ошибка: модель передала некорректные аргументы (не JSON-объект).';
+        return const ToolOutcome(
+          false,
+          'Ошибка: модель передала некорректные аргументы (не JSON-объект).',
+        );
       }
     }
 
@@ -381,14 +427,23 @@ class ChatService {
       }
       final body = resp.body;
       if (resp.statusCode >= 200 && resp.statusCode < 300) {
-        return body.length > 20000 ? body.substring(0, 20000) : body;
+        return ToolOutcome(
+          true,
+          body.length > 20000 ? body.substring(0, 20000) : body,
+        );
       }
-      return 'Ошибка HTTP ${resp.statusCode}: '
-          '${body.length > 500 ? body.substring(0, 500) : body}';
+      return ToolOutcome(
+        false,
+        'Ошибка HTTP ${resp.statusCode}: '
+            '${body.length > 500 ? body.substring(0, 500) : body}',
+      );
     } on TimeoutException {
-      return 'Ошибка: инструмент не ответил за 30 секунд.';
+      return const ToolOutcome(
+        false,
+        'Ошибка: инструмент не ответил за 30 секунд.',
+      );
     } catch (e) {
-      return 'Ошибка вызова инструмента: $e';
+      return ToolOutcome(false, 'Ошибка вызова инструмента: $e');
     } finally {
       client.close();
       if (identical(_client, client)) _client = null;
