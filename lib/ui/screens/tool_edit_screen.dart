@@ -9,8 +9,9 @@ import '../../core/storage.dart';
 import '../../models/tool.dart';
 import '../../theme.dart';
 
-/// Форма создания/редактирования инструмента:
-/// название, описание, URL, метод, заголовки (JSON), схема параметров (JSON).
+/// Форма создания/редактирования инструмента.
+/// Два типа: HTTP-инструмент (URL, метод, заголовки, схема параметров)
+/// и модель-инструмент (Base URL, ключ, модель, тип API).
 class ToolEditScreen extends StatefulWidget {
   final Tool? existing;
 
@@ -26,12 +27,19 @@ class _ToolEditScreenState extends State<ToolEditScreen> {
   late final TextEditingController _url;
   late final TextEditingController _headers;
   late final TextEditingController _schema;
+  late final TextEditingController _baseUrl;
+  late final TextEditingController _apiKey;
+  late final TextEditingController _modelId;
+  String _type = Tool.typeHttp;
   String _method = 'POST';
+  String _apiType = Tool.apiChat;
+  bool _showKey = false;
 
   @override
   void initState() {
     super.initState();
     final e = widget.existing;
+    _type = (e != null && e.isModel) ? Tool.typeModel : Tool.typeHttp;
     _name = TextEditingController(text: e?.name ?? '');
     _desc = TextEditingController(text: e?.description ?? '');
     _url = TextEditingController(text: e?.endpoint ?? '');
@@ -40,6 +48,12 @@ class _ToolEditScreenState extends State<ToolEditScreen> {
       text: _pretty(e?.headers ?? const <String, String>{}),
     );
     _schema = TextEditingController(text: e?.parametersSchema ?? '');
+    _baseUrl = TextEditingController(text: e?.baseUrl ?? '');
+    _apiKey = TextEditingController(text: e?.apiKey ?? '');
+    _modelId = TextEditingController(text: e?.modelId ?? '');
+    _apiType = (e?.apiType == Tool.apiResponses)
+        ? Tool.apiResponses
+        : Tool.apiChat;
   }
 
   static String _pretty(Map<String, String> headers) {
@@ -58,6 +72,9 @@ class _ToolEditScreenState extends State<ToolEditScreen> {
     _url.dispose();
     _headers.dispose();
     _schema.dispose();
+    _baseUrl.dispose();
+    _apiKey.dispose();
+    _modelId.dispose();
     super.dispose();
   }
 
@@ -71,47 +88,71 @@ class _ToolEditScreenState extends State<ToolEditScreen> {
       _snack('Введите название инструмента');
       return;
     }
-    final url = _url.text.trim();
-    final uri = Uri.tryParse(url);
-    if (url.isEmpty ||
-        uri == null ||
-        (uri.scheme != 'http' && uri.scheme != 'https')) {
-      _snack('URL должен начинаться с http:// или https://');
-      return;
-    }
+    String url = '';
     Map<String, String> headers = {};
-    final hText = _headers.text.trim();
-    if (hText.isNotEmpty) {
-      try {
-        final decoded = jsonDecode(hText);
-        if (decoded is! Map) throw const FormatException('not a map');
-        headers = decoded.map<String, String>(
-          (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
-        );
-      } catch (_) {
-        _snack('Заголовки: неверный JSON (нужен объект вида {"Ключ": "значение"})');
-        return;
-      }
-    }
-    final sText = _schema.text.trim();
     String schema = '';
-    if (sText.isNotEmpty) {
-      try {
-        jsonDecode(sText);
-        schema = sText;
-      } catch (_) {
-        _snack('Схема параметров: неверный JSON');
+    String baseUrl = '';
+
+    if (_type == Tool.typeModel) {
+      baseUrl = _baseUrl.text.trim();
+      final uri = Uri.tryParse(baseUrl);
+      if (baseUrl.isEmpty ||
+          uri == null ||
+          (uri.scheme != 'http' && uri.scheme != 'https')) {
+        _snack('Base URL должен начинаться с http:// или https://');
         return;
       }
+      if (_modelId.text.trim().isEmpty) {
+        _snack('Введите Model ID');
+        return;
+      }
+    } else {
+      url = _url.text.trim();
+      final uri = Uri.tryParse(url);
+      if (url.isEmpty ||
+          uri == null ||
+          (uri.scheme != 'http' && uri.scheme != 'https')) {
+        _snack('URL должен начинаться с http:// или https://');
+        return;
+      }
+      final hText = _headers.text.trim();
+      if (hText.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(hText);
+          if (decoded is! Map) throw const FormatException('not a map');
+          headers = decoded.map<String, String>(
+            (k, v) => MapEntry(k.toString(), v?.toString() ?? ''),
+          );
+        } catch (_) {
+          _snack('Заголовки: неверный JSON (нужен объект вида {"Ключ": "значение"})');
+          return;
+        }
+      }
+      final sText = _schema.text.trim();
+      if (sText.isNotEmpty) {
+        try {
+          jsonDecode(sText);
+          schema = sText;
+        } catch (_) {
+          _snack('Схема параметров: неверный JSON');
+          return;
+        }
+      }
     }
+
     final tool = Tool(
       id: widget.existing?.id ?? newId(),
       name: name,
       description: _desc.text.trim(),
+      type: _type,
       endpoint: url,
       method: _method,
       headers: headers,
       parametersSchema: schema,
+      baseUrl: baseUrl,
+      apiKey: _apiKey.text.trim(),
+      modelId: _modelId.text.trim(),
+      apiType: _apiType,
     );
     final list = await storage.getTools();
     final i = list.indexWhere((x) => x.id == tool.id);
@@ -207,55 +248,137 @@ class _ToolEditScreenState extends State<ToolEditScreen> {
                 hintText: 'Что делает этот инструмент',
               ),
             ),
-            _section(p, 'ЭНДПОИНТ'),
-            TextField(
-              controller: _url,
-              autocorrect: false,
-              keyboardType: TextInputType.url,
-              cursorColor: p.accent,
-              decoration: const InputDecoration(
-                labelText: 'URL эндпоинта',
-                hintText: 'https://example.com/api/action',
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text('Метод запроса', style: TextStyle(color: p.muted, fontSize: 13)),
-            const SizedBox(height: 8),
+            _section(p, 'ТИП ИНСТРУМЕНТА'),
             Wrap(
               spacing: 8,
+              runSpacing: 8,
               children: [
-                for (final m in const ['GET', 'POST'])
-                  ChoiceChip(
-                    label: Text(m),
-                    selected: _method == m,
-                    onSelected: (_) => setState(() => _method = m),
-                  ),
+                ChoiceChip(
+                  label: const Text('HTTP-инструмент'),
+                  selected: _type == Tool.typeHttp,
+                  onSelected: (_) => setState(() => _type = Tool.typeHttp),
+                ),
+                ChoiceChip(
+                  label: const Text('Модель-инструмент'),
+                  selected: _type == Tool.typeModel,
+                  onSelected: (_) => setState(() => _type = Tool.typeModel),
+                ),
               ],
             ),
-            _section(p, 'ДАННЫЕ'),
-            TextField(
-              controller: _headers,
-              minLines: 2,
-              maxLines: 6,
-              autocorrect: false,
-              cursorColor: p.accent,
-              decoration: const InputDecoration(
-                labelText: 'Заголовки (JSON)',
-                hintText: '{"Content-Type": "application/json"}',
+            if (_type == Tool.typeModel) ...[
+              _section(p, 'МОДЕЛЬ'),
+              TextField(
+                controller: _baseUrl,
+                autocorrect: false,
+                keyboardType: TextInputType.url,
+                cursorColor: p.accent,
+                decoration: const InputDecoration(
+                  labelText: 'Base URL',
+                  hintText: 'https://api.example.com',
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _schema,
-              minLines: 4,
-              maxLines: 10,
-              autocorrect: false,
-              cursorColor: p.accent,
-              decoration: const InputDecoration(
-                labelText: 'Схема параметров (JSON)',
-                hintText: '{"type": "object", "properties": {}}',
+              const SizedBox(height: 12),
+              TextField(
+                controller: _apiKey,
+                obscureText: !_showKey,
+                autocorrect: false,
+                enableSuggestions: false,
+                cursorColor: p.accent,
+                decoration: InputDecoration(
+                  labelText: 'API-ключ',
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      _showKey ? Icons.visibility_off : Icons.visibility,
+                    ),
+                    onPressed: () => setState(() => _showKey = !_showKey),
+                  ),
+                ),
               ),
-            ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _modelId,
+                autocorrect: false,
+                cursorColor: p.accent,
+                decoration: const InputDecoration(
+                  labelText: 'Model ID',
+                  hintText: 'Идентификатор модели',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text('Тип API', style: TextStyle(color: p.muted, fontSize: 13)),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  ChoiceChip(
+                    label: const Text('Chat Completions'),
+                    selected: _apiType == Tool.apiChat,
+                    onSelected: (_) =>
+                        setState(() => _apiType = Tool.apiChat),
+                  ),
+                  ChoiceChip(
+                    label: const Text('Responses API'),
+                    selected: _apiType == Tool.apiResponses,
+                    onSelected: (_) =>
+                        setState(() => _apiType = Tool.apiResponses),
+                  ),
+                ],
+              ),
+            ] else ...[
+              _section(p, 'ЭНДПОИНТ'),
+              TextField(
+                controller: _url,
+                autocorrect: false,
+                keyboardType: TextInputType.url,
+                cursorColor: p.accent,
+                decoration: const InputDecoration(
+                  labelText: 'URL эндпоинта',
+                  hintText: 'https://example.com/api/action',
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Метод запроса',
+                style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final m in const ['GET', 'POST'])
+                    ChoiceChip(
+                      label: Text(m),
+                      selected: _method == m,
+                      onSelected: (_) => setState(() => _method = m),
+                    ),
+                ],
+              ),
+              _section(p, 'ДАННЫЕ'),
+              TextField(
+                controller: _headers,
+                minLines: 2,
+                maxLines: 6,
+                autocorrect: false,
+                cursorColor: p.accent,
+                decoration: const InputDecoration(
+                  labelText: 'Заголовки (JSON)',
+                  hintText: '{"Content-Type": "application/json"}',
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _schema,
+                minLines: 4,
+                maxLines: 10,
+                autocorrect: false,
+                cursorColor: p.accent,
+                decoration: const InputDecoration(
+                  labelText: 'Схема параметров (JSON)',
+                  hintText: '{"type": "object", "properties": {}}',
+                ),
+              ),
+            ],
             if (!isNew) ...[
               const SizedBox(height: 16),
               TextButton.icon(
@@ -271,4 +394,3 @@ class _ToolEditScreenState extends State<ToolEditScreen> {
     );
   }
 }
-

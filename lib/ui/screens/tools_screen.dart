@@ -109,7 +109,10 @@ class _ToolsScreenState extends State<ToolsScreen> {
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
-        leading: Icon(Icons.build_outlined, color: p.accent),
+        leading: Icon(
+          t.isModel ? Icons.auto_awesome : Icons.build_outlined,
+          color: p.accent,
+        ),
         title: Text(
           t.name,
           maxLines: 1,
@@ -128,7 +131,9 @@ class _ToolsScreenState extends State<ToolsScreen> {
               ),
             const SizedBox(height: 2),
             Text(
-              '${t.method.toUpperCase()} · ${t.endpoint}',
+              t.isModel
+                  ? 'Модель · ${t.modelId.trim().isEmpty ? t.baseUrl.trim() : t.modelId.trim()}'
+                  : '${t.method.toUpperCase()} · ${t.endpoint}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(

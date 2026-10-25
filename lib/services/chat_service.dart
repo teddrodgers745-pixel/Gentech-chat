@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/chat_message.dart';
 import '../models/tool.dart';
+import 'model_tool.dart';
 
 class StreamChunk {
   final String content;
@@ -178,6 +179,8 @@ class ChatService {
             false,
             'Ошибка: инструмент не найден среди доступных.',
           );
+        } else if (tool.isModel) {
+          outcome = await ModelToolRunner.run(tool, call.arguments);
         } else {
           outcome = await _executeTool(tool, call.arguments);
         }

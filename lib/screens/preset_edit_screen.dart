@@ -119,19 +119,23 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
       for (final t in _tools)
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
+          secondary: Icon(
+            t.isModel ? Icons.auto_awesome : Icons.build_outlined,
+            color: p.accent,
+          ),
           title: Text(
             t.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
-          subtitle: t.description.trim().isEmpty
-              ? null
-              : Text(
-                  t.description,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: p.muted, fontSize: 12),
-                ),
+          subtitle: Text(
+            t.description.trim().isEmpty
+                ? t.typeLabel
+                : '${t.typeLabel} · ${t.description}',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: p.muted, fontSize: 12),
+          ),
           value: _enabled.contains(t.id),
           onChanged: (v) {
             setState(() {
