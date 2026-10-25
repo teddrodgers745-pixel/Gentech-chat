@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/chat.dart';
+import '../models/mcp_server.dart';
 import '../models/preset.dart';
 import '../models/provider.dart';
 import '../models/tool.dart';
@@ -172,6 +173,32 @@ class Storage {
   Future<bool> setCurrentChatId(String? id) async {
     try {
       return await _prefs?.setString('currentChat', id ?? '') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // MCP server methods
+  Future<List<McpServer>> getMcpServers() async {
+    try {
+      final s = _prefs?.getString('mcp_servers');
+      if (s == null) return [];
+      final list = jsonDecode(s) as List;
+      return list
+          .map((e) => McpServer.fromJson(Map<String, dynamic>.from(e as Map)))
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<bool> setMcpServers(List<McpServer> servers) async {
+    try {
+      return await _prefs?.setString(
+            'mcp_servers',
+            jsonEncode(servers.map((m) => m.toJson()).toList()),
+          ) ??
+          false;
     } catch (_) {
       return false;
     }

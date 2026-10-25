@@ -8,6 +8,7 @@ import '../core/storage.dart';
 import '../models.dart';
 import 'preset_edit_screen.dart';
 import '../theme.dart';
+import '../ui/screens/mcp_screen.dart';
 import '../ui/screens/tools_screen.dart';
 import '../widgets/message_view.dart';
 
@@ -302,6 +303,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(builder: (_) => const ToolsScreen()),
+                ),
+              ),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.dns_outlined, color: p.accent),
+                title: const Text('MCP-серверы'),
+                subtitle: Text(
+                  'Серверы Model Context Protocol для расширения возможностей',
+                  style: TextStyle(color: p.muted, fontSize: 12),
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const McpScreen()),
                 ),
               ),
               _section(p, 'МОДЕЛИ И ПРОФИЛИ'),
