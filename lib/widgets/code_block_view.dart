@@ -54,7 +54,7 @@ class CodeBlockView extends StatelessWidget {
             ),
           ),
           SingleChildScrollView(
-            horizontal: true,
+            scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.all(12),
             child: SelectableText(
               code,

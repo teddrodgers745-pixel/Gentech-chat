@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Minkail. All rights reserved.
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
@@ -9,6 +11,7 @@ import 'package:markdown/markdown.dart' as md;
 import '../app_state.dart';
 import '../models.dart';
 import '../theme.dart';
+import 'file_card.dart';
 import 'tool_call_card.dart';
 
 /// Одно сообщение: пользовательское или ответ модели.
@@ -72,7 +75,7 @@ class MessageView extends StatelessWidget {
                   p: p,
                   size: size,
                 ),
-              if (message.content.isNotEmpty) RichMarkdown(message.content),
+              ..._contentWidgets(message.content),
               if (waiting)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
@@ -117,6 +120,23 @@ class MessageView extends StatelessWidget {
         );
       },
     );
+  }
+
+  /// Разбивает контент сообщения на обычный markdown и карточки файлов
+  /// (блоки кода с именем файла: ```html name=index.html).
+  List<Widget> _contentWidgets(String content) {
+    if (content.trim().isEmpty) return const <Widget>[];
+    final out = <Widget>[];
+    for (final seg in splitFileBlocks(content)) {
+      if (seg.isFile) {
+        out.add(
+          FileCard(fileName: seg.fileName, code: seg.code, lang: seg.lang),
+        );
+      } else if (seg.text.trim().isNotEmpty) {
+        out.add(RichMarkdown(seg.text));
+      }
+    }
+    return out.isEmpty ? <Widget>[RichMarkdown(content)] : out;
   }
 }
 

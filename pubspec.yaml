@@ -18,6 +18,9 @@ dependencies:
   # Пин версии: в новых мажорных релизах file_picker убрали
   # FilePicker.platform, а код рассчитан на стабильный API 10.x.
   file_picker: ^10.1.2
+  # Файлы от модели: сохранение в Documents/GenTech и системный шэринг.
+  path_provider: ^2.1.0
+  share_plus: ^10.0.0
 
 dev_dependencies:
   flutter_test:

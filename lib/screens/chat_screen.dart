@@ -213,7 +213,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (cfg.systemPrompt.trim().isNotEmpty)
         <String, dynamic>{
           'role': 'system',
-          'content': cfg.systemPrompt.trim(),
+          'content': '${cfg.systemPrompt.trim()}\n\n$kFileBlockInstruction',
         },
       for (final m in chat.messages)
         if (!identical(m, reply) && !m.isToolCall && m.content.isNotEmpty)
