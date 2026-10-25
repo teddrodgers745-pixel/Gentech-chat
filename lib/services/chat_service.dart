@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
@@ -28,6 +29,16 @@ class StreamChunk {
     this.toolResult,
   });
 }
+
+/// Выбранный пользователем файл: понятное имя и путь на устройстве.
+class PickedFileRef {
+  final String name;
+  final String path;
+  const PickedFileRef(this.name, this.path);
+}
+
+/// Максимальный размер вложения, которое читаем целиком.
+const int kMaxAttachmentBytes = 8 * 1024 * 1024;
 
 /// Итог выполнения инструмента: признак успеха и текст для модели и интерфейса.
 class ToolOutcome {
@@ -82,6 +93,67 @@ class _RoundHolder {
 class ChatService {
   /// Максимум итераций вызова инструментов, чтобы не зациклиться.
   static const int _maxToolIterations = 4;
+
+  /// Готовит content пользовательского сообщения с вложениями.
+  /// Картинки (jpg/jpeg/png/webp/gif) читаются в байты, кодируются в base64
+  /// и превращаются в data URL внутри массива content (Vision-формат);
+  /// текстовые файлы (txt/md/json/dart/csv/log) добавляются к тексту промпта.
+  /// Возвращает String либо List<Map<String, dynamic>>.
+  /// Ошибки чтения не роняют отправку: файл пропускается с пометкой.
+  static Future<dynamic> buildUserContent(
+    String text,
+    List<PickedFileRef> files,
+  ) async {
+    const mime = <String, String>{
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'png': 'image/png',
+      'webp': 'image/webp',
+      'gif': 'image/gif',
+    };
+    const textExt = <String>{'txt', 'md', 'json', 'dart', 'csv', 'log'};
+
+    final images = <Map<String, dynamic>>[];
+    final extra = <String>[];
+    for (final f in files) {
+      try {
+        final ext = f.name.contains('.')
+            ? f.name.substring(f.name.lastIndexOf('.') + 1).toLowerCase()
+            : '';
+        final file = File(f.path);
+        if (mime.containsKey(ext)) {
+          final len = await file.length();
+          if (len > kMaxAttachmentBytes) {
+            extra.add('(файл ${f.name} пропущен: больше 8 МБ)');
+            continue;
+          }
+          final bytes = await file.readAsBytes();
+          images.add(<String, dynamic>{
+            'type': 'image_url',
+            'image_url': <String, dynamic>{
+              'url': 'data:${mime[ext]};base64,${base64Encode(bytes)}',
+            },
+          });
+        } else if (textExt.contains(ext)) {
+          final content = await file.readAsString();
+          extra.add('Содержимое файла ${f.name}:\n$content');
+        }
+      } catch (_) {
+        extra.add('(файл ${f.name} не удалось прочитать)');
+      }
+    }
+
+    final parts = <String>[
+      if (text.trim().isNotEmpty) text,
+      ...extra,
+    ];
+    final full = parts.join('\n\n');
+    if (images.isEmpty) return full;
+    return <Map<String, dynamic>>[
+      <String, dynamic>{'type': 'text', 'text': full},
+      ...images,
+    ];
+  }
 
   static const Duration _apiTimeout = Duration(seconds: 60);
   static const Duration _toolTimeout = Duration(seconds: 30);

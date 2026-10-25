@@ -15,6 +15,7 @@ dependencies:
   flutter_markdown_plus: any
   markdown: any
   flutter_highlight: any
+  file_picker: any
 
 dev_dependencies:
   flutter_test:

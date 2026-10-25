@@ -1,5 +1,8 @@
+// Copyright (c) 2026 Minkail. All rights reserved.
+
 import 'dart:async';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
@@ -33,6 +36,9 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _streaming = false;
   bool _stick = true;
   Timer? _uiTimer;
+
+  // Вложения, ожидающие отправки (файлы и картинки).
+  final List<PlatformFile> _pending = [];
 
   @override
   void dispose() {
@@ -104,23 +110,62 @@ class _ChatScreenState extends State<ChatScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  // ---------- вложения ----------
+
+  Future<void> _attach() async {
+    if (_streaming) return;
+    try {
+      final res = await FilePicker.platform.pickFiles(allowMultiple: true);
+      if (!mounted) return;
+      if (res == null) return; // пользователь отменил выбор
+      final fresh = res.files
+          .where((f) => f.path != null && f.path!.isNotEmpty)
+          .toList();
+      if (fresh.isEmpty) {
+        _snack('Файлы недоступны для чтения');
+        return;
+      }
+      setState(() => _pending.addAll(fresh));
+    } catch (_) {
+      if (mounted) _snack('Не удалось открыть выбор файлов');
+    }
+  }
+
   // ---------- отправка ----------
 
   Future<void> _send() async {
     final txt = _input.text.trim();
-    if (txt.isEmpty || _streaming) return;
+    if ((txt.isEmpty && _pending.isEmpty) || _streaming) return;
     if (effectiveConfig().apiKey.isEmpty) {
       _snack('Создайте и выберите профиль модели в настройках');
       return;
     }
+    final picked = <PickedFileRef>[
+      for (final f in _pending)
+        if (f.path != null && f.path!.isNotEmpty) PickedFileRef(f.name, f.path!),
+    ];
+    // Готовим content для API (base64-картинки, текст файлов) заранее:
+    // любые ошибки чтения уже обработаны внутри, отправка не падает.
+    dynamic apiContent;
+    try {
+      apiContent = await ChatService.buildUserContent(txt, picked);
+    } catch (_) {
+      apiContent = txt;
+    }
+    if (!mounted) return;
+
     final chat = store.current ?? store.createChat();
-    chat.messages.add(ChatMessage(id: newId(), role: 'user', content: txt));
+    final shown = txt.isEmpty
+        ? 'Вложения: ${picked.map((f) => f.name).join(', ')}'
+        : txt;
+    chat.messages.add(ChatMessage(id: newId(), role: 'user', content: shown));
     if (chat.title == 'Новый чат') {
-      chat.title = txt.length > 40 ? '${txt.substring(0, 40)}…' : txt;
+      chat.title = shown.length > 40 ? '${shown.substring(0, 40)}…' : shown;
     }
     _input.clear();
+    setState(() => _pending.clear());
     _stick = true;
-    await _runCompletion(chat);
+    await _runCompletion(chat, userApiContent: apiContent);
   }
 
   Future<void> _regenerate() async {
@@ -153,7 +198,10 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _runCompletion(Chat chat) async {
+  Future<void> _runCompletion(
+    Chat chat, {
+    dynamic userApiContent,
+  }) async {
     final reply = ChatMessage(id: newId(), role: 'assistant');
     chat.messages.add(reply);
     setState(() => _streaming = true);
@@ -163,14 +211,24 @@ class _ChatScreenState extends State<ChatScreen> {
     final cfg = effectiveConfig();
     final msgs = <Map<String, dynamic>>[
       if (cfg.systemPrompt.trim().isNotEmpty)
-        <String, String>{
+        <String, dynamic>{
           'role': 'system',
           'content': cfg.systemPrompt.trim(),
         },
       for (final m in chat.messages)
         if (!identical(m, reply) && !m.isToolCall && m.content.isNotEmpty)
-          <String, String>{'role': m.role, 'content': m.content},
+          <String, dynamic>{'role': m.role, 'content': m.content},
     ];
+    // Для последнего пользовательского сообщения подставляем расширенный
+    // content (base64-картинки и содержимое текстовых файлов).
+    if (userApiContent != null) {
+      for (int i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i]['role'] == 'user') {
+          msgs[i]['content'] = userApiContent;
+          break;
+        }
+      }
+    }
 
     ChatMessage? toolMsg;
     String? error;
@@ -275,6 +333,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: Column(
               children: [
                 Expanded(child: _messages(chat, p)),
+                if (_pending.isNotEmpty) _attachmentsBar(p),
                 _inputBar(p),
               ],
             ),
@@ -372,6 +431,36 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Чипы выбранных файлов над полем ввода: имя и кнопка удаления.
+  Widget _attachmentsBar(Palette p) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+      child: SizedBox(
+        height: 46,
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          itemCount: _pending.length,
+          itemBuilder: (context, i) {
+            final f = _pending[i];
+            return Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: InputChip(
+                label: Text(
+                  f.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, color: p.text),
+                ),
+                deleteIconColor: p.muted,
+                onDeleted: () => setState(() => _pending.removeAt(i)),
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
@@ -385,6 +474,11 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            IconButton(
+              tooltip: 'Прикрепить файл',
+              icon: Icon(Icons.attach_file, size: 22, color: p.muted),
+              onPressed: _streaming ? null : _attach,
+            ),
             Expanded(
               child: TextField(
                 controller: _input,
