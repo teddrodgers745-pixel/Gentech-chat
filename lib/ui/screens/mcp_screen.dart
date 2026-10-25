@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import '../../app_state.dart';
 import '../../core/storage.dart';
 import '../../models/mcp_server.dart';
+import '../../models/tool.dart';
+import '../../services/mcp_client.dart';
 import '../../theme.dart';
 
 /// Экран управления MCP-серверами: список, добавление, редактирование
@@ -18,6 +20,9 @@ class McpScreen extends StatefulWidget {
 
 class _McpScreenState extends State<McpScreen> {
   List<McpServer> _servers = [];
+
+  /// id серверов, для которых идёт загрузка инструментов.
+  final Set<String> _loading = <String>{};
 
   @override
   void initState() {
@@ -251,11 +256,20 @@ class _McpScreenState extends State<McpScreen> {
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
             child: Align(
               alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: _checkConnection,
-                icon: const Icon(Icons.network_check_rounded, size: 18),
-                label: const Text('Проверить подключение'),
-              ),
+              child: _loading.contains(s.id)
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : TextButton.icon(
+                      onPressed: () => _fetchTools(s),
+                      icon: const Icon(Icons.download_rounded, size: 18),
+                      label: const Text('Загрузить инструменты'),
+                    ),
             ),
           ),
         ],
@@ -263,8 +277,56 @@ class _McpScreenState extends State<McpScreen> {
     );
   }
 
-  void _checkConnection() {
-    _snack('В разработке');
+  /// Загружает инструменты сервера через MCP-клиент и сохраняет их
+  /// в общем хранилище инструментов (ключ 'tools') с префиксом сервера.
+  Future<void> _fetchTools(McpServer s) async {
+    if (_loading.contains(s.id)) return;
+    setState(() => _loading.add(s.id));
+
+    List<Tool> fetched;
+    try {
+      fetched = await McpClient().fetchTools(s);
+    } on McpClientException catch (e) {
+      if (mounted) {
+        setState(() => _loading.remove(s.id));
+        _snack(e.message);
+      }
+      return;
+    } catch (_) {
+      if (mounted) {
+        setState(() => _loading.remove(s.id));
+        _snack('Не удалось соединиться с сервером. Проверьте адрес и сеть.');
+      }
+      return;
+    }
+
+    final prefix = 'mcp_${_sanitize(s.name)}_';
+    var saved = true;
+    try {
+      final all = await storage.getTools();
+      // Старые инструменты этого сервера заменяем свежим списком.
+      all.removeWhere((t) => t.name.startsWith(prefix));
+      for (final t in fetched) {
+        t.name = '$prefix${_sanitize(t.name)}';
+        all.add(t);
+      }
+      saved = await storage.setTools(all);
+    } catch (_) {
+      saved = false;
+    }
+    if (!mounted) return;
+    setState(() => _loading.remove(s.id));
+    if (saved) {
+      _snack('Загружено инструментов: ${fetched.length}');
+    } else {
+      _snack('Не удалось сохранить инструменты.');
+    }
+  }
+
+  /// Допустимые символы имени функции: латиница, цифры, '_' и '-'.
+  static String _sanitize(String raw) {
+    final s = raw.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+    return s.isEmpty ? 'tool' : s;
   }
 
   Widget _empty(Palette p) {
