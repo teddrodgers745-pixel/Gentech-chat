@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../app_state.dart';
 import '../core/storage.dart';
 import '../models.dart';
+import '../preset_edit_screen.dart';
 import '../theme.dart';
 import '../ui/screens/tools_screen.dart';
 import '../widgets/message_view.dart';
@@ -139,6 +140,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     } catch (_) {
       _snack('Не удалось импортировать: неверный формат JSON');
     }
+  }
+
+  Future<void> _openPresetEditor(Preset? existing) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => PresetEditScreen(existing: existing)),
+    );
   }
 
   InputDecoration _dec(Palette p, String label, {String? hint, Widget? suffix}) {
@@ -391,6 +399,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   context,
                   MaterialPageRoute(builder: (_) => const ToolsScreen()),
                 ),
+              ),
+              _section(p, 'ПРЕСЕТЫ'),
+              Text(
+                'Нажмите на пресет, чтобы сделать его активным — он будет '
+                'использоваться для всех запросов в чате.',
+                style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+              ListenableBuilder(
+                listenable: presets,
+                builder: (context, _) {
+                  final active = presets.active;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.tune_rounded, color: p.muted),
+                        title: const Text('Без пресета'),
+                        subtitle: Text(
+                          'Глобальные настройки подключения',
+                          style: TextStyle(color: p.muted, fontSize: 12),
+                        ),
+                        trailing: active == null
+                            ? Icon(Icons.check, color: p.accent)
+                            : null,
+                        onTap: () => presets.clearActive(),
+                      ),
+                      for (final pr in presets.items)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(Icons.auto_awesome, color: p.accent),
+                          title: Text(
+                            pr.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            pr.model.trim().isEmpty
+                                ? 'Модель не задана'
+                                : pr.model,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: p.muted, fontSize: 12),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (active?.id == pr.id)
+                                Icon(Icons.check, color: p.accent),
+                              IconButton(
+                                tooltip: 'Изменить',
+                                icon: const Icon(Icons.edit_outlined, size: 20),
+                                onPressed: () => _openPresetEditor(pr),
+                              ),
+                            ],
+                          ),
+                          onTap: () => presets.setActive(pr.id),
+                        ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 4),
+              OutlinedButton.icon(
+                onPressed: () => _openPresetEditor(null),
+                icon: const Icon(Icons.add, size: 18),
+                label: const Text('Создать пресет'),
               ),
               _section(p, 'ГЛАВНЫЕ МОДЕЛИ (ЧАТ)'),
               Row(

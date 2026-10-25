@@ -10,7 +10,6 @@ import '../services/chat_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
-import 'presets_sheet.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -103,15 +102,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _snack(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
-  }
-
-  void _showPresets() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => const PresetsSheet(),
-    );
   }
 
   // ---------- отправка ----------
@@ -252,20 +242,12 @@ class _ChatScreenState extends State<ChatScreen> {
         return Scaffold(
           appBar: AppBar(
             toolbarHeight: 76,
-            title: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  chat?.title ?? 'Новый чат',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      fontSize: 17, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 3),
-                PresetChip(onTap: _showPresets),
-              ],
+            title: Text(
+              chat?.title ?? 'Новый чат',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 17, fontWeight: FontWeight.w600),
             ),
             actions: [
               IconButton(
