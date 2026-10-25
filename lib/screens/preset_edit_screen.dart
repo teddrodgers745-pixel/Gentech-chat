@@ -3,7 +3,9 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../core/storage.dart';
 import '../models.dart';
+import '../models/tool.dart';
 import '../theme.dart';
 
 /// Экран создания/редактирования пресета:
@@ -25,6 +27,8 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
   late final TextEditingController _sys;
   bool _stream = true;
   bool _showKey = false;
+  List<Tool> _tools = [];
+  final Set<String> _enabled = <String>{};
 
   @override
   void initState() {
@@ -36,6 +40,14 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
     _model = TextEditingController(text: e?.model ?? '');
     _sys = TextEditingController(text: e?.systemPrompt ?? '');
     _stream = e?.stream ?? true;
+    _enabled.addAll(e?.enabledToolIds ?? const <String>[]);
+    _loadTools();
+  }
+
+  Future<void> _loadTools() async {
+    final list = await storage.getTools();
+    if (!mounted) return;
+    setState(() => _tools = list);
   }
 
   @override
@@ -68,6 +80,7 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
       stream: _stream,
       temperature: widget.existing?.temperature ?? 1.0,
       systemPrompt: _sys.text,
+      enabledToolIds: _enabled.toList(growable: false),
     );
     await presets.upsert(preset);
     if (!mounted) return;
@@ -99,6 +112,38 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
       if (!mounted) return;
       Navigator.pop(context);
     }
+  }
+
+  List<Widget> _toolTiles(Palette p) {
+    return [
+      for (final t in _tools)
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: Text(
+            t.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: t.description.trim().isEmpty
+              ? null
+              : Text(
+                  t.description,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: p.muted, fontSize: 12),
+                ),
+          value: _enabled.contains(t.id),
+          onChanged: (v) {
+            setState(() {
+              if (v) {
+                _enabled.add(t.id);
+              } else {
+                _enabled.remove(t.id);
+              }
+            });
+          },
+        ),
+    ];
   }
 
   Widget _section(Palette p, String title) {
@@ -200,6 +245,14 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
               value: _stream,
               onChanged: (v) => setState(() => _stream = v),
             ),
+            _section(p, 'ИНСТРУМЕНТЫ'),
+            if (_tools.isEmpty)
+              Text(
+                'Инструментов пока нет. Добавьте их в настройках.',
+                style: TextStyle(color: p.muted, fontSize: 13),
+              )
+            else
+              ..._toolTiles(p),
             if (!isNew) ...[
               const SizedBox(height: 16),
               TextButton.icon(

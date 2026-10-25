@@ -13,6 +13,9 @@ class Preset {
   double temperature;
   String systemPrompt;
 
+  /// id инструментов, разрешённых этому пресету.
+  List<String> enabledToolIds;
+
   Preset({
     required this.id,
     required this.name,
@@ -23,7 +26,8 @@ class Preset {
     this.stream = true,
     this.temperature = 1.0,
     this.systemPrompt = '',
-  });
+    List<String>? enabledToolIds,
+  }) : enabledToolIds = enabledToolIds ?? <String>[];
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -35,6 +39,7 @@ class Preset {
         'stream': stream,
         'temperature': temperature,
         'systemPrompt': systemPrompt,
+        'enabledToolIds': enabledToolIds,
       };
 
   factory Preset.fromJson(Map<String, dynamic> j) => Preset(
@@ -47,5 +52,8 @@ class Preset {
         stream: (j['stream'] as bool?) ?? true,
         temperature: (j['temperature'] as num?)?.toDouble() ?? 1.0,
         systemPrompt: (j['systemPrompt'] as String?) ?? '',
+        enabledToolIds: ((j['enabledToolIds'] as List?) ?? [])
+            .map((e) => e.toString())
+            .toList(),
       );
 }
