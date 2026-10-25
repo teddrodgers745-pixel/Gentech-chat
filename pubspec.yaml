@@ -15,7 +15,9 @@ dependencies:
   flutter_markdown_plus: any
   markdown: any
   flutter_highlight: any
-  file_picker: any
+  # Пин версии: в новых мажорных релизах file_picker убрали
+  # FilePicker.platform, а код рассчитан на стабильный API 10.x.
+  file_picker: ^10.1.2
 
 dev_dependencies:
   flutter_test:
