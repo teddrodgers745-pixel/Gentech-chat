@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../core/storage.dart';
 import '../models.dart';
+import '../models/tool.dart';
 import '../services/chat_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
@@ -146,6 +148,21 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _stop() => _chatService.cancel();
 
+  /// Активные инструменты: разрешённые в текущем пресете.
+  Future<List<Tool>> _activeTools() async {
+    try {
+      final pr = presets.active;
+      if (pr == null || pr.enabledToolIds.isEmpty) return const <Tool>[];
+      final all = await storage.getTools();
+      return [
+        for (final t in all)
+          if (pr.enabledToolIds.contains(t.id)) t,
+      ];
+    } catch (_) {
+      return const <Tool>[];
+    }
+  }
+
   Future<void> _runCompletion(Chat chat) async {
     final reply = ChatMessage(id: newId(), role: 'assistant');
     chat.messages.add(reply);
@@ -154,7 +171,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    final msgs = <Map<String, String>>[
+    final msgs = <Map<String, dynamic>>[
       if (cfg.systemPrompt.trim().isNotEmpty)
         <String, String>{
           'role': 'system',
@@ -167,13 +184,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
     String? error;
     try {
-      await for (final ch in _chatService.streamCompletion(
+      final tools = await _activeTools();
+      await for (final ch in _chatService.sendMessage(
         baseUrl: cfg.baseUrl,
         apiKey: cfg.apiKey,
         model: cfg.model,
         messages: msgs,
         stream: cfg.stream,
         temperature: cfg.temperature,
+        tools: tools,
       )) {
         reply.content += ch.content;
         reply.reasoning += ch.reasoning;
