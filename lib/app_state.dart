@@ -146,6 +146,9 @@ class AppSettings extends ChangeNotifier {
   String codeFont = 'JetBrains Mono';
   double lineHeight = 1.55;
 
+  /// Автоозвучка новых ответов модели (TTS), по умолчанию выключена.
+  bool autoTts = false;
+
   /// Размер шрифта вынесен отдельно, чтобы щипок не перестраивал всё приложение.
   final ValueNotifier<double> fontSizeN = ValueNotifier<double>(17);
 
@@ -166,6 +169,7 @@ class AppSettings extends ChangeNotifier {
     codeFont = p.getString('codeFont') ?? codeFont;
     lineHeight = p.getDouble('lineHeight') ?? lineHeight;
     fontSizeN.value = p.getDouble('fontSize') ?? 17;
+    autoTts = p.getBool('autoTts') ?? false;
   }
 
   Future<void> _persist() async {
@@ -180,6 +184,7 @@ class AppSettings extends ChangeNotifier {
     await p.setString('codeFont', codeFont);
     await p.setDouble('lineHeight', lineHeight);
     await p.setDouble('fontSize', fontSizeN.value);
+    await p.setBool('autoTts', autoTts);
   }
 
   Future<void> saveNow() => _persist();
@@ -217,6 +222,12 @@ class AppSettings extends ChangeNotifier {
 
   void setFontSize(double v) {
     fontSizeN.value = v.clamp(11.0, 34.0).toDouble();
+  }
+
+  void setAutoTts(bool v) {
+    autoTts = v;
+    _persist();
+    notifyListeners();
   }
 }
 

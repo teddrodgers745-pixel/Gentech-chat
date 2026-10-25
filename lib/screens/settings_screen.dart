@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../app_state.dart';
 import '../core/storage.dart';
 import '../models.dart';
+import '../services/tts_service.dart';
 import 'preset_edit_screen.dart';
 import '../theme.dart';
 import '../ui/screens/mcp_screen.dart';
@@ -288,6 +289,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 12),
               Text(
                 'Размер текста также меняется щипком двумя пальцами прямо в чате.',
+                style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+              _section(p, 'ОЗВУЧКА'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Автоозвучка ответов'),
+                subtitle: Text(
+                  'Новые ответы модели озвучиваются автоматически',
+                  style: TextStyle(color: p.muted, fontSize: 12),
+                ),
+                value: settings.autoTts,
+                onChanged: (v) {
+                  settings.setAutoTts(v);
+                  if (!v) ttsService.stop();
+                },
+              ),
+              Text(
+                'Озвучить конкретный ответ можно кнопкой динамика рядом с кнопкой копирования. Повторное нажатие останавливает чтение.',
                 style: TextStyle(color: p.muted, fontSize: 13),
               ),
               _section(p, 'ИНСТРУМЕНТЫ И API'),

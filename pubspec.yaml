@@ -23,6 +23,8 @@ dependencies:
   share_plus: ^10.0.0
   # Предпросмотр файлов: WebView для HTML/SVG, загружаемых из локальной строки.
   webview_flutter: ^4.8.0
+  # Озвучка ответов модели (TTS).
+  flutter_tts: any
 
 dev_dependencies:
   flutter_test:

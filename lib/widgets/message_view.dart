@@ -10,6 +10,7 @@ import 'package:markdown/markdown.dart' as md;
 
 import '../app_state.dart';
 import '../models.dart';
+import '../services/tts_service.dart';
 import '../theme.dart';
 import 'file_card.dart';
 import 'tool_call_card.dart';
@@ -104,6 +105,7 @@ class MessageView extends StatelessWidget {
                         );
                       },
                     ),
+                    _SpeakButton(message: message, p: p),
                     if (onRegenerate != null)
                       IconButton(
                         visualDensity: VisualDensity.compact,
@@ -137,6 +139,37 @@ class MessageView extends StatelessWidget {
       }
     }
     return out.isEmpty ? <Widget>[RichMarkdown(content)] : out;
+  }
+}
+
+/// Кнопка озвучки сообщения: запускает TTS, повторное нажатие — стоп.
+class _SpeakButton extends StatelessWidget {
+  final ChatMessage message;
+  final Palette p;
+
+  const _SpeakButton({required this.message, required this.p});
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<String?>(
+      valueListenable: ttsService.activeId,
+      builder: (context, activeId, _) {
+        final speaking = activeId == message.id;
+        return IconButton(
+          visualDensity: VisualDensity.compact,
+          iconSize: 18,
+          color: speaking ? p.accent : p.muted,
+          tooltip: speaking ? 'Остановить озвучку' : 'Озвучить',
+          icon: Icon(
+            speaking
+                ? Icons.volume_off_rounded
+                : Icons.volume_up_rounded,
+          ),
+          onPressed: () =>
+              ttsService.toggleSpeak(message.id, message.content),
+        );
+      },
+    );
   }
 }
 

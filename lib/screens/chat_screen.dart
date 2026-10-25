@@ -10,6 +10,7 @@ import '../core/storage.dart';
 import '../models.dart';
 import '../models/tool.dart';
 import '../services/chat_service.dart';
+import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
@@ -44,6 +45,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _uiTimer?.cancel();
     _chatService.cancel();
+    ttsService.stop();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -285,6 +287,10 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _streaming = false);
     store.touch(chat);
     await store.save();
+    // Автоозвучка: читаем готовый ответ вслух, не блокируя интерфейс.
+    if (error == null && settings.autoTts && reply.content.trim().isNotEmpty) {
+      ttsService.speakAuto(reply.id, reply.content);
+    }
     if (error != null) _snack(error);
   }
 
@@ -321,10 +327,14 @@ class _ChatScreenState extends State<ChatScreen> {
               IconButton(
                 tooltip: 'Настройки',
                 icon: const Icon(Icons.tune_rounded),
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
-                ),
+                onPressed: () {
+                  // Озвучка не должна продолжаться на другом экране.
+                  ttsService.stop();
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                  );
+                },
               ),
             ],
           ),
