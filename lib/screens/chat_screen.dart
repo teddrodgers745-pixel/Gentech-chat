@@ -10,9 +10,11 @@ import '../core/storage.dart';
 import '../models.dart';
 import '../models/tool.dart';
 import '../services/chat_service.dart';
+import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
+import '../widgets/mic_button.dart';
 import 'history_drawer.dart';
 import 'settings_screen.dart';
 
@@ -41,11 +43,15 @@ class _ChatScreenState extends State<ChatScreen> {
   // Вложения, ожидающие отправки (файлы и картинки).
   final List<PlatformFile> _pending = [];
 
+  // Голосовой ввод: базовый текст поля на момент старта записи.
+  String _speechBase = '';
+
   @override
   void dispose() {
     _uiTimer?.cancel();
     _chatService.cancel();
     ttsService.stop();
+    speechService.stop();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -130,6 +136,37 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _pending.addAll(fresh));
     } catch (_) {
       if (mounted) _snack('Не удалось открыть выбор файлов');
+    }
+  }
+
+  // ---------- голосовой ввод ----------
+
+  /// Старт/стоп распознавания речи. Распознанный текст вставляется
+  /// в поле ввода по мере поступления; ошибки показываются снекбаром.
+  Future<void> _toggleSpeech() async {
+    if (speechService.listening.value) {
+      await speechService.stop();
+      return;
+    }
+    _speechBase = _input.text;
+    try {
+      await speechService.start(
+        localeId: 'ru_RU',
+        onText: (text) {
+          if (!mounted) return;
+          final base = _speechBase.trim();
+          final full = base.isEmpty ? text : '$base $text';
+          _input.text = full;
+          _input.selection = TextSelection.collapsed(offset: full.length);
+        },
+        onError: (msg) {
+          if (mounted) _snack(msg);
+        },
+      );
+    } on SpeechServiceException catch (e) {
+      if (mounted) _snack(e.message);
+    } catch (_) {
+      if (mounted) _snack('Не удалось запустить распознавание речи');
     }
   }
 
@@ -488,6 +525,14 @@ class _ChatScreenState extends State<ChatScreen> {
               tooltip: 'Прикрепить файл',
               icon: Icon(Icons.attach_file, size: 22, color: p.muted),
               onPressed: _streaming ? null : _attach,
+            ),
+            ValueListenableBuilder<bool>(
+              valueListenable: speechService.listening,
+              builder: (context, listening, _) => MicButton(
+                listening: listening,
+                onTap: _streaming ? null : _toggleSpeech,
+                mutedColor: p.muted,
+              ),
             ),
             Expanded(
               child: TextField(

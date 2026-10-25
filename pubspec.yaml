@@ -25,6 +25,9 @@ dependencies:
   webview_flutter: ^4.8.0
   # Озвучка ответов модели (TTS).
   flutter_tts: any
+  # Голосовой ввод (Speech-to-Text) и запрос разрешения на микрофон.
+  speech_to_text: ^7.0.0
+  permission_handler: ^11.0.0
 
 dev_dependencies:
   flutter_test:

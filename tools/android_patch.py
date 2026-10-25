@@ -22,6 +22,12 @@ APP_LABEL = "GenTech Chat"
 APPLICATION_ID = "com.minkail.gentech_lab"
 SPLASH_BG = "#1B1A19"
 
+# Разрешения, добавляемые в AndroidManifest.xml (идемпотентно).
+PERMISSIONS = (
+    "android.permission.INTERNET",
+    "android.permission.RECORD_AUDIO",
+)
+
 STYLES_TEMPLATE = """<?xml version="1.0" encoding="utf-8"?>
 <!-- Patched by tools/android_patch.py: warm charcoal splash background. -->
 <resources>
@@ -46,12 +52,13 @@ def patch_manifest() -> None:
         print("android_patch: manifest not found, skip")
         return
     text = path.read_text(encoding="utf-8")
-    if "android.permission.INTERNET" not in text:
-        text = text.replace(
-            "<application",
-            '<uses-permission android:name="android.permission.INTERNET"/>\n    <application',
-            1,
-        )
+    for perm in PERMISSIONS:
+        if perm not in text:
+            text = text.replace(
+                "<application",
+                f'<uses-permission android:name="{perm}"/>\n    <application',
+                1,
+            )
     text = re.sub(
         r'android:label="[^"]*"',
         f'android:label="{APP_LABEL}"',
@@ -59,7 +66,7 @@ def patch_manifest() -> None:
         count=1,
     )
     path.write_text(text, encoding="utf-8")
-    print("android_patch: manifest patched (INTERNET + label)")
+    print("android_patch: manifest patched (permissions + label)")
 
 
 def patch_application_id() -> None:
