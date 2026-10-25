@@ -51,7 +51,7 @@ class _CodeBlockState extends State<CodeBlock> {
       setState(() => _copied = false);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.maybeOf(context).showSnackBar(
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         const SnackBar(content: Text('Не удалось скопировать код')),
       );
     }
