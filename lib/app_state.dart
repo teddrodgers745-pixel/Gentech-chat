@@ -149,6 +149,12 @@ class AppSettings extends ChangeNotifier {
   /// Автоозвучка новых ответов модели (TTS), по умолчанию выключена.
   bool autoTts = false;
 
+  /// Встроенный «Базовый поиск в интернете» для пресетов с поддержкой поиска.
+  bool webSearchEnabled = true;
+
+  /// Режим для профи (Advanced): полные настройки вместо быстрой настройки.
+  bool advancedMode = true;
+
   /// Размер шрифта вынесен отдельно, чтобы щипок не перестраивал всё приложение.
   final ValueNotifier<double> fontSizeN = ValueNotifier<double>(17);
 
@@ -170,6 +176,8 @@ class AppSettings extends ChangeNotifier {
     lineHeight = p.getDouble('lineHeight') ?? lineHeight;
     fontSizeN.value = p.getDouble('fontSize') ?? 17;
     autoTts = p.getBool('autoTts') ?? false;
+    webSearchEnabled = p.getBool('webSearchEnabled') ?? true;
+    advancedMode = p.getBool('advancedMode') ?? true;
   }
 
   Future<void> _persist() async {
@@ -185,6 +193,8 @@ class AppSettings extends ChangeNotifier {
     await p.setDouble('lineHeight', lineHeight);
     await p.setDouble('fontSize', fontSizeN.value);
     await p.setBool('autoTts', autoTts);
+    await p.setBool('webSearchEnabled', webSearchEnabled);
+    await p.setBool('advancedMode', advancedMode);
   }
 
   Future<void> saveNow() => _persist();
@@ -226,6 +236,18 @@ class AppSettings extends ChangeNotifier {
 
   void setAutoTts(bool v) {
     autoTts = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setWebSearch(bool v) {
+    webSearchEnabled = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setAdvancedMode(bool v) {
+    advancedMode = v;
     _persist();
     notifyListeners();
   }

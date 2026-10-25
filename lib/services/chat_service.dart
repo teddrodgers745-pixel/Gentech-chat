@@ -6,6 +6,7 @@ import 'dart:io';
 
 import 'package:http/http.dart' as http;
 
+import '../app_state.dart';
 import '../models/chat_message.dart';
 import '../models/tool.dart';
 import 'model_tool.dart';
@@ -329,12 +330,17 @@ class ChatService {
         'Authorization': 'Bearer $apiKey',
         'Accept': 'text/event-stream',
       });
+      final builtin = _builtinToolsPayload();
       req.body = jsonEncode({
         'model': model,
         'messages': history,
         'stream': stream,
         if (temperature != null) 'temperature': temperature,
-        if (tools.isNotEmpty) 'tools': _toolsPayload(tools),
+        if (tools.isNotEmpty || builtin.isNotEmpty)
+          'tools': <Map<String, dynamic>>[
+            ...builtin,
+            if (tools.isNotEmpty) ..._toolsPayload(tools),
+          ],
       });
 
       final resp = await client.send(req).timeout(_apiTimeout);
@@ -421,6 +427,25 @@ class ChatService {
     } finally {
       client.close();
       if (identical(_client, client)) _client = null;
+    }
+  }
+
+  /// Встроенный (серверный) инструмент базового поиска: добавляется в запрос,
+  /// когда активный пресет относится к провайдеру с поддержкой поиска
+  /// и тумблер «Базовый поиск в интернете» включён в настройках.
+  List<Map<String, dynamic>> _builtinToolsPayload() {
+    try {
+      final pr = presets.active;
+      if (pr == null) return const <Map<String, dynamic>>[];
+      if (pr.providerId.trim().toLowerCase() != 'polza') {
+        return const <Map<String, dynamic>>[];
+      }
+      if (!settings.webSearchEnabled) return const <Map<String, dynamic>>[];
+      return const <Map<String, dynamic>>[
+        <String, dynamic>{'type': 'polza:web_search'},
+      ];
+    } catch (_) {
+      return const <Map<String, dynamic>>[];
     }
   }
 

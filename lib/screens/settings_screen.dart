@@ -8,6 +8,7 @@ import '../core/storage.dart';
 import '../models.dart';
 import '../services/tts_service.dart';
 import 'preset_edit_screen.dart';
+import 'quick_setup_screen.dart';
 import '../theme.dart';
 import '../ui/screens/mcp_screen.dart';
 import '../ui/screens/tools_screen.dart';
@@ -195,6 +196,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
             children: [
+              _section(p, 'РЕЖИМ'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Режим для профи (Advanced)'),
+                subtitle: Text(
+                  'Полные настройки подключения и инструментов',
+                  style: TextStyle(color: p.muted, fontSize: 12),
+                ),
+                value: settings.advancedMode,
+                onChanged: settings.setAdvancedMode,
+              ),
+              if (!settings.advancedMode) ...[
+                const SizedBox(height: 8),
+                Text(
+                  'Включён режим быстрой настройки: подключение за три шага.',
+                  style: TextStyle(color: p.muted, fontSize: 13),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const QuickSetupScreen(),
+                    ),
+                  ),
+                  icon: const Icon(Icons.bolt_rounded, size: 18),
+                  label: const Text('Быстрая настройка'),
+                ),
+              ],
+              if (settings.advancedMode) ...[
               _section(p, 'ОФОРМЛЕНИЕ'),
               Wrap(
                 spacing: 8,
@@ -422,6 +453,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 'Экспорт копирует JSON всех пресетов в буфер обмена без API-ключей. Импорт добавляет пресеты из JSON в буфере обмена.',
                 style: TextStyle(color: p.muted, fontSize: 13),
               ),
+              ],
             ],
           ),
         );
