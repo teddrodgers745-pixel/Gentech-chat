@@ -95,14 +95,6 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
       _error = null;
     });
     try {
-      final resp = await http
-          .get(
-            Uri.parse('$base/models'),
-            headers: const <String, String>{
-              'Accept': 'application/json',
-            },
-          )
-          .timeout(const Duration(seconds: 30));
       // Ключ передаётся отдельно, чтобы не попадал в строки ошибок логов.
       final authed = await _getWithAuth('$base/models', key);
       if (!mounted) return;
@@ -290,7 +282,7 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
             if (_models.isNotEmpty) ...[
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: _selected,
+                initialValue: _selected,
                 isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Модель',
