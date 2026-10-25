@@ -34,39 +34,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late final TextEditingController _key;
-  late final TextEditingController _url;
-  late final TextEditingController _model;
-  late final TextEditingController _sys;
-  bool _showKey = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _key = TextEditingController(text: settings.apiKey);
-    _url = TextEditingController(text: settings.baseUrl);
-    _model = TextEditingController(text: settings.model);
-    _sys = TextEditingController(text: settings.systemPrompt);
-  }
-
-  @override
-  void dispose() {
-    _key.dispose();
-    _url.dispose();
-    _model.dispose();
-    _sys.dispose();
-    super.dispose();
-  }
-
-  void _saveConn() {
-    settings.setConnection(
-      key: _key.text.trim(),
-      url: _url.text.trim(),
-      mdl: _model.text.trim(),
-      sys: _sys.text,
-    );
-  }
-
   void _snack(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
@@ -149,23 +116,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  InputDecoration _dec(Palette p, String label, {String? hint, Widget? suffix}) {
-    OutlineInputBorder border(Color c) => OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: c),
-        );
-    return InputDecoration(
-      labelText: label,
-      hintText: hint,
-      suffixIcon: suffix,
-      filled: true,
-      fillColor: p.surface,
-      labelStyle: TextStyle(color: p.muted),
-      enabledBorder: border(p.border),
-      focusedBorder: border(p.accent),
-    );
-  }
-
   Future<void> _pickFont({
     required String title,
     required List<String> fonts,
@@ -243,52 +193,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
             children: [
-              _section(p, 'Глобальные настройки (для режима Без пресета)'),
-              Text(
-                'Используются, только когда не выбран ни один пресет. '
-                'Для конкретной модели задайте её данные в разделе '
-                '«Главные модели (чат)».',
-                style: TextStyle(color: p.muted, fontSize: 13),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _key,
-                obscureText: !_showKey,
-                autocorrect: false,
-                enableSuggestions: false,
-                onChanged: (_) => _saveConn(),
-                decoration: _dec(
-                  p,
-                  'API-ключ',
-                  suffix: IconButton(
-                    icon: Icon(_showKey ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () => setState(() => _showKey = !_showKey),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _url,
-                autocorrect: false,
-                keyboardType: TextInputType.url,
-                onChanged: (_) => _saveConn(),
-                decoration: _dec(p, 'Base URL', hint: 'https://api.deepseek.com'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _model,
-                autocorrect: false,
-                onChanged: (_) => _saveConn(),
-                decoration: _dec(p, 'Модель', hint: 'deepseek-chat'),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _sys,
-                minLines: 2,
-                maxLines: 6,
-                onChanged: (_) => _saveConn(),
-                decoration: _dec(p, 'Системный промпт (необязательно)'),
-              ),
               _section(p, 'ОФОРМЛЕНИЕ'),
               Wrap(
                 spacing: 8,
@@ -400,7 +304,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   MaterialPageRoute(builder: (_) => const ToolsScreen()),
                 ),
               ),
-              _section(p, 'ПРЕСЕТЫ'),
+              _section(p, 'МОДЕЛИ И ПРОФИЛИ'),
               Text(
                 'Нажмите на пресет, чтобы сделать его активным — он будет '
                 'использоваться для всех запросов в чате.',
@@ -418,7 +322,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         leading: Icon(Icons.tune_rounded, color: p.muted),
                         title: const Text('Без пресета'),
                         subtitle: Text(
-                          'Глобальные настройки подключения',
+                          'Подключение по умолчанию, без профиля',
                           style: TextStyle(color: p.muted, fontSize: 12),
                         ),
                         trailing: active == null
@@ -467,33 +371,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 icon: const Icon(Icons.add, size: 18),
                 label: const Text('Создать пресет'),
               ),
-              _section(p, 'ГЛАВНЫЕ МОДЕЛИ (ЧАТ)'),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _exportPresets,
-                      icon: const Icon(Icons.upload_outlined, size: 18),
-                      label: const Text(
-                        'Экспорт пресетов',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _importPresets,
-                      icon: const Icon(Icons.download_outlined, size: 18),
-                      label: const Text(
-                        'Импорт пресетов',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _exportPresets,
+                icon: const Icon(Icons.upload_outlined, size: 18),
+                label: const Text('Экспорт пресетов'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: _importPresets,
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: const Text('Импорт пресетов'),
               ),
               const SizedBox(height: 8),
               Text(

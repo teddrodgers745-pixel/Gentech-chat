@@ -110,7 +110,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final txt = _input.text.trim();
     if (txt.isEmpty || _streaming) return;
     if (effectiveConfig().apiKey.isEmpty) {
-      _snack('Сначала введите API-ключ в настройках или в пресете');
+      _snack('Создайте и выберите профиль модели в настройках');
       return;
     }
     final chat = store.current ?? store.createChat();
@@ -127,7 +127,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final chat = store.current;
     if (chat == null || chat.messages.isEmpty || _streaming) return;
     if (effectiveConfig().apiKey.isEmpty) {
-      _snack('Сначала введите API-ключ в настройках или в пресете');
+      _snack('Создайте и выберите профиль модели в настройках');
       return;
     }
     if (chat.messages.last.role == 'assistant') chat.messages.removeLast();
@@ -359,13 +359,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 weight: FontWeight.w600,
                 color: p.text,
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              effectiveConfig().model.trim().isEmpty
-                  ? 'Модель не задана'
-                  : effectiveConfig().model,
-              style: TextStyle(color: p.muted),
             ),
             const SizedBox(height: 16),
             Text(

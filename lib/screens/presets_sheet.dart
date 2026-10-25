@@ -104,7 +104,7 @@ class PresetsSheet extends StatelessWidget {
                         leading: Icon(Icons.settings_outlined, color: p.muted),
                         title: const Text('Без пресета'),
                         subtitle: Text(
-                          'Глобальные настройки подключения',
+                          'Подключение по умолчанию, без профиля',
                           style: TextStyle(color: p.muted, fontSize: 12),
                         ),
                         trailing: presets.active == null
