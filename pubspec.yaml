@@ -21,6 +21,8 @@ dependencies:
   # Файлы от модели: сохранение в Documents/GenTech и системный шэринг.
   path_provider: ^2.1.0
   share_plus: ^10.0.0
+  # Предпросмотр файлов: WebView для HTML/SVG, загружаемых из локальной строки.
+  webview_flutter: ^4.8.0
 
 dev_dependencies:
   flutter_test:

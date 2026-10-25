@@ -9,6 +9,7 @@ import 'package:share_plus/share_plus.dart';
 
 import '../app_state.dart';
 import '../theme.dart';
+import 'file_preview_screen.dart';
 
 /// Фрагмент разобранного сообщения модели: обычный markdown либо файл
 /// (блок кода, у которого в строке языка указано имя файла).
@@ -179,6 +180,18 @@ class FileCard extends StatelessWidget {
     }
   }
 
+  void _open(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FilePreviewScreen(
+          fileName: fileName,
+          code: code,
+          lang: lang,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -237,6 +250,15 @@ class FileCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => _open(context),
+                  icon: const Icon(Icons.visibility_outlined, size: 18),
+                  label: const Text('Открыть'),
+                ),
+              ),
+              const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
