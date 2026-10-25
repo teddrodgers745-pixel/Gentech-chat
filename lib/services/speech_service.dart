@@ -97,11 +97,11 @@ class SpeechService {
       listening.value = true;
       await stt.listen(
         onResult: _handleResult,
-        localeId: localeId,
-        listenOptions: const SpeechListenOptions(
+        listenOptions: SpeechListenOptions(
           partialResults: true,
           cancelOnError: true,
           listenMode: ListenMode.dictation,
+          localeId: localeId,
         ),
       );
     } catch (_) {
@@ -113,10 +113,15 @@ class SpeechService {
     }
   }
 
-  void _handleResult(SpeechRecognitionResult r) {
+  /// Тип результата не указываем явно: в speech_to_text v7 класс результата
+  /// не экспортируется под прежним именем, а нужные поля стабильны.
+  void _handleResult(dynamic r) {
     if (!_listening) return;
-    final w = r.recognizedWords.trim();
-    if (r.finalResult) {
+    final words = r.recognizedWords;
+    if (words is! String) return;
+    final w = words.trim();
+    final isFinal = r.finalResult == true;
+    if (isFinal) {
       // Финальный результат дублирует последний partial — не добавляем дважды.
       if (w.isNotEmpty && !_finalText.endsWith(w)) {
         _finalText = _finalText.isEmpty ? w : '$_finalText $w';
@@ -145,3 +150,4 @@ class SpeechService {
 
 /// Глобальный экземпляр сервиса голосового ввода.
 final SpeechService speechService = SpeechService();
+
