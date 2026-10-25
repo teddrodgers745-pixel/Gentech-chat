@@ -35,8 +35,8 @@ class PresetChip extends StatelessWidget {
               constraints: const BoxConstraints(maxWidth: 190),
               child: Text(
                 preset == null || preset.name.trim().isEmpty
-                    ? 'Без пресета'
-                    : preset.name,
+                    ? 'Модель: Без пресета'
+                    : 'Модель: ${preset.name}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: TextStyle(

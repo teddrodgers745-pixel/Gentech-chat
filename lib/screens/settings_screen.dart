@@ -235,7 +235,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
             children: [
-              _section(p, 'ПОДКЛЮЧЕНИЕ'),
+              _section(p, 'Глобальные настройки (для режима Без пресета)'),
+              Text(
+                'Используются, только когда не выбран ни один пресет. '
+                'Для конкретной модели задайте её данные в разделе '
+                '«Главные модели (чат)».',
+                style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
               TextField(
                 controller: _key,
                 obscureText: !_showKey,
@@ -370,7 +377,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 'Размер текста также меняется щипком двумя пальцами прямо в чате.',
                 style: TextStyle(color: p.muted, fontSize: 13),
               ),
-              _section(p, 'ИНСТРУМЕНТЫ'),
+              _section(p, 'ИНСТРУМЕНТЫ И API'),
               ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(Icons.build_outlined, color: p.accent),
@@ -385,7 +392,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   MaterialPageRoute(builder: (_) => const ToolsScreen()),
                 ),
               ),
-              _section(p, 'ПРЕСЕТЫ'),
+              _section(p, 'ГЛАВНЫЕ МОДЕЛИ (ЧАТ)'),
               Row(
                 children: [
                   Expanded(
