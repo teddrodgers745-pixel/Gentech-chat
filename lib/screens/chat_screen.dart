@@ -544,8 +544,13 @@ class _ChatScreenState extends State<ChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             // Слева — скрепка, микрофон и мозг; поле занимает всё остальное.
+            // Компактные иконки прижаты к низу: капсула растёт вверх
+            // при многострочном вводе (crossAxisAlignment.end).
             IconButton(
               tooltip: 'Прикрепить файл',
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              visualDensity: VisualDensity.compact,
               iconSize: 22,
               icon: Icon(Icons.attach_file, size: 22, color: p.muted),
               onPressed: _streaming ? null : _attach,
@@ -559,6 +564,9 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             IconButton(
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              visualDensity: VisualDensity.compact,
               tooltip: _reasoningEnabled
                   ? 'Выключить подробные размышления'
                   : 'Включить подробные размышления',

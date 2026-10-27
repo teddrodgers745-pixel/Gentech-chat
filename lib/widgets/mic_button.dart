@@ -21,12 +21,18 @@ class MicButton extends StatelessWidget {
     if (listening) {
       return IconButton(
         tooltip: 'Остановить запись',
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+        visualDensity: VisualDensity.compact,
         onPressed: onTap,
         icon: const _PulsingMic(),
       );
     }
     return IconButton(
       tooltip: 'Голосовой ввод',
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+      visualDensity: VisualDensity.compact,
       iconSize: 22,
       icon: Icon(Icons.mic_none_rounded, size: 22, color: mutedColor),
       onPressed: onTap,
