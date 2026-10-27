@@ -5,7 +5,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
-import '../theme.dart';
 
 /// Секция «ПОДКЛЮЧЕНИЕ (ГЛОБАЛЬНОЕ)» в настройках: Base URL, API-ключ
 /// и модель по умолчанию. Используются, когда не выбран ни один пресет.
