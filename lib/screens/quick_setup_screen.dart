@@ -20,10 +20,26 @@ class QuickSetupScreen extends StatefulWidget {
   State<QuickSetupScreen> createState() => _QuickSetupScreenState();
 }
 
+/// Информация о провайдере из ответа /models: имя и минимальные цены
+/// среди его моделей (вход/выход, ₽ за миллион токенов).
+class _ProviderInfo {
+  final String name;
+  double? inPrice;
+  double? outPrice;
+
+  _ProviderInfo(this.name);
+}
+
 class _QuickSetupScreenState extends State<QuickSetupScreen> {
   static const String _sourceName = 'Polza AI';
   static const String _providerId = 'polza';
   static const String _defaultBaseUrl = 'https://api.polza.ai/v1';
+
+  /// Автоматические варианты выбора провайдера (всегда в начале списка).
+  static const List<String> _autoProviderOptions = <String>[
+    'Авто (оптимальный)',
+    'Авто (дешевле всего)',
+  ];
 
   late final TextEditingController _key;
   late final TextEditingController _baseUrl;
@@ -32,6 +48,8 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
   String? _error;
   List<String> _models = const <String>[];
   String? _selected;
+  List<_ProviderInfo> _providers = const <_ProviderInfo>[];
+  String _providerSelected = _autoProviderOptions.first;
 
   @override
   void initState() {
@@ -105,7 +123,7 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
         });
         return;
       }
-      final models = _parseModels(authed.body);
+      final (models, providers) = _parseCatalog(authed.body);
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -115,6 +133,13 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
           _models = models;
           _selected =
               _models.contains(_selected) ? _selected : _models.first;
+          _providers = providers;
+          // Авто-варианты есть всегда, поэтому выбор не может «потеряться».
+          if (_providerSelected != _autoProviderOptions[0] &&
+              _providerSelected != _autoProviderOptions[1] &&
+              providers.every((x) => x.name != _providerSelected)) {
+            _providerSelected = _autoProviderOptions.first;
+          }
         }
       });
     } on TimeoutException {
@@ -151,24 +176,91 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
     return 'Ошибка $code. Проверьте ключ и адрес.';
   }
 
-  /// Разбор ответа /models: список id из поля data, без дубликатов, по алфавиту.
-  static List<String> _parseModels(String body) {
-    final out = <String>{};
+  /// Разбор ответа /models: список id из поля data (без дубликатов, по алфавиту)
+  /// и сводка провайдеров с ценами входа/выхода.
+  static (List<String>, List<_ProviderInfo>) _parseCatalog(String body) {
+    final ids = <String>{};
+    final providers = <String, _ProviderInfo>{};
     try {
       final j = jsonDecode(body);
       if (j is Map && j['data'] is List) {
         for (final e in (j['data'] as List)) {
+          String? id;
+          Map? entry;
           if (e is Map) {
-            final id = e['id'];
-            if (id is String && id.trim().isNotEmpty) out.add(id.trim());
+            final v = e['id'];
+            if (v is String && v.trim().isNotEmpty) id = v.trim();
+            entry = e;
           } else if (e is String && e.trim().isNotEmpty) {
-            out.add(e.trim());
+            id = e.trim();
+          }
+          if (id == null) continue;
+          ids.add(id);
+          // Провайдер — префикс id до первого «/» (vendor/model).
+          final slash = id.indexOf('/');
+          if (slash <= 0) continue;
+          final name = id.substring(0, slash);
+          // Авто-варианты не могут быть названием провайдера.
+          if (_autoProviderOptions.contains(name)) continue;
+          final info =
+              providers.putIfAbsent(name, () => _ProviderInfo(name));
+          final (up, down) = _pricesOf(entry);
+          if (up != null && (info.inPrice == null || up < info.inPrice!)) {
+            info.inPrice = up;
+          }
+          if (down != null &&
+              (info.outPrice == null || down < info.outPrice!)) {
+            info.outPrice = down;
           }
         }
       }
     } catch (_) {}
-    final list = out.toList()..sort();
-    return list;
+    final list = ids.toList()..sort();
+    final provs = providers.values.toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return (list, provs);
+  }
+
+  /// Цены из записи модели: ищем в полях pricing.prompt/completion,
+  /// pricing.input/output, input_price/output_price, price_in/price_out.
+  static (double?, double?) _pricesOf(Map? entry) {
+    if (entry == null) return (null, null);
+    Map? src;
+    final pricing = entry['pricing'];
+    if (pricing is Map) src = pricing;
+    final up = _numOf(src?['prompt']) ??
+        _numOf(src?['input']) ??
+        _numOf(entry['input_price']) ??
+        _numOf(entry['price_in']);
+    final down = _numOf(src?['completion']) ??
+        _numOf(src?['output']) ??
+        _numOf(entry['output_price']) ??
+        _numOf(entry['price_out']);
+    return (_scale(up), _scale(down));
+  }
+
+  static double? _numOf(Object? v) {
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v.trim().replaceAll(',', '.'));
+    return null;
+  }
+
+  /// Цена за токен (< 1) пересчитывается в цену за миллион токенов.
+  static double? _scale(double? v) {
+    if (v == null || v <= 0) return null;
+    return v < 1 ? v * 1000000 : v;
+  }
+
+  /// Подпись цен для пункта списка: стрелки входа/выхода либо «Цена не указана».
+  static String _priceLabel(_ProviderInfo info) {
+    final up = info.inPrice;
+    final down = info.outPrice;
+    if (up == null && down == null) return 'Цена не указана';
+    final parts = <String>[
+      if (up != null) '⬆️ ${up.toStringAsFixed(2)} ₽',
+      if (down != null) '⬇️ ${down.toStringAsFixed(2)} ₽',
+    ];
+    return parts.join(' / ');
   }
 
   // ---------- старт ----------
@@ -300,6 +392,38 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
                 ],
                 onChanged: (v) => setState(() => _selected = v),
               ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _providerSelected,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Провайдер',
+                ),
+                items: [
+                  for (final a in _autoProviderOptions)
+                    DropdownMenuItem<String>(
+                      value: a,
+                      child: Text(
+                        a,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  for (final pr in _providers)
+                    DropdownMenuItem<String>(
+                      value: pr.name,
+                      child: Text(
+                        '${pr.name} — ${_priceLabel(pr)}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: (v) {
+                  if (v == null) return;
+                  setState(() => _providerSelected = v);
+                },
+              ),
             ],
             const SizedBox(height: 24),
             SizedBox(
@@ -363,3 +487,4 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
     );
   }
 }
+
