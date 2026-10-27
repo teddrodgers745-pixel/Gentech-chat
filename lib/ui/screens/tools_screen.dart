@@ -45,7 +45,11 @@ class _ToolsScreenState extends State<ToolsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Удалить инструмент?'),
-        content: Text(t.name, maxLines: 2, overflow: TextOverflow.ellipsis),
+        content: Text(
+          _displayTitle(t),
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -99,22 +103,55 @@ class _ToolsScreenState extends State<ToolsScreen> {
     );
   }
 
+  /// MCP-инструменты сохраняются с техническим префиксом 'mcp_'.
+  bool _isMcp(Tool t) => t.name.startsWith('mcp_');
+
+  /// Название для отображения: убираем префикс 'mcp_' и заменяем
+  /// подчёркивания пробелами, каждое слово — с заглавной буквы.
+  /// Например, 'mcp_Parallel_Search_web_search' -> 'Parallel Search Web Search'.
+  String _displayTitle(Tool t) {
+    var s = t.name;
+    if (s.startsWith('mcp_')) s = s.substring(4);
+    s = s.replaceAll('_', ' ').trim();
+    if (s.isEmpty) return t.name;
+    return s
+        .split(' ')
+        .map((w) => w.isEmpty ? w : '${w[0].toUpperCase()}${w.substring(1)}')
+        .join(' ');
+  }
+
+  /// Описание для отображения: убираем служебный префикс 'Purpose: '.
+  String _displaySubtitle(Tool t) {
+    var s = t.description.trim();
+    const purpose = 'Purpose:';
+    if (s.toLowerCase().startsWith(purpose.toLowerCase())) {
+      s = s.substring(purpose.length).trim();
+    }
+    return s;
+  }
+
   Widget _tile(Tool t, Palette p) {
+    final mcp = _isMcp(t);
+    final subtitle = _displaySubtitle(t);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
         color: p.card,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: p.border),
+        border: Border.all(
+          color: mcp ? p.accent.withValues(alpha: 0.35) : p.border,
+        ),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
         leading: Icon(
-          t.isModel ? Icons.auto_awesome : Icons.build_outlined,
+          mcp
+              ? Icons.extension
+              : (t.isModel ? Icons.auto_awesome : Icons.build_outlined),
           color: p.accent,
         ),
         title: Text(
-          t.name,
+          _displayTitle(t),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: TextStyle(fontWeight: FontWeight.w600, color: p.text),
@@ -122,13 +159,29 @@ class _ToolsScreenState extends State<ToolsScreen> {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            if (t.description.trim().isNotEmpty)
+            if (mcp) ...[
+              const SizedBox(height: 2),
               Text(
-                t.description,
+                'MCP-КОННЕКТОР',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: p.muted, fontSize: 12),
+                style: TextStyle(
+                  color: p.accent,
+                  fontSize: 10.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.6,
+                ),
               ),
+            ],
+            if (subtitle.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: p.muted, fontSize: 12, height: 1.35),
+              ),
+            ],
             const SizedBox(height: 2),
             Text(
               t.isModel
