@@ -263,6 +263,24 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
     return parts.join(' / ');
   }
 
+  /// Сохраняет имя выбранного провайдера в модели суффиксом
+  /// @provider=name. Для авто-вариантов суффикс не добавляется.
+  /// Предыдущий суффикс снимается, чтобы он не дублировался.
+  void _applyProviderSuffix() {
+    final current = _selected;
+    if (current == null || current.isEmpty) return;
+    final base = _stripSuffix(current);
+    final isAuto = _providerSelected == _autoProviderOptions[0] ||
+        _providerSelected == _autoProviderOptions[1];
+    _selected =
+        isAuto ? base : '$base@provider=$_providerSelected';
+  }
+
+  static String _stripSuffix(String model) {
+    final i = model.indexOf('@provider=');
+    return i < 0 ? model : model.substring(0, i);
+  }
+
   // ---------- старт ----------
 
   Future<void> _start() async {
@@ -403,7 +421,12 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
                       ),
                     ),
                 ],
-                onChanged: (v) => setState(() => _selected = v),
+                onChanged: (v) {
+                  setState(() {
+                    _selected = v;
+                    _applyProviderSuffix();
+                  });
+                },
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
@@ -434,7 +457,10 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
                 ],
                 onChanged: (v) {
                   if (v == null) return;
-                  setState(() => _providerSelected = v);
+                  setState(() {
+                    _providerSelected = v;
+                    _applyProviderSuffix();
+                  });
                 },
               ),
             ],

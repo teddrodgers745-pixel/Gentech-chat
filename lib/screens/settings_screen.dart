@@ -17,17 +17,13 @@ import '../ui/screens/tools_screen.dart';
 import '../widgets/message_view.dart';
 
 const String _sampleMd = '''
-## Пример ответа
-
 Так будет выглядеть текст ответа модели: **жирный**, *курсив* и `инлайн-код`.
 
 - Первый пункт списка
 - Второй пункт списка
 
 ```dart
-void main() {
-  print("Привет, мир!");
-}
+void main() {}
 ```
 ''';
 
@@ -413,13 +409,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 8),
               Container(
-                padding: const EdgeInsets.all(16),
+                padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: p.surface,
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: p.border),
                 ),
-                child: const RichMarkdown(_sampleMd),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Пример ответа',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: p.text,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const RichMarkdown(_sampleMd),
+                  ],
+                ),
               ),
               const SizedBox(height: 12),
               Text(
