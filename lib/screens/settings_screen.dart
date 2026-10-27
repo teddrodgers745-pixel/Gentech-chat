@@ -11,6 +11,7 @@ import '../models.dart';
 import '../services/tts_service.dart';
 import 'preset_edit_screen.dart';
 import '../theme.dart';
+import '../widgets/global_connection_section.dart';
 import '../ui/screens/mcp_screen.dart';
 import '../ui/screens/tools_screen.dart';
 import '../widgets/message_view.dart';
@@ -197,6 +198,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
             children: [
+              const GlobalConnectionSection(),
               _section(p, 'ОЗВУЧКА'),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
