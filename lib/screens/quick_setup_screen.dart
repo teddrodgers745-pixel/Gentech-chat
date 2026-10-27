@@ -245,7 +245,7 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
     return null;
   }
 
-  /// Цена за токен (< 1) пересчитывается в цену за миллион токенов.
+  /// Цена за токен (< 1) переводится в цену за миллион токенов.
   static double? _scale(double? v) {
     if (v == null || v <= 0) return null;
     return v < 1 ? v * 1000000 : v;
@@ -303,7 +303,16 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
   Widget build(BuildContext context) {
     final p = settings.palette;
     return Scaffold(
-      appBar: AppBar(title: const Text('Быстрая настройка')),
+      appBar: AppBar(
+        title: const Text('Быстрая настройка'),
+        actions: [
+          IconButton(
+            tooltip: 'Тёмная тема',
+            icon: const Icon(Icons.dark_mode),
+            onPressed: () => settings.setPalette('dark'),
+          ),
+        ],
+      ),
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -487,4 +496,3 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
     );
   }
 }
-

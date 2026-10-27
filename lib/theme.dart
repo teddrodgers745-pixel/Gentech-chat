@@ -57,20 +57,21 @@ const List<Palette> palettes = [
     border: const Color(0xFF3A3733),
     divider: const Color(0xFF33302C),
   ),
-  // Светлая (тёплая, не белая): панели и рамки чуть темнее фона,
-  // чтобы поля ввода и карточки не сливались с общим фоном.
+  // Светлая (тёплая, не белая): панели и рамки заметно темнее фона
+  // (примерно на 5–10%), чтобы поля ввода и карточки не сливались
+  // с общим фоном.
   Palette(
     id: 'light',
     name: 'Светлая',
     brightness: Brightness.light,
     bg: const Color(0xFFFDFBF7),
-    surface: const Color(0xFFF6F2EA),
-    card: const Color(0xFFF0ECE2),
+    surface: const Color(0xFFF2EDE3),
+    card: const Color(0xFFECE7DB),
     text: const Color(0xFF2B2824),
     muted: const Color(0xFF8C857A),
     accent: const Color(0xFFC2784A),
-    userBg: const Color(0xFFEAE5D9),
-    codeBg: const Color(0xFFEDE9DF),
+    userBg: const Color(0xFFE6E0D2),
+    codeBg: const Color(0xFFE9E4D8),
     border: const Color(0xFFD9D0C0),
     divider: const Color(0xFFE0DBD0),
   ),
