@@ -138,8 +138,11 @@ class PresetStore extends ChangeNotifier {
 
 class AppSettings extends ChangeNotifier {
   String apiKey = '';
-  String baseUrl = 'https://api.deepseek.com';
-  String model = 'deepseek-chat';
+
+  /// Адрес провайдера и модель вводятся пользователем:
+  /// по умолчанию поля пустые (подсказки — в hintText).
+  String baseUrl = '';
+  String model = '';
   String systemPrompt = '';
   String paletteId = 'light';
   String bodyFont = 'Literata';

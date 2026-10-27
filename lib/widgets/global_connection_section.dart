@@ -6,10 +6,12 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 
-/// Секция «ПОДКЛЮЧЕНИЕ (ГЛОБАЛЬНОЕ)» в настройках: Base URL, API-ключ
-/// и модель по умолчанию. Используются, когда не выбран ни один пресет.
+/// Секция «ПОДКЛЮЧЕНИЕ» в настройках: Base URL, API-ключ и модель
+/// по умолчанию. Используются, когда не выбран ни один пресет.
 /// Значения хранятся в SharedPreferences (ключи baseUrl/apiKey/model),
 /// поэтому старые данные пользователя сохраняются при обновлении.
+/// Поля Base URL и Модель по умолчанию пустые: адрес и модель вводит
+/// пользователь, подсказки показаны в hintText.
 class GlobalConnectionSection extends StatefulWidget {
   const GlobalConnectionSection({super.key});
 
@@ -62,7 +64,7 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          'ПОДКЛЮЧЕНИЕ (ГЛОБАЛЬНОЕ)',
+          'ПОДКЛЮЧЕНИЕ',
           style: TextStyle(
             fontSize: 13,
             fontWeight: FontWeight.w700,
