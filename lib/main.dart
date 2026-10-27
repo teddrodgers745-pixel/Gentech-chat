@@ -20,15 +20,16 @@ Future<void> main() async {
   runApp(const GenTechChatApp());
 }
 
-/// При первом запуске добавляем готовый тестовый инструмент «Погода»
-/// (открытый погодный эндпоинт, метод GET). Флаг в хранилище гарантирует,
-/// что пользовательские инструменты никогда не перезаписываются повторно.
+/// Базовые инструменты, которые появляются в списке по умолчанию:
+/// «Погода», «Википедия» и «Калькулятор» (открытые GET-эндпоинты без ключей).
+/// Инструмент добавляется, только если инструмента с таким именем ещё нет,
+/// поэтому пользовательские инструменты никогда не перезаписываются.
 Future<void> _seedDefaultTools() async {
   try {
-    if (await storage.getString('toolsSeeded') != null) return;
     final tools = await storage.getTools();
-    if (tools.isEmpty) {
-      tools.add(Tool(
+    final names = <String>{for (final t in tools) t.name};
+    final defaults = <Tool>[
+      Tool(
         id: newId(),
         name: 'Погода',
         description: 'Текущая погода: температура и ветер по открытому API.',
@@ -37,10 +38,37 @@ Future<void> _seedDefaultTools() async {
         method: 'GET',
         parametersSchema:
             '{"type": "object", "properties": {}, "required": []}',
-      ));
-      await storage.setTools(tools);
+      ),
+      Tool(
+        id: newId(),
+        name: 'Википедия',
+        description: 'Поиск статей в энциклопедии по запросу.',
+        endpoint:
+            'https://ru.wikipedia.org/w/api.php?action=query&list=search&utf8=&format=json&srsearch={query}',
+        method: 'GET',
+        parametersSchema:
+            '{"type": "object", "properties": {"query": {"type": "string", '
+            '"description": "Поисковый запрос"}}, "required": ["query"]}',
+      ),
+      Tool(
+        id: newId(),
+        name: 'Калькулятор',
+        description: 'Вычисление математических выражений.',
+        endpoint: 'https://api.mathjs.org/v4/?expr={query}',
+        method: 'GET',
+        parametersSchema:
+            '{"type": "object", "properties": {"query": {"type": "string", '
+            '"description": "Математическое выражение, например 2*(3+4)"}}, '
+            '"required": ["query"]}',
+      ),
+    ];
+    var changed = false;
+    for (final t in defaults) {
+      if (names.contains(t.name)) continue;
+      tools.add(t);
+      changed = true;
     }
-    await storage.setString('toolsSeeded', '1');
+    if (changed) await storage.setTools(tools);
   } catch (_) {
     // Хранилище недоступно — не блокируем запуск приложения.
   }

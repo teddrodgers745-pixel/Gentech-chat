@@ -513,7 +513,18 @@ class ChatService {
     final client = http.Client();
     _client = client;
     try {
-      final uri = Uri.parse(tool.endpoint.trim());
+      // Подстановка плейсхолдеров {query}/{ключ} в URL значениями аргументов
+      // (например, srsearch={query} у поиска по энциклопедии).
+      var endpoint = tool.endpoint.trim();
+      if (endpoint.contains('{') && args.isNotEmpty) {
+        args.forEach((key, value) {
+          endpoint = endpoint.replaceAll(
+            '{$key}',
+            Uri.encodeQueryComponent(_scalar(value)),
+          );
+        });
+      }
+      final uri = Uri.parse(endpoint);
       final headers = <String, String>{...tool.headers};
       http.Response resp;
       if (tool.method.toUpperCase() == 'GET') {
