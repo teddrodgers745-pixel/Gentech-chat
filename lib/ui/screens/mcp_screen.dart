@@ -18,7 +18,29 @@ class McpScreen extends StatefulWidget {
   State<McpScreen> createState() => _McpScreenState();
 }
 
+/// Готовый коннектор из каталога: добавляется одной кнопкой, без ключа.
+class _CatalogItem {
+  final String name;
+  final String url;
+  final String description;
+  const _CatalogItem(this.name, this.url, this.description);
+}
+
 class _McpScreenState extends State<McpScreen> {
+  /// Каталог готовых коннекторов (MCP), доступных без ключа.
+  static const List<_CatalogItem> _catalog = [
+    _CatalogItem('Parallel Search', 'https://search.parallel.ai/mcp',
+        'Поиск в интернете · без ключа'),
+    _CatalogItem('DeepWiki', 'https://mcp.deepwiki.com/mcp',
+        'Вики и документация репозиториев · без ключа'),
+    _CatalogItem('Firecrawl', 'https://mcp.firecrawl.dev/mcp',
+        'Извлечение и обход веб-страниц · без ключа'),
+    _CatalogItem('Exa', 'https://mcp.exa.ai/mcp',
+        'Семантический поиск в интернете · без ключа'),
+    _CatalogItem('Tavily', 'https://mcp.tavily.com/mcp',
+        'Поиск актуальной информации · без ключа'),
+  ];
+
   List<McpServer> _servers = [];
 
   /// id серверов, для которых идёт загрузка инструментов.
@@ -179,13 +201,17 @@ class _McpScreenState extends State<McpScreen> {
         child: Column(
           children: [
             Expanded(
-              child: _servers.isEmpty
-                  ? _empty(p)
-                  : ListView.builder(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                      itemCount: _servers.length,
-                      itemBuilder: (context, i) => _tile(_servers[i], p),
-                    ),
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                children: [
+                  _catalogSection(p),
+                  const SizedBox(height: 16),
+                  if (_servers.isEmpty)
+                    _empty(p)
+                  else
+                    for (final s in _servers) _tile(s, p),
+                ],
+              ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
@@ -202,6 +228,97 @@ class _McpScreenState extends State<McpScreen> {
         ),
       ),
     );
+  }
+
+  /// Секция готовых коннекторов: карточки с кнопкой «Добавить».
+  Widget _catalogSection(Palette p) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          'ГОТОВЫЕ КОННЕКТОРЫ',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
+            color: p.accent,
+          ),
+        ),
+        const SizedBox(height: 10),
+        for (final c in _catalog) _catalogTile(c, p),
+      ],
+    );
+  }
+
+  Widget _catalogTile(_CatalogItem c, Palette p) {
+    final added = _servers.any((x) => x.url.trim() == c.url);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: p.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  c.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontWeight: FontWeight.w600, color: p.text),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  c.description,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: p.muted, fontSize: 12),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  c.url,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'JetBrains Mono',
+                    fontFamilyFallback: const ['monospace'],
+                    fontSize: 11,
+                    color: p.muted,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (added)
+            Icon(Icons.check_circle_rounded, color: p.accent, size: 22)
+          else
+            TextButton(
+              onPressed: () => _addFromCatalog(c),
+              child: const Text('Добавить'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Быстрое добавление готового коннектора одним нажатием (без ключа).
+  Future<void> _addFromCatalog(_CatalogItem c) async {
+    final list = await storage.getMcpServers();
+    if (list.any((x) => x.url.trim() == c.url)) {
+      _snack('Коннектор «${c.name}» уже добавлен');
+      return;
+    }
+    list.add(McpServer(id: newId(), name: c.name, url: c.url));
+    await storage.setMcpServers(list);
+    if (!mounted) return;
+    await _load();
+    _snack('Коннектор добавлен: ${c.name}');
   }
 
   Widget _tile(McpServer s, Palette p) {

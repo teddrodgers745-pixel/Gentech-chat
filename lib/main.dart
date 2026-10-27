@@ -61,6 +61,56 @@ Future<void> _seedDefaultTools() async {
             '"description": "Математическое выражение, например 2*(3+4)"}}, '
             '"required": ["query"]}',
       ),
+      Tool(
+        id: newId(),
+        name: 'Курсы валют',
+        description: 'Актуальные курсы мировых валют относительно доллара США.',
+        endpoint: 'https://open.er-api.com/v6/latest/USD',
+        method: 'GET',
+        parametersSchema:
+            '{"type": "object", "properties": {}, "required": []}',
+      ),
+      Tool(
+        id: newId(),
+        name: 'IP Геолокация',
+        description: 'Определяет страну, город и провайдера по IP-адресу.',
+        endpoint: 'http://ip-api.com/json/{query}',
+        method: 'GET',
+        parametersSchema:
+            '{"type": "object", "properties": {"query": {"type": "string", '
+            '"description": "IP-адрес для проверки"}}, "required": ["query"]}',
+      ),
+      Tool(
+        id: newId(),
+        name: 'arXiv',
+        description: 'Поиск научных статей и препринтов по запросу.',
+        endpoint: 'http://export.arxiv.org/api/query?search_query=all:{query}',
+        method: 'GET',
+        parametersSchema:
+            '{"type": "object", "properties": {"query": {"type": "string", '
+            '"description": "Поисковый запрос"}}, "required": ["query"]}',
+      ),
+      Tool(
+        id: newId(),
+        name: 'Hacker News',
+        description: 'Идентификаторы самых популярных новостей сообщества.',
+        endpoint: 'https://hacker-news.firebaseio.com/v0/topstories.json',
+        method: 'GET',
+        parametersSchema:
+            '{"type": "object", "properties": {}, "required": []}',
+      ),
+      Tool(
+        id: newId(),
+        name: 'Чтение страниц',
+        description:
+            'Загружает страницу по указанному URL и возвращает её текст (fetch).',
+        endpoint: '{query}',
+        method: 'GET',
+        parametersSchema:
+            '{"type": "object", "properties": {"query": {"type": "string", '
+            '"description": "Полный URL страницы, начиная с http:// или '
+            'https://"}}, "required": ["query"]}',
+      ),
     ];
     var changed = false;
     for (final t in defaults) {
