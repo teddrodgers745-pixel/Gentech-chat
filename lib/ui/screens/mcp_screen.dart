@@ -10,7 +10,8 @@ import '../../services/mcp_client.dart';
 import '../../theme.dart';
 
 /// Экран управления MCP-серверами: список, добавление, редактирование
-/// и удаление. Проверка подключения появится на следующем этапе.
+/// и удаление. Готовый коннектор подключается одной кнопкой: сервер
+/// сохраняется, затем сразу загружаются его инструменты.
 class McpScreen extends StatefulWidget {
   const McpScreen({super.key});
 
@@ -45,6 +46,9 @@ class _McpScreenState extends State<McpScreen> {
 
   /// id серверов, для которых идёт загрузка инструментов.
   final Set<String> _loading = <String>{};
+
+  /// URL готовых коннекторов, которые сейчас подключаются.
+  final Set<String> _catalogLoading = <String>{};
 
   @override
   void initState() {
@@ -252,6 +256,7 @@ class _McpScreenState extends State<McpScreen> {
 
   Widget _catalogTile(_CatalogItem c, Palette p) {
     final added = _servers.any((x) => x.url.trim() == c.url);
+    final busy = _catalogLoading.contains(c.url);
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
@@ -295,7 +300,9 @@ class _McpScreenState extends State<McpScreen> {
             ),
           ),
           const SizedBox(width: 8),
-          if (added)
+          if (busy)
+            _busyButton(p)
+          else if (added)
             Icon(Icons.check_circle_rounded, color: p.accent, size: 22)
           else
             TextButton(
@@ -307,18 +314,68 @@ class _McpScreenState extends State<McpScreen> {
     );
   }
 
-  /// Быстрое добавление готового коннектора одним нажатием (без ключа).
+  /// Кнопка в состоянии загрузки: индикатор вместо надписи.
+  Widget _busyButton(Palette p) {
+    return Container(
+      height: 36,
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: p.border),
+      ),
+      child: const Center(
+        child: SizedBox(
+          width: 16,
+          height: 16,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        ),
+      ),
+    );
+  }
+
+  /// Подключение готового коннектора одним нажатием (без ключа):
+  /// сервер сохраняется в Storage, затем сразу загружаются его инструменты.
+  /// Дополнительных нажатий пользователю делать не нужно.
   Future<void> _addFromCatalog(_CatalogItem c) async {
+    if (_catalogLoading.contains(c.url)) return;
     final list = await storage.getMcpServers();
     if (list.any((x) => x.url.trim() == c.url)) {
       _snack('Коннектор «${c.name}» уже добавлен');
       return;
     }
-    list.add(McpServer(id: newId(), name: c.name, url: c.url));
+
+    final server = McpServer(id: newId(), name: c.name, url: c.url);
+    list.add(server);
     await storage.setMcpServers(list);
     if (!mounted) return;
-    await _load();
-    _snack('Коннектор добавлен: ${c.name}');
+    setState(() {
+      _catalogLoading.add(c.url);
+      _servers = list;
+    });
+
+    List<Tool> fetched;
+    try {
+      fetched = await McpClient().fetchTools(server);
+    } on McpClientException catch (e) {
+      if (!mounted) return;
+      setState(() => _catalogLoading.remove(c.url));
+      _snack('Ошибка подключения: ${e.message}');
+      return;
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _catalogLoading.remove(c.url));
+      _snack('Ошибка подключения: не удалось соединиться с сервером');
+      return;
+    }
+
+    final saved = await _saveTools(server, fetched);
+    if (!mounted) return;
+    setState(() => _catalogLoading.remove(c.url));
+    if (saved) {
+      _snack('Инструменты загружены');
+    } else {
+      _snack('Ошибка подключения: не удалось сохранить инструменты');
+    }
   }
 
   Widget _tile(McpServer s, Palette p) {
@@ -417,26 +474,30 @@ class _McpScreenState extends State<McpScreen> {
       return;
     }
 
-    final prefix = 'mcp_${_sanitize(s.name)}_';
-    var saved = true;
-    try {
-      final all = await storage.getTools();
-      // Старые инструменты этого сервера заменяем свежим списком.
-      all.removeWhere((t) => t.name.startsWith(prefix));
-      for (final t in fetched) {
-        t.name = '$prefix${_sanitize(t.name)}';
-        all.add(t);
-      }
-      saved = await storage.setTools(all);
-    } catch (_) {
-      saved = false;
-    }
+    final saved = await _saveTools(s, fetched);
     if (!mounted) return;
     setState(() => _loading.remove(s.id));
     if (saved) {
       _snack('Загружено инструментов: ${fetched.length}');
     } else {
       _snack('Не удалось сохранить инструменты.');
+    }
+  }
+
+  /// Сохраняет полученные инструменты в общий список (ключ 'tools'),
+  /// заменяя прежние инструменты этого же сервера.
+  Future<bool> _saveTools(McpServer s, List<Tool> fetched) async {
+    final prefix = 'mcp_${_sanitize(s.name)}_';
+    try {
+      final all = await storage.getTools();
+      all.removeWhere((t) => t.name.startsWith(prefix));
+      for (final t in fetched) {
+        t.name = '$prefix${_sanitize(t.name)}';
+        all.add(t);
+      }
+      return await storage.setTools(all);
+    } catch (_) {
+      return false;
     }
   }
 
