@@ -307,9 +307,13 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
         title: const Text('Быстрая настройка'),
         actions: [
           IconButton(
-            tooltip: 'Тёмная тема',
+            tooltip: p.isDark ? 'Светлая тема' : 'Тёмная тема',
             icon: const Icon(Icons.dark_mode),
-            onPressed: () => settings.setPalette('dark'),
+            onPressed: () {
+              setState(() {
+                settings.setPalette(p.isDark ? 'light' : 'dark');
+              });
+            },
           ),
         ],
       ),

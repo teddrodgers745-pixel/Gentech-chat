@@ -189,6 +189,7 @@ class ChatService {
     required List<Map<String, dynamic>> messages,
     bool stream = true,
     double? temperature,
+    String? reasoningEffort,
     List<Tool> tools = const <Tool>[],
   }) async* {
     _wasCancelled = false;
@@ -206,6 +207,7 @@ class ChatService {
         history: history,
         stream: stream,
         temperature: temperature,
+        reasoningEffort: reasoningEffort,
         tools: tools,
         holder: holder,
       );
@@ -291,6 +293,7 @@ class ChatService {
       history: history,
       stream: stream,
       temperature: temperature,
+      reasoningEffort: reasoningEffort,
       tools: const <Tool>[],
       holder: holder,
     );
@@ -316,6 +319,7 @@ class ChatService {
     required List<Map<String, dynamic>> history,
     required bool stream,
     double? temperature,
+    String? reasoningEffort,
     required List<Tool> tools,
     required _RoundHolder holder,
   }) async* {
@@ -336,6 +340,7 @@ class ChatService {
         'messages': history,
         'stream': stream,
         if (temperature != null) 'temperature': temperature,
+        if (reasoningEffort != null) 'reasoning_effort': reasoningEffort,
         if (tools.isNotEmpty || builtin.isNotEmpty)
           'tools': <Map<String, dynamic>>[
             ...builtin,

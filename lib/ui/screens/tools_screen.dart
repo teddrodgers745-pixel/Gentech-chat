@@ -103,8 +103,9 @@ class _ToolsScreenState extends State<ToolsScreen> {
     );
   }
 
-  /// MCP-инструменты сохраняются с техническим префиксом 'mcp_'.
-  bool _isMcp(Tool t) => t.name.startsWith('mcp_');
+  /// В существующих записях префикс может быть в имени, а не в id.
+  bool _isMcp(Tool t) =>
+      t.id.startsWith('mcp_') || t.name.startsWith('mcp_');
 
   /// Название для отображения: убираем префикс 'mcp_' и заменяем
   /// подчёркивания пробелами, каждое слово — с заглавной буквы.
@@ -120,14 +121,46 @@ class _ToolsScreenState extends State<ToolsScreen> {
         .join(' ');
   }
 
-  /// Описание для отображения: убираем служебный префикс 'Purpose: '.
+  /// Перевод только для отображения: исходный текст остаётся в хранилище
+  /// и передаётся модели без изменений.
   String _displaySubtitle(Tool t) {
     var s = t.description.trim();
     const purpose = 'Purpose:';
     if (s.toLowerCase().startsWith(purpose.toLowerCase())) {
       s = s.substring(purpose.length).trim();
     }
-    return s;
+    if (!_isMcp(t) || s.isEmpty ||
+        RegExp(r'[А-Яа-яЁё]').hasMatch(s) ||
+        !RegExp(r'[A-Za-z]').hasMatch(s)) {
+      return s;
+    }
+
+    final lower = s.toLowerCase();
+    bool has(String pattern) => RegExp(pattern).hasMatch(lower);
+    final search = has(r'\b(search\w*|find\w*|lookup|look up)\b');
+    final fetch = has(r'\b(fetch\w*|read\w*|retriev\w*|extract\w*|scrap\w*|crawl\w*)\b');
+    if (search && has(r'\b(web|internet|online)\b')) {
+      return fetch
+          ? 'Выполняет поиск в интернете и получает содержимое.'
+          : 'Выполняет поиск в интернете.';
+    }
+    if (search) return 'Выполняет поиск по запросу.';
+    if (fetch) return 'Получает и читает содержимое по запросу.';
+    if (has(r'\b(list\w*)\b')) return 'Показывает список доступных данных.';
+    if (has(r'\b(calculat\w*|comput\w*)\b')) {
+      return 'Выполняет вычисления по запросу.';
+    }
+    if (has(r'\b(analy[sz]\w*)\b')) return 'Анализирует данные по запросу.';
+    if (has(r'\b(creat\w*|generat\w*)\b')) {
+      return 'Создаёт данные по запросу.';
+    }
+    if (has(r'\b(updat\w*|edit\w*|modif\w*)\b')) {
+      return 'Изменяет данные по запросу.';
+    }
+    if (has(r'\b(delet\w*|remov\w*)\b')) {
+      return 'Удаляет данные по запросу.';
+    }
+    return 'Инструмент MCP. Удерживайте описание, чтобы увидеть оригинал.';
   }
 
   Widget _tile(Tool t, Palette p) {
@@ -175,11 +208,14 @@ class _ToolsScreenState extends State<ToolsScreen> {
             ],
             if (subtitle.isNotEmpty) ...[
               const SizedBox(height: 2),
-              Text(
-                subtitle,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: p.muted, fontSize: 12, height: 1.35),
+              Tooltip(
+                message: mcp ? t.description : '',
+                child: Text(
+                  subtitle,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: p.muted, fontSize: 12, height: 1.35),
+                ),
               ),
             ],
             const SizedBox(height: 2),

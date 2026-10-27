@@ -37,6 +37,7 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _pinching = false;
 
   bool _streaming = false;
+  bool _reasoningEnabled = false;
   bool _stick = true;
   Timer? _uiTimer;
 
@@ -248,6 +249,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
+    final reasoningEffort = _reasoningEnabled ? 'high' : null;
     final msgs = <Map<String, dynamic>>[
       if (cfg.systemPrompt.trim().isNotEmpty)
         <String, dynamic>{
@@ -280,6 +282,7 @@ class _ChatScreenState extends State<ChatScreen> {
         messages: msgs,
         stream: cfg.stream,
         temperature: cfg.temperature,
+        reasoningEffort: reasoningEffort,
         tools: tools,
       )) {
         if (ch.toolName != null) {
@@ -380,7 +383,7 @@ class _ChatScreenState extends State<ChatScreen> {
             child: Column(
               children: [
                 Expanded(child: _messages(chat, p)),
-                if (_pending.isNotEmpty) _attachmentsBar(p),
+                _attachmentActions(p),
                 _inputBar(p),
               ],
             ),
@@ -478,6 +481,32 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Вложения расположены над полем, чтобы кнопка размышлений не сужала его.
+  Widget _attachmentActions(Palette p) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          if (_pending.isEmpty)
+            TextButton.icon(
+              onPressed: _streaming ? null : _attach,
+              icon: const Icon(Icons.attach_file, size: 20),
+              label: const Text('Прикрепить файл'),
+              style: TextButton.styleFrom(foregroundColor: p.muted),
+            )
+          else ...[
+            IconButton(
+              tooltip: 'Прикрепить файл',
+              icon: Icon(Icons.attach_file, size: 22, color: p.muted),
+              onPressed: _streaming ? null : _attach,
+            ),
+            Expanded(child: _attachmentsBar(p)),
+          ],
+        ],
+      ),
+    );
+  }
+
   /// Чипы выбранных файлов над полем ввода: имя и кнопка удаления.
   Widget _attachmentsBar(Palette p) {
     return Padding(
@@ -521,11 +550,6 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            IconButton(
-              tooltip: 'Прикрепить файл',
-              icon: Icon(Icons.attach_file, size: 22, color: p.muted),
-              onPressed: _streaming ? null : _attach,
-            ),
             ValueListenableBuilder<bool>(
               valueListenable: speechService.listening,
               builder: (context, listening, _) => MicButton(
@@ -533,6 +557,24 @@ class _ChatScreenState extends State<ChatScreen> {
                 onTap: _streaming ? null : _toggleSpeech,
                 mutedColor: p.muted,
               ),
+            ),
+            IconButton(
+              tooltip: _reasoningEnabled
+                  ? 'Выключить подробные размышления'
+                  : 'Включить подробные размышления',
+              isSelected: _reasoningEnabled,
+              icon: Icon(
+                Icons.psychology,
+                size: 22,
+                color: _reasoningEnabled
+                    ? const Color(0xFFFF8A80)
+                    : p.muted,
+              ),
+              onPressed: _streaming
+                  ? null
+                  : () => setState(() {
+                        _reasoningEnabled = !_reasoningEnabled;
+                      }),
             ),
             Expanded(
               child: TextField(
