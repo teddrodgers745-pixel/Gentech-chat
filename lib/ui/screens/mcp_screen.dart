@@ -31,18 +31,21 @@ class _McpScreenState extends State<McpScreen> {
   /// Каталог готовых коннекторов (MCP), доступных без ключа.
   static const List<_CatalogItem> _catalog = [
     _CatalogItem('Parallel Search', 'https://search.parallel.ai/mcp',
-        'Поиск в интернете · без ключа'),
+        'Поиск в интернете и чтение страниц без ключа'),
     _CatalogItem('DeepWiki', 'https://mcp.deepwiki.com/mcp',
-        'Вики и документация репозиториев · без ключа'),
+        'Документация и вики по GitHub-репозиториям'),
     _CatalogItem('Firecrawl', 'https://mcp.firecrawl.dev/mcp',
-        'Извлечение и обход веб-страниц · без ключа'),
+        'Парсинг сайтов и обход блокировок'),
     _CatalogItem('Exa', 'https://mcp.exa.ai/mcp',
-        'Семантический поиск в интернете · без ключа'),
+        'Семантический поиск информации'),
     _CatalogItem('Tavily', 'https://mcp.tavily.com/mcp',
-        'Поиск актуальной информации · без ключа'),
+        'Быстрый поиск актуальных новостей'),
   ];
 
   List<McpServer> _servers = [];
+
+  /// Имена инструментов, загруженных с каждого сервера (id -> имена).
+  final Map<String, List<String>> _serverTools = <String, List<String>>{};
 
   /// id серверов, для которых идёт загрузка инструментов.
   final Set<String> _loading = <String>{};
@@ -58,8 +61,22 @@ class _McpScreenState extends State<McpScreen> {
 
   Future<void> _load() async {
     final list = await storage.getMcpServers();
+    final tools = await storage.getTools();
     if (!mounted) return;
+    _serverTools.clear();
+    for (final s in list) {
+      _serverTools[s.id] = _namesFor(s, tools);
+    }
     setState(() => _servers = list);
+  }
+
+  /// Имена инструментов сервера без технического префикса.
+  static List<String> _namesFor(McpServer s, List<Tool> tools) {
+    final prefix = 'mcp_${_sanitize(s.name)}_';
+    return [
+      for (final t in tools)
+        if (t.name.startsWith(prefix)) t.name.substring(prefix.length),
+    ];
   }
 
   void _snack(String text) {
@@ -206,7 +223,9 @@ class _McpScreenState extends State<McpScreen> {
           children: [
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                // Нижний отступ, чтобы кнопка «Добавить сервер»
+                // не перекрывала последнюю карточку списка.
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
                 children: [
                   _catalogSection(p),
                   const SizedBox(height: 16),
@@ -266,6 +285,7 @@ class _McpScreenState extends State<McpScreen> {
         border: Border.all(color: p.border),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
             child: Column(
@@ -277,14 +297,18 @@ class _McpScreenState extends State<McpScreen> {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontWeight: FontWeight.w600, color: p.text),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
                 Text(
                   c.description,
-                  maxLines: 1,
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(color: p.muted, fontSize: 12),
+                  style: TextStyle(
+                    color: p.muted,
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
                 ),
-                const SizedBox(height: 4),
+                const SizedBox(height: 5),
                 Text(
                   c.url,
                   maxLines: 1,
@@ -370,7 +394,10 @@ class _McpScreenState extends State<McpScreen> {
 
     final saved = await _saveTools(server, fetched);
     if (!mounted) return;
-    setState(() => _catalogLoading.remove(c.url));
+    setState(() {
+      _catalogLoading.remove(c.url);
+      if (saved) _serverTools[server.id] = _namesFor(server, fetched);
+    });
     if (saved) {
       _snack('Инструменты загружены');
     } else {
@@ -379,6 +406,10 @@ class _McpScreenState extends State<McpScreen> {
   }
 
   Widget _tile(McpServer s, Palette p) {
+    final tools = _serverTools[s.id] ?? const <String>[];
+    final toolsLabel = tools.isEmpty
+        ? 'Инструменты не загружены'
+        : 'Инструменты: ${tools.join(', ')}';
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
       decoration: BoxDecoration(
@@ -413,6 +444,13 @@ class _McpScreenState extends State<McpScreen> {
                     color: p.muted,
                   ),
                 ),
+                const SizedBox(height: 3),
+                Text(
+                  toolsLabel,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(color: p.muted, fontSize: 11.5),
+                ),
                 Text(
                   s.token.isEmpty ? 'Без токена' : 'Токен сохранён',
                   style: TextStyle(color: p.muted, fontSize: 11),
@@ -432,17 +470,27 @@ class _McpScreenState extends State<McpScreen> {
               alignment: Alignment.centerLeft,
               child: _loading.contains(s.id)
                   ? const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                       child: SizedBox(
-                        width: 18,
-                        height: 18,
+                        width: 16,
+                        height: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       ),
                     )
                   : TextButton.icon(
                       onPressed: () => _fetchTools(s),
-                      icon: const Icon(Icons.download_rounded, size: 18),
+                      icon: const Icon(Icons.refresh, size: 16),
                       label: const Text('Загрузить инструменты'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: p.accent,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
+                        ),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        textStyle: const TextStyle(fontSize: 12),
+                      ),
                     ),
             ),
           ),
@@ -476,7 +524,10 @@ class _McpScreenState extends State<McpScreen> {
 
     final saved = await _saveTools(s, fetched);
     if (!mounted) return;
-    setState(() => _loading.remove(s.id));
+    setState(() {
+      _loading.remove(s.id);
+      if (saved) _serverTools[s.id] = _namesFor(s, fetched);
+    });
     if (saved) {
       _snack('Загружено инструментов: ${fetched.length}');
     } else {
