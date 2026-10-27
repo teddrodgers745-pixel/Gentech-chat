@@ -176,12 +176,13 @@ class _ToolsScreenState extends State<ToolsScreen> {
         ),
       ),
       child: ListTile(
-        contentPadding: const EdgeInsets.fromLTRB(16, 6, 8, 6),
+        contentPadding: const EdgeInsets.fromLTRB(16, 2, 8, 2),
         leading: Icon(
           mcp
               ? Icons.extension
               : (t.isModel ? Icons.auto_awesome : Icons.build_outlined),
           color: p.accent,
+          size: 20,
         ),
         title: Text(
           _displayTitle(t),

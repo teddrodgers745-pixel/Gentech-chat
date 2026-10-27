@@ -47,6 +47,11 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
   Future<void> _loadTools() async {
     final list = await storage.getTools();
     if (!mounted) return;
+    // Защита от дубликатов id (могли появиться у инструментов, созданных
+    // подряд в старых версиях): без этого переключение одного тумблера
+    // включало все инструменты с тем же id.
+    final seen = <String>{};
+    list.retainWhere((t) => t.id.isNotEmpty && seen.add(t.id));
     setState(() => _tools = list);
   }
 

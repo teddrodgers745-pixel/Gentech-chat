@@ -13,7 +13,16 @@ final AppSettings settings = AppSettings();
 final ChatStore store = ChatStore();
 final PresetStore presets = PresetStore();
 
-String newId() => DateTime.now().microsecondsSinceEpoch.toString();
+int _idSeq = 0;
+
+/// Уникальный идентификатор: время плюс счётчик. Только microsecondsSinceEpoch
+/// недостаточно: на части устройств точность времени миллисекундная, и
+/// инструменты, созданные подряд (например, из MCP-каталога), получали
+/// одинаковый id — из-за этого в редакторе пресета тумблеры «слипались».
+String newId() {
+  _idSeq += 1;
+  return '${DateTime.now().microsecondsSinceEpoch}-$_idSeq';
+}
 
 /// Итоговая конфигурация запроса: активный пресет либо глобальные настройки.
 class EffectiveConfig {

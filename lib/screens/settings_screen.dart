@@ -333,11 +333,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 children: [
                   for (final x in palettes)
                     ChoiceChip(
-                      label: Text(x.name),
+                      label: Text(
+                        x.name,
+                        style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      labelPadding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 4,
+                      ),
+                      visualDensity: VisualDensity.comfortable,
                       selected: x.id == settings.paletteId,
                       avatar: Container(
-                        width: 16,
-                        height: 16,
+                        width: 18,
+                        height: 18,
                         decoration: BoxDecoration(
                           color: x.accent,
                           shape: BoxShape.circle,
