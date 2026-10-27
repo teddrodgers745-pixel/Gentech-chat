@@ -232,7 +232,7 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
         if (_models.isNotEmpty) ...[
           const SizedBox(height: 4),
           DropdownButtonFormField<String>(
-            value: dropdownValue,
+            initialValue: dropdownValue,
             isExpanded: true,
             decoration: const InputDecoration(
               labelText: 'Выберите модель',
