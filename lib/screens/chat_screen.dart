@@ -481,27 +481,20 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Вложения расположены над полем, чтобы кнопка размышлений не сужала его.
+  /// Чипы выбранных файлов над полем ввода. Кнопка-скрепка переехала
+  /// в панель ввода, поэтому при пустом списке строка не занимает места.
   Widget _attachmentActions(Palette p) {
+    if (_pending.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Row(
         children: [
-          if (_pending.isEmpty)
-            TextButton.icon(
-              onPressed: _streaming ? null : _attach,
-              icon: const Icon(Icons.attach_file, size: 20),
-              label: const Text('Прикрепить файл'),
-              style: TextButton.styleFrom(foregroundColor: p.muted),
-            )
-          else ...[
-            IconButton(
-              tooltip: 'Прикрепить файл',
-              icon: Icon(Icons.attach_file, size: 22, color: p.muted),
-              onPressed: _streaming ? null : _attach,
-            ),
-            Expanded(child: _attachmentsBar(p)),
-          ],
+          IconButton(
+            tooltip: 'Прикрепить файл',
+            icon: Icon(Icons.attach_file, size: 22, color: p.muted),
+            onPressed: _streaming ? null : _attach,
+          ),
+          Expanded(child: _attachmentsBar(p)),
         ],
       ),
     );
@@ -546,10 +539,17 @@ class _ChatScreenState extends State<ChatScreen> {
           borderRadius: BorderRadius.circular(24),
           border: Border.all(color: p.border),
         ),
-        padding: const EdgeInsets.fromLTRB(16, 4, 6, 4),
+        padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
+            // Слева — скрепка, микрофон и мозг; поле занимает всё остальное.
+            IconButton(
+              tooltip: 'Прикрепить файл',
+              iconSize: 22,
+              icon: Icon(Icons.attach_file, size: 22, color: p.muted),
+              onPressed: _streaming ? null : _attach,
+            ),
             ValueListenableBuilder<bool>(
               valueListenable: speechService.listening,
               builder: (context, listening, _) => MicButton(
@@ -567,7 +567,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 Icons.psychology,
                 size: 22,
                 color: _reasoningEnabled
-                    ? const Color(0xFFFF8A80)
+                    ? const Color(0xFFE53935)
                     : p.muted,
               ),
               onPressed: _streaming

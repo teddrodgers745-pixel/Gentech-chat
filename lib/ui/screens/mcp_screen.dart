@@ -31,15 +31,15 @@ class _McpScreenState extends State<McpScreen> {
   /// Каталог готовых коннекторов (MCP), доступных без ключа.
   static const List<_CatalogItem> _catalog = [
     _CatalogItem('Parallel Search', 'https://search.parallel.ai/mcp',
-        'Поиск в интернете и чтение страниц без ключа'),
+        'Умный поиск в интернете и чтение страниц. Идеален для поиска свежих новостей и фактов.'),
     _CatalogItem('DeepWiki', 'https://mcp.deepwiki.com/mcp',
-        'Документация и вики по GitHub-репозиториям'),
+        'Доступ к документации и вики по любым открытым GitHub-репозиториям.'),
     _CatalogItem('Firecrawl', 'https://mcp.firecrawl.dev/mcp',
-        'Парсинг сайтов и обход блокировок'),
+        'Парсинг сложных сайтов, обход блокировок и извлечение чистого текста.'),
     _CatalogItem('Exa', 'https://mcp.exa.ai/mcp',
-        'Семантический поиск информации'),
+        'Семантический поиск, который понимает смысл запроса, а не только ключевые слова.'),
     _CatalogItem('Tavily', 'https://mcp.tavily.com/mcp',
-        'Быстрый поиск актуальных новостей'),
+        'Быстрый поиск актуальных новостей и данных из интернета в реальном времени.'),
   ];
 
   List<McpServer> _servers = [];
@@ -300,24 +300,12 @@ class _McpScreenState extends State<McpScreen> {
                 const SizedBox(height: 3),
                 Text(
                   c.description,
-                  maxLines: 2,
+                  maxLines: 3,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     color: p.muted,
                     fontSize: 11.5,
                     height: 1.35,
-                  ),
-                ),
-                const SizedBox(height: 5),
-                Text(
-                  c.url,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontFamily: 'JetBrains Mono',
-                    fontFamilyFallback: const ['monospace'],
-                    fontSize: 11,
-                    color: p.muted,
                   ),
                 ),
               ],
