@@ -506,15 +506,24 @@ class _ChatScreenState extends State<ChatScreen> {
   /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой отправки.
   Widget _inputBar(Palette p) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
+      padding: const EdgeInsets.fromLTRB(2, 4, 2, 4),
       child: AnimatedSize(
         duration: const Duration(milliseconds: 150),
         alignment: Alignment.bottomCenter,
+        // Тень должна выходить за границы капсулы, поэтому без обрезки.
+        clipBehavior: Clip.none,
         child: Container(
           decoration: BoxDecoration(
-            color: p.surface,
+            color: p.card,
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: p.border),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.05),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           padding: const EdgeInsets.fromLTRB(2, 2, 4, 2),
           child: Column(
@@ -534,14 +543,19 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  contentPadding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
                 ),
                 minLines: 1,
                 maxLines: 6,
               ),
               // Нижний ярус: капсулы слева, скрепка и отправка справа.
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+                padding: const EdgeInsets.only(
+                  top: 4,
+                  bottom: 4,
+                  left: 8,
+                  right: 8,
+                ),
                 child: Row(
                   children: [
                     _reasoningCapsule(),
@@ -556,8 +570,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         minHeight: 44,
                       ),
                       visualDensity: VisualDensity.compact,
-                      iconSize: 22,
-                      icon: Icon(Icons.attach_file, size: 22, color: p.muted),
+                      iconSize: 28,
+                      icon: Icon(Icons.attach_file, size: 28, color: p.muted),
                       onPressed: _streaming ? null : _attach,
                     ),
                     const SizedBox(width: 2),
@@ -572,7 +586,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         _streaming
                             ? Icons.stop_rounded
                             : Icons.arrow_upward_rounded,
-                        size: 22,
+                        size: 28,
                       ),
                     ),
                   ],
@@ -629,42 +643,37 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Поиск»: серая, переключает встроенный поиск Вкл/Выкл.
+  /// Капсула «Поиск»: в выключенном состоянии серая с подписью «Поиск Выкл»,
+  /// во включённом — зеленеет и меняет подпись на «Поиск Вкл».
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
+    final Color color = on ? Colors.green : p.muted;
     return InkWell(
       borderRadius: BorderRadius.circular(20),
-      onTap: _streaming ? null : () => settings.setWebSearch(!on),
+      onTap: _streaming
+          ? null
+          : () {
+              HapticFeedback.lightImpact();
+              setState(() => settings.setWebSearch(!on));
+            },
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: p.muted.withValues(alpha: 0.12),
+          color: color.withValues(alpha: 0.12),
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: p.border),
+          border: Border.all(
+            color: on ? Colors.green.withValues(alpha: 0.4) : p.border,
+          ),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Поиск',
-              style: TextStyle(
-                fontSize: 12.5,
-                height: 1.2,
-                fontWeight: FontWeight.w600,
-                color: p.muted,
-              ),
-            ),
-            const SizedBox(width: 5),
-            Text(
-              on ? 'Вкл' : 'Выкл',
-              style: TextStyle(
-                fontSize: 12.5,
-                height: 1.2,
-                fontWeight: FontWeight.w600,
-                color: p.muted,
-              ),
-            ),
-          ],
+        child: Text(
+          on ? 'Поиск Вкл' : 'Поиск Выкл',
+          maxLines: 1,
+          style: TextStyle(
+            fontSize: 12.5,
+            height: 1.2,
+            fontWeight: FontWeight.w600,
+            color: color,
+          ),
         ),
       ),
     );
