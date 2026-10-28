@@ -53,22 +53,28 @@ class _ChatScreenState extends State<ChatScreen> {
   ];
 
   /// Единый радиус скругления панели ввода и капсул: без прямых углов.
-  static const double _radius = 22;
+  static const double _radius = 24;
 
   /// Насыщенный глянцевый терракотово-медный цвет капсулы «Мышление».
   static const Color _reasoningFill = Color(0xFFC87D55);
 
-  /// Светлый тёплый текст на насыщенной медной заливке.
-  static const Color _reasoningText = Color(0xFFFFF4E6);
+  /// Контрастные цвета подписи уровня мышления: чем выше уровень,
+  /// тем светлее текст на медной заливке.
+  static const List<Color> _reasoningTextColors = <Color>[
+    Color(0xFFF3E2D2), // Low
+    Color(0xFFFFF4E6), // Medium
+    Color(0xFFFFFFFF), // High
+  ];
 
-  /// Металлическое серебро для иконки мозга.
-  static const Color _brainSilver = Color(0xFFE2E8F0);
+  /// Металлический градиент иконки мозга: чистый белый -> серебро.
+  static const Color _brainWhite = Color(0xFFFFFFFF);
+  static const Color _brainSilver = Color(0xFFCBD5E1);
 
-  /// Насыщенный матовый оливковый цвет капсулы «Поиск».
+  /// Глубокий матовый оливковый цвет капсулы «Поиск» (без ядовитой зелени).
   static const Color _searchFill = Color(0xFF4C6B4E);
 
-  /// Приглушённый оливковый для выключенного поиска.
-  static const Color _searchFillOff = Color(0xFF3A463C);
+  /// Тёмно-оливковый для выключенного поиска.
+  static const Color _searchFillOff = Color(0xFF3F523E);
 
   /// Светлый текст на оливковой заливке.
   static const Color _searchText = Color(0xFFF1F6EE);
@@ -256,13 +262,13 @@ class _ChatScreenState extends State<ChatScreen> {
     };
     final msgs = <Map<String, dynamic>>[
       if (cfg.systemPrompt.trim().isNotEmpty)
-        <String, dynamic>{
+        <Map<String, dynamic>>{
           'role': 'system',
           'content': '${cfg.systemPrompt.trim()}\n\n$kFileBlockInstruction',
         },
       for (final m in chat.messages)
         if (!identical(m, reply) && !m.isToolCall && m.content.isNotEmpty)
-          <String, dynamic>{'role': m.role, 'content': m.content},
+          <Map<String, dynamic>>{'role': m.role, 'content': m.content},
     ];
     // Для последнего пользовательского сообщения подставляем расширенный
     // content (base64-картинки и содержимое текстовых файлов).
@@ -520,8 +526,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Нижняя панель ввода: единая капсула с плавной анимацией высоты.
   /// Контейнер, его фон и капсулы используют один и тот же радиус
   /// [_radius] — прямоугольных нахлёстов и торчащих уголков нет.
-  /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
-  /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
+  /// Сверху — текстовое поле на всю ширину капсулы (с безопасными
+  /// отступами от нижних кнопок), снизу — ряд с капсулами «Мышление»
+  /// и «Поиск», скрепкой и круглой кнопкой.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
@@ -545,7 +552,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           // Дети обрезаются по скруглению капсулы: ничего не торчит.
           clipBehavior: Clip.antiAlias,
-          padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -565,11 +572,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  contentPadding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                  // Текст не прижимается ни к краям капсулы, ни к нижним
+                  // кнопкам: сверху, снизу и по бокам есть запас.
+                  contentPadding:
+                      const EdgeInsets.fromLTRB(14, 12, 14, 12),
                 ),
                 minLines: 1,
                 maxLines: 6,
               ),
+              // «Воздух» между строкой текста и рядом нижних кнопок.
+              const SizedBox(height: 6),
               // Нижний ярус: капсулы слева, скрепка и отправка справа.
               Row(
                 children: [
@@ -633,17 +645,19 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
   /// Заливка — насыщенный глянцевый терракотово-медный цвет, текст —
-  /// светлый тёплый, иконка мозга — металлическое серебро.
+  /// светлый тёплый с контрастом по уровню, иконка мозга — металлический
+  /// градиент от чистого белого к серебру (объёмный блик).
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
+    final textColor = _reasoningTextColors[_reasoningLevel];
     return Tooltip(
       message: 'Уровень размышлений: $label',
       child: InkWell(
         borderRadius: BorderRadius.circular(_radius),
         onTap: _streaming ? null : _cycleReasoning,
         child: Container(
-          constraints: const BoxConstraints(minWidth: 104),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+          constraints: const BoxConstraints(minWidth: 112),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
           decoration: BoxDecoration(
             color: _reasoningFill,
             borderRadius: BorderRadius.circular(_radius),
@@ -659,16 +673,28 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(Icons.psychology, size: 17, color: _brainSilver),
+              ShaderMask(
+                blendMode: BlendMode.srcIn,
+                shaderCallback: (bounds) => const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: <Color>[_brainWhite, _brainSilver],
+                ).createShader(bounds),
+                child: const Icon(
+                  Icons.psychology,
+                  size: 18,
+                  color: Colors.white,
+                ),
+              ),
               const SizedBox(width: 8),
               Text(
                 label,
                 maxLines: 1,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 13,
                   height: 1.2,
                   fontWeight: FontWeight.w700,
-                  color: _reasoningText,
+                  color: textColor,
                 ),
               ),
             ],
@@ -678,8 +704,9 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Поиск»: насыщенный матовый оливковый цвет во включённом
-  /// состоянии, светлый текст и светлая иконка поиска.
+  /// Капсула «Поиск»: глубокий матовый оливковый цвет во включённом
+  /// состоянии, светлый текст и светлая иконка поиска. Горизонтальные
+  /// отступы меньше, чем у капсулы «Мышление», — капсула компактнее.
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
     final Color fill = on ? _searchFill : _searchFillOff;
@@ -692,8 +719,7 @@ class _ChatScreenState extends State<ChatScreen> {
               setState(() => settings.setWebSearch(!on));
             },
       child: Container(
-        constraints: const BoxConstraints(minWidth: 112),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: fill,
           borderRadius: BorderRadius.circular(_radius),
@@ -702,8 +728,8 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.search_rounded, size: 16, color: _searchText),
-            const SizedBox(width: 8),
+            const Icon(Icons.search_rounded, size: 15, color: _searchText),
+            const SizedBox(width: 6),
             Text(
               on ? 'Поиск Вкл' : 'Поиск Выкл',
               maxLines: 1,
