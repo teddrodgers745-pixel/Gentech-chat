@@ -1,4 +1,5 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
+// Updated with Icons.psychology and cohesive colors
 
 import 'dart:async';
 
