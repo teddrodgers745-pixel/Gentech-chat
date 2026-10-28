@@ -558,7 +558,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 child: Row(
                   children: [
-                    _reasoningCapsule(),
+                    _reasoningCapsule(p),
                     const SizedBox(width: 8),
                     _searchCapsule(p),
                     const Spacer(),
@@ -599,19 +599,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Мышление»: циклически Низкий (янтарь) -> Средний (синий)
-  /// -> Высокий (красный), при переключении лёгкая вибрация.
-  /// Активное состояние — плотная сочная заливка: ярко и контрастно.
-  Widget _reasoningCapsule() {
-    final Color fill = switch (_reasoningLevel) {
-      1 => const Color(0xFF1565C0), // насыщенный синий
-      2 => const Color(0xFFC62828), // насыщенный красный
-      _ => const Color(0xFFF5A623), // сочный янтарный/золотой
-    };
-    // На янтарной заливке тёмный текст читается заметно лучше белого.
-    final Color fg = _reasoningLevel == 0
-        ? const Color(0xFF3A2600)
-        : Colors.white;
+  /// Капсула «Мышление»: циклический выбор уровня с фирменным акцентом.
+  Widget _reasoningCapsule(Palette p) {
+    final fill = p.accent;
+    final fg = p.id == 'sepia' ? Colors.white : const Color(0xFF2B211A);
     final String label = switch (_reasoningLevel) {
       1 => 'Средний',
       2 => 'Высокий',
@@ -648,15 +639,13 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Поиск»: в выключенном состоянии серая с подписью «Поиск Выкл»,
-  /// во включённом — плотная насыщенно-зелёная заливка с белым текстом
-  /// «Поиск Вкл» (яркая контрастная подсветка активного режима).
+  /// Капсула «Поиск»: приглушённый оливковый цвет во включённом состоянии.
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
-    const Color green = Color(0xFF2E7D32); // насыщенный зелёный
-    final Color fill = on ? green : p.muted.withValues(alpha: 0.12);
+    const Color olive = Color(0xFF68734F);
+    final Color fill = on ? olive : p.muted.withValues(alpha: 0.12);
     final Color fg = on ? Colors.white : p.muted;
-    final Color borderColor = on ? green : p.border;
+    final Color borderColor = on ? olive : p.border;
     return InkWell(
       borderRadius: BorderRadius.circular(20),
       onTap: _streaming
