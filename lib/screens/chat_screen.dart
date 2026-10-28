@@ -532,7 +532,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Widget _inputBar(Palette p) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+      padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
       child: Container(
         decoration: BoxDecoration(
           color: p.surface,
@@ -541,6 +541,7 @@ class _ChatScreenState extends State<ChatScreen> {
         ),
         padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
         child: Row(
+          mainAxisAlignment: MainAxisAlignment.start,
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
             // Слева — скрепка, микрофон и мозг; поле занимает всё остальное.
