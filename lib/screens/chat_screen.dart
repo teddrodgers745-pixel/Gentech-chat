@@ -29,7 +29,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scroll = ScrollController();
   final ChatService _chatService = ChatService();
 
-  // Щипок двумя пальцами: меняем размер шрифта, а не масштаб картинки.
+  // Щипок двумя пальцами меняет размер шрифта, а не масштаб картинки.
   final Map<int, Offset> _pts = {};
   double _startDist = 0;
   double _startSize = 17;
@@ -42,7 +42,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Уровень размышлений: 0 = Low, 1 = Medium, 2 = High.
   int _reasoningLevel = 0;
 
-  // Вложения, ожидающие отправки (файлы и картинки).
+  /// Вложения, ожидающие отправки (файлы и картинки).
   final List<PlatformFile> _pending = [];
 
   /// Подписи уровней мышления (строго на английском).
@@ -52,22 +52,26 @@ class _ChatScreenState extends State<ChatScreen> {
     'High',
   ];
 
-  /// Плотность акцента капсулы «Мышление» для каждого уровня:
-  /// чем выше уровень, тем плотнее заливка.
-  static const List<double> _reasoningStrength = <double>[0.30, 0.62, 1.0];
+  /// Единый радиус скругления панели ввода и капсул: без прямых углов.
+  static const double _radius = 22;
 
-  /// Металлическое серебро для иконки мозга: светлое на тёмной капсуле,
-  /// стальное — на светлой.
-  static const List<Color> _metalOnDark = <Color>[
-    Color(0xFFF8FAFC),
-    Color(0xFFE2E8F0),
-    Color(0xFF94A3B8),
-  ];
-  static const List<Color> _metalOnLight = <Color>[
-    Color(0xFFE2E8F0),
-    Color(0xFF94A3B8),
-    Color(0xFF475569),
-  ];
+  /// Насыщенный глянцевый терракотово-медный цвет капсулы «Мышление».
+  static const Color _reasoningFill = Color(0xFFC87D55);
+
+  /// Светлый тёплый текст на насыщенной медной заливке.
+  static const Color _reasoningText = Color(0xFFFFF4E6);
+
+  /// Металлическое серебро для иконки мозга.
+  static const Color _brainSilver = Color(0xFFE2E8F0);
+
+  /// Насыщенный матовый оливковый цвет капсулы «Поиск».
+  static const Color _searchFill = Color(0xFF4C6B4E);
+
+  /// Приглушённый оливковый для выключенного поиска.
+  static const Color _searchFillOff = Color(0xFF3A463C);
+
+  /// Светлый текст на оливковой заливке.
+  static const Color _searchText = Color(0xFFF1F6EE);
 
   @override
   void dispose() {
@@ -148,9 +152,8 @@ class _ChatScreenState extends State<ChatScreen> {
       final res = await FilePicker.platform.pickFiles(allowMultiple: true);
       if (!mounted) return;
       if (res == null) return; // пользователь отменил выбор
-      final fresh = res.files
-          .where((f) => f.path != null && f.path!.isNotEmpty)
-          .toList();
+      final fresh =
+          res.files.where((f) => f.path != null && f.path!.isNotEmpty).toList();
       if (fresh.isEmpty) {
         _snack('Файлы недоступны для чтения');
         return;
@@ -182,8 +185,8 @@ class _ChatScreenState extends State<ChatScreen> {
         if (f.path != null && f.path!.isNotEmpty)
           PickedFileRef(f.name, f.path!),
     ];
-    // Готовим content для API (base64-картинки, текст файлов) заранее:
-    // любые ошибки чтения уже обработаны внутри, отправка не падает.
+    // content для API (base64-картинки, текст файлов) готовим заранее:
+    // ошибки чтения уже обработаны внутри, отправка не падает.
     dynamic apiContent;
     try {
       apiContent = await ChatService.buildUserContent(txt, picked);
@@ -236,10 +239,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  Future<void> _runCompletion(
-    Chat chat, {
-    dynamic userApiContent,
-  }) async {
+  Future<void> _runCompletion(Chat chat, {dynamic userApiContent}) async {
     final reply = ChatMessage(id: newId(), role: 'assistant');
     chat.messages.add(reply);
     setState(() => _streaming = true);
@@ -247,7 +247,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    // Уровень размышлений: Low — поле не отправляется (прежнее поведение),
+    // Low — поле не отправляется (прежнее поведение),
     // Medium и High — соответствующие значения reasoning_effort.
     final String? reasoningEffort = switch (_reasoningLevel) {
       1 => 'medium',
@@ -290,8 +290,8 @@ class _ChatScreenState extends State<ChatScreen> {
         tools: tools,
       )) {
         if (ch.toolName != null) {
-          // Специальное сообщение-вызов инструмента: создаётся при старте
-          // вызова и обновляется по завершении (готово/ошибка).
+          // Сообщение-вызов инструмента: создаётся на старте вызова
+          // и обновляется по завершении (готово/ошибка).
           if (ch.toolStatus == toolStatusRunning) {
             toolMsg = ChatMessage(
               id: newId(),
@@ -486,7 +486,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Чипы выбранных файлов над полем ввода: имя и кнопка удаления.
   /// Скрепка живёт в самой панели ввода, поэтому при пустом списке
-  /// строка не занимает места. Отступы совпадают с панелью ввода.
+  /// строка не занимает места.
   Widget _attachmentActions(Palette p) {
     if (_pending.isEmpty) return const SizedBox.shrink();
     return Padding(
@@ -518,8 +518,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Нижняя панель ввода: единая капсула с плавной анимацией высоты.
-  /// Внешний контейнер, его фон и поле ввода используют один и тот же
-  /// радиус 24 — прямоугольных нахлёстов и торчащих уголков нет.
+  /// Контейнер, его фон и капсулы используют один и тот же радиус
+  /// [_radius] — прямоугольных нахлёстов и торчащих уголков нет.
   /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
   /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
   Widget _inputBar(Palette p) {
@@ -533,7 +533,7 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Container(
           decoration: BoxDecoration(
             color: p.card,
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(_radius),
             border: Border.all(color: p.border),
             boxShadow: [
               BoxShadow(
@@ -579,7 +579,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _reasoningCapsule(p),
+                          _reasoningCapsule(),
                           const SizedBox(width: 8),
                           _searchCapsule(p),
                         ],
@@ -631,74 +631,44 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Реальный цвет капсулы «Мышление»: акцент темы смешивается с фоном
-  /// карточки, поэтому контраст всегда считается по итоговому цвету.
-  Color _reasoningFill(Palette p) {
-    final a = _reasoningStrength[_reasoningLevel];
-    return Color.alphaBlend(p.accent.withValues(alpha: a), p.card);
-  }
-
-  /// Цвет, который лучше всего читается на заливке [fill]:
-  /// сравниваем контраст светлого и тёмного вариантов.
-  Color _readableOn(Color fill) {
-    const light = Color(0xFFF7F2EC);
-    const dark = Color(0xFF241C16);
-    final bg = fill.computeLuminance();
-    final lightRatio = (light.computeLuminance() + 0.05) / (bg + 0.05);
-    final darkRatio = (bg + 0.05) / (dark.computeLuminance() + 0.05);
-    return lightRatio >= darkRatio ? light : dark;
-  }
-
-  /// Металлическая серебристая иконка мозга (строго Icons.psychology).
-  /// Оттенок серебра подстраивается под заливку капсулы, чтобы иконка
-  /// всегда читалась и выглядела объёмной.
-  Widget _metalBrain(Color fill) {
-    final fg = _readableOn(fill);
-    final onDark = fg.computeLuminance() > 0.5;
-    final colors = onDark ? _metalOnDark : _metalOnLight;
-    return ShaderMask(
-      blendMode: BlendMode.srcIn,
-      shaderCallback: (bounds) => LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: colors,
-      ).createShader(bounds),
-      child: const Icon(Icons.psychology, size: 16, color: Color(0xFFE2E8F0)),
-    );
-  }
-
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
-  /// Цвет текста и иконки вычисляется под активный цвет капсулы,
-  /// поэтому надпись всегда читается.
-  Widget _reasoningCapsule(Palette p) {
-    final fill = _reasoningFill(p);
-    final fg = _readableOn(fill);
+  /// Заливка — насыщенный глянцевый терракотово-медный цвет, текст —
+  /// светлый тёплый, иконка мозга — металлическое серебро.
+  Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     return Tooltip(
       message: 'Уровень размышлений: $label',
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(_radius),
         onTap: _streaming ? null : _cycleReasoning,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          constraints: const BoxConstraints(minWidth: 104),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
           decoration: BoxDecoration(
-            color: fill,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: fill),
+            color: _reasoningFill,
+            borderRadius: BorderRadius.circular(_radius),
+            border: Border.all(color: _reasoningFill),
+            boxShadow: [
+              BoxShadow(
+                color: _reasoningFill.withValues(alpha: 0.35),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
+              ),
+            ],
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              _metalBrain(fill),
-              const SizedBox(width: 6),
+              const Icon(Icons.psychology, size: 17, color: _brainSilver),
+              const SizedBox(width: 8),
               Text(
                 label,
                 maxLines: 1,
-                style: TextStyle(
-                  fontSize: 12.5,
+                style: const TextStyle(
+                  fontSize: 13,
                   height: 1.2,
                   fontWeight: FontWeight.w700,
-                  color: fg,
+                  color: _reasoningText,
                 ),
               ),
             ],
@@ -708,17 +678,13 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Поиск»: приглушённый мягкий оливково-зелёный цвет
-  /// во включённом состоянии.
+  /// Капсула «Поиск»: насыщенный матовый оливковый цвет во включённом
+  /// состоянии, светлый текст и светлая иконка поиска.
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
-    const Color olive = Color(0xFF4C6B4E);
-    final Color fill = on ? olive : p.muted.withValues(alpha: 0.12);
-    final Color effective = Color.alphaBlend(fill, p.card);
-    final Color fg = _readableOn(effective);
-    final Color borderColor = on ? olive : p.border;
+    final Color fill = on ? _searchFill : _searchFillOff;
     return InkWell(
-      borderRadius: BorderRadius.circular(20),
+      borderRadius: BorderRadius.circular(_radius),
       onTap: _streaming
           ? null
           : () {
@@ -726,21 +692,29 @@ class _ChatScreenState extends State<ChatScreen> {
               setState(() => settings.setWebSearch(!on));
             },
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        constraints: const BoxConstraints(minWidth: 112),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 7),
         decoration: BoxDecoration(
           color: fill,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: borderColor),
+          borderRadius: BorderRadius.circular(_radius),
+          border: Border.all(color: on ? _searchFill : p.border),
         ),
-        child: Text(
-          on ? 'Поиск Вкл' : 'Поиск Выкл',
-          maxLines: 1,
-          style: TextStyle(
-            fontSize: 12.5,
-            height: 1.2,
-            fontWeight: on ? FontWeight.w700 : FontWeight.w600,
-            color: fg,
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.search_rounded, size: 16, color: _searchText),
+            const SizedBox(width: 8),
+            Text(
+              on ? 'Поиск Вкл' : 'Поиск Выкл',
+              maxLines: 1,
+              style: const TextStyle(
+                fontSize: 13,
+                height: 1.2,
+                fontWeight: FontWeight.w700,
+                color: _searchText,
+              ),
+            ),
+          ],
         ),
       ),
     );
