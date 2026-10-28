@@ -66,9 +66,9 @@ class _ChatScreenState extends State<ChatScreen> {
     Color(0xFFFFFFFF), // High
   ];
 
-  /// Металлический градиент иконки мозга: чистый белый -> серебро.
-  static const Color _brainWhite = Color(0xFFFFFFFF);
-  static const Color _brainSilver = Color(0xFFCBD5E1);
+  /// Аккуратный светлый цвет иконки мозга (Icons.psychology):
+  /// чётко читается на медной заливке капсулы, без градиентов.
+  static const Color _brainIcon = Color(0xFFE2E8F0);
 
   /// Глубокий матовый оливковый цвет капсулы «Поиск» (без ядовитой зелени).
   static const Color _searchFill = Color(0xFF4C6B4E);
@@ -572,16 +572,17 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  // Текст не прижимается ни к краям капсулы, ни к нижним
-                  // кнопкам: сверху, снизу и по бокам есть запас.
+                  // Текст поднят и расширен: сверху, снизу и по бокам
+                  // солидный запас, ввод не прижимается ни к краям
+                  // капсулы, ни к нижним кнопкам.
                   contentPadding:
-                      const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                      const EdgeInsets.fromLTRB(16, 14, 16, 14),
                 ),
                 minLines: 1,
                 maxLines: 6,
               ),
               // «Воздух» между строкой текста и рядом нижних кнопок.
-              const SizedBox(height: 6),
+              const SizedBox(height: 8),
               // Нижний ярус: капсулы слева, скрепка и отправка справа.
               Row(
                 children: [
@@ -644,9 +645,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
-  /// Заливка — насыщенный глянцевый терракотово-медный цвет, текст —
-  /// светлый тёплый с контрастом по уровню, иконка мозга — металлический
-  /// градиент от чистого белого к серебру (объёмный блик).
+  /// Заливка — насыщенный терракотово-медный цвет с комфортным «воздухом»,
+  /// текст — светлый тёплый с контрастом по уровню, слева от подписи —
+  /// иконка мозга Icons.psychology аккуратного светлого цвета 0xFFE2E8F0.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final textColor = _reasoningTextColors[_reasoningLevel];
@@ -657,7 +658,7 @@ class _ChatScreenState extends State<ChatScreen> {
         onTap: _streaming ? null : _cycleReasoning,
         child: Container(
           constraints: const BoxConstraints(minWidth: 112),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
           decoration: BoxDecoration(
             color: _reasoningFill,
             borderRadius: BorderRadius.circular(_radius),
@@ -673,18 +674,10 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              ShaderMask(
-                blendMode: BlendMode.srcIn,
-                shaderCallback: (bounds) => const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: <Color>[_brainWhite, _brainSilver],
-                ).createShader(bounds),
-                child: const Icon(
-                  Icons.psychology,
-                  size: 18,
-                  color: Colors.white,
-                ),
+              const Icon(
+                Icons.psychology,
+                size: 18,
+                color: _brainIcon,
               ),
               const SizedBox(width: 8),
               Text(
