@@ -526,9 +526,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Нижняя панель ввода: единая капсула с плавной анимацией высоты.
   /// Контейнер, его фон и капсулы используют один и тот же радиус
   /// [_radius] — прямоугольных нахлёстов и торчащих уголков нет.
-  /// Сверху — текстовое поле на всю ширину капсулы (с безопасными
-  /// отступами от нижних кнопок), снизу — ряд с капсулами «Мышление»
-  /// и «Поиск», скрепкой и круглой кнопкой.
+  /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
+  /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
+  /// Точная подгонка: поле ввода чуть компактнее по вертикали (~3%),
+  /// капсулы опущены на ~2% вниз внутри панели для баланса, общее
+  /// положение панели на экране не меняется.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
@@ -552,7 +554,10 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           // Дети обрезаются по скруглению капсулы: ничего не торчит.
           clipBehavior: Clip.antiAlias,
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
+          // Нижний внутренний отступ на 2 px меньше «воздуха» над
+          // капсулами: капсулы опущены на ~2% вниз, а высота панели
+          // от этого перераспределения не изменилась.
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -572,17 +577,20 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  // Текст поднят и расширен: сверху, снизу и по бокам
-                  // солидный запас, ввод не прижимается ни к краям
-                  // капсулы, ни к нижним кнопкам.
+                  // Текст с солидным запасом со всех сторон: ввод
+                  // не прижимается ни к краям капсулы, ни к нижним
+                  // кнопкам. Вертикальные отступы уменьшены на ~3% —
+                  // поле стало чуть компактнее по высоте.
                   contentPadding:
-                      const EdgeInsets.fromLTRB(16, 14, 16, 14),
+                      const EdgeInsets.fromLTRB(16, 13.5, 16, 13.5),
                 ),
                 minLines: 1,
                 maxLines: 6,
               ),
-              // «Воздух» между строкой текста и рядом нижних кнопок.
-              const SizedBox(height: 8),
+              // «Воздух» между полем и рядом нижних кнопок: на 2 px
+              // больше прежнего, поэтому капсулы сидят ниже и смотрятся
+              // сбалансированно.
+              const SizedBox(height: 10),
               // Нижний ярус: капсулы слева, скрепка и отправка справа.
               Row(
                 children: [
@@ -647,7 +655,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
   /// Заливка — насыщенный терракотово-медный цвет с комфортным «воздухом»,
   /// текст — светлый тёплый с контрастом по уровню, слева от подписи —
-  /// иконка мозга Icons.psychology аккуратного светлого цвета 0xFFE2E8F0.
+  /// иконка мозга Icons.psychology чистого серебристо-белого цвета
+  /// 0xFFE2E8F0 с отступом 6 px, чтобы подпись не прилипала к иконке.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final textColor = _reasoningTextColors[_reasoningLevel];
@@ -679,7 +688,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 size: 18,
                 color: _brainIcon,
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               Text(
                 label,
                 maxLines: 1,
