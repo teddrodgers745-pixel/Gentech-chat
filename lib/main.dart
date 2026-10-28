@@ -143,9 +143,10 @@ class GenTechChatApp extends StatelessWidget {
   }
 }
 
-/// Экран-заставка: серый фон, в центре белый скруглённый квадрат
-/// с логотипом (три медные искры) и подписью «GenTech Chat».
-/// Через 1.5 секунды плавно переходит на ChatScreen.
+/// Экран-заставка: тёмный тёплый фон (#1B1A19, как у приложения),
+/// в центре — белый скруглённый квадрат (радиус 28) с одной медной
+/// искрой-логотипом. Без подписи: чистый минималистичный квадрат.
+/// Через 500 мс плавный переход на ChatScreen.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -157,7 +158,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(milliseconds: 1500), () {
+    Timer(const Duration(milliseconds: 500), () {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
@@ -174,77 +175,23 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFE0E0E0),
+      backgroundColor: const Color(0xFF1B1A19),
       body: Center(
         child: Container(
-          padding: const EdgeInsets.fromLTRB(32, 28, 32, 24),
+          width: 104,
+          height: 104,
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(24),
+            borderRadius: BorderRadius.circular(28),
           ),
-          child: const Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _SparklesLogo(size: 76),
-              SizedBox(height: 14),
-              Text(
-                'GenTech Chat',
-                style: TextStyle(
-                  fontFamily: 'sans-serif',
-                  fontFamilyFallback: ['Roboto', 'Arial'],
-                  fontSize: 19,
-                  fontWeight: FontWeight.w600,
-                  color: Color(0xFF2B2824),
-                  letterSpacing: 0.2,
-                ),
-              ),
-            ],
+          child: const Center(
+            child: Icon(
+              Icons.auto_awesome,
+              size: 48,
+              color: Color(0xFFD99A6C),
+            ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// Логотип приложения: три четырёхконечные звезды-искры акцентного
-/// (медного) цвета — крупная справа и две поменьше слева.
-class _SparklesLogo extends StatelessWidget {
-  final double size;
-
-  const _SparklesLogo({required this.size});
-
-  @override
-  Widget build(BuildContext context) {
-    const Color accent = Color(0xFFD99A6C);
-    return SizedBox(
-      width: size,
-      height: size,
-      child: Stack(
-        children: [
-          Positioned(
-            left: 0,
-            top: size * 0.06,
-            child: Icon(
-              Icons.auto_awesome,
-              size: size * 0.30,
-              color: accent.withValues(alpha: 0.75),
-            ),
-          ),
-          Positioned(
-            left: size * 0.06,
-            bottom: 0,
-            child: Icon(
-              Icons.auto_awesome,
-              size: size * 0.34,
-              color: accent.withValues(alpha: 0.9),
-            ),
-          ),
-          Positioned(
-            right: 0,
-            top: size * 0.18,
-            child: Icon(Icons.auto_awesome, size: size * 0.58, color: accent),
-          ),
-        ],
       ),
     );
   }
