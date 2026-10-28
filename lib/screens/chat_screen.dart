@@ -262,13 +262,13 @@ class _ChatScreenState extends State<ChatScreen> {
     };
     final msgs = <Map<String, dynamic>>[
       if (cfg.systemPrompt.trim().isNotEmpty)
-        <Map<String, dynamic>>{
+        <String, dynamic>{
           'role': 'system',
           'content': '${cfg.systemPrompt.trim()}\n\n$kFileBlockInstruction',
         },
       for (final m in chat.messages)
         if (!identical(m, reply) && !m.isToolCall && m.content.isNotEmpty)
-          <Map<String, dynamic>>{'role': m.role, 'content': m.content},
+          <String, dynamic>{'role': m.role, 'content': m.content},
     ];
     // Для последнего пользовательского сообщения подставляем расширенный
     // content (base64-картинки и содержимое текстовых файлов).
@@ -297,7 +297,7 @@ class _ChatScreenState extends State<ChatScreen> {
       )) {
         if (ch.toolName != null) {
           // Сообщение-вызов инструмента: создаётся на старте вызова
-          // и обновляется по завершении (готово/ошибка).
+          // и обновляется по завершению (готово/ошибка).
           if (ch.toolStatus == toolStatusRunning) {
             toolMsg = ChatMessage(
               id: newId(),
