@@ -530,63 +530,27 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Поле ввода: капсула с плавной анимацией высоты (AnimatedSize).
+  /// Внутри — два яруса: сверху текст на всю ширину, снизу ряд иконок
+  /// (скрепка, мозг, микрофон) и круглая кнопка отправки справа.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
-      child: Container(
-        decoration: BoxDecoration(
-          color: p.surface,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: p.border),
-        ),
-        padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.start,
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            // Слева — скрепка, микрофон и мозг; поле занимает всё остальное.
-            // Компактные иконки прижаты к низу: капсула растёт вверх
-            // при многострочном вводе (crossAxisAlignment.end).
-            IconButton(
-              tooltip: 'Прикрепить файл',
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              visualDensity: VisualDensity.compact,
-              iconSize: 22,
-              icon: Icon(Icons.attach_file, size: 22, color: p.muted),
-              onPressed: _streaming ? null : _attach,
-            ),
-            ValueListenableBuilder<bool>(
-              valueListenable: speechService.listening,
-              builder: (context, listening, _) => MicButton(
-                listening: listening,
-                onTap: _streaming ? null : _toggleSpeech,
-                mutedColor: p.muted,
-              ),
-            ),
-            IconButton(
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-              visualDensity: VisualDensity.compact,
-              tooltip: _reasoningEnabled
-                  ? 'Выключить подробные размышления'
-                  : 'Включить подробные размышления',
-              isSelected: _reasoningEnabled,
-              icon: Icon(
-                Icons.psychology,
-                size: 22,
-                color: _reasoningEnabled
-                    ? const Color(0xFFE53935)
-                    : p.muted,
-              ),
-              onPressed: _streaming
-                  ? null
-                  : () => setState(() {
-                        _reasoningEnabled = !_reasoningEnabled;
-                      }),
-            ),
-            Expanded(
-              child: TextField(
+      child: AnimatedSize(
+        duration: const Duration(milliseconds: 150),
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          decoration: BoxDecoration(
+            color: p.surface,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: p.border),
+          ),
+          padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Верхний ярус: текст на всю ширину капсулы.
+              TextField(
                 controller: _input,
                 minLines: 1,
                 maxLines: 8,
@@ -600,21 +564,78 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                  contentPadding: const EdgeInsets.fromLTRB(18, 14, 18, 4),
                 ),
               ),
-            ),
-            IconButton.filled(
-              onPressed: _streaming ? _stop : _send,
-              style: IconButton.styleFrom(
-                backgroundColor: p.accent,
-                foregroundColor: Colors.white,
+              // Нижний ярус: иконки слева, отправка справа. Левый отступ
+              // меньше отступа текста: иконка центрируется внутри кнопки
+              // 44dp и визуально встаёт на одну вертикаль с текстом.
+              Padding(
+                padding: const EdgeInsets.only(left: 3, right: 2, bottom: 2),
+                child: Row(
+                  children: [
+                    IconButton(
+                      tooltip: 'Прикрепить файл',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 44,
+                        minHeight: 44,
+                      ),
+                      visualDensity: VisualDensity.compact,
+                      iconSize: 22,
+                      icon: Icon(Icons.attach_file, size: 22, color: p.muted),
+                      onPressed: _streaming ? null : _attach,
+                    ),
+                    IconButton(
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(
+                        minWidth: 44,
+                        minHeight: 44,
+                      ),
+                      visualDensity: VisualDensity.compact,
+                      tooltip: _reasoningEnabled
+                          ? 'Выключить подробные размышления'
+                          : 'Включить подробные размышления',
+                      isSelected: _reasoningEnabled,
+                      icon: Icon(
+                        Icons.psychology,
+                        size: 22,
+                        color: _reasoningEnabled
+                            ? const Color(0xFFE53935)
+                            : p.muted,
+                      ),
+                      onPressed: _streaming
+                          ? null
+                          : () => setState(() {
+                                _reasoningEnabled = !_reasoningEnabled;
+                              }),
+                    ),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: speechService.listening,
+                      builder: (context, listening, _) => MicButton(
+                        listening: listening,
+                        onTap: _streaming ? null : _toggleSpeech,
+                        mutedColor: p.muted,
+                      ),
+                    ),
+                    const Spacer(),
+                    IconButton.filled(
+                      onPressed: _streaming ? _stop : _send,
+                      style: IconButton.styleFrom(
+                        backgroundColor: p.accent,
+                        foregroundColor: Colors.white,
+                      ),
+                      icon: Icon(
+                        _streaming
+                            ? Icons.stop_rounded
+                            : Icons.arrow_upward_rounded,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              icon: Icon(
-                _streaming ? Icons.stop_rounded : Icons.arrow_upward_rounded,
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
