@@ -11,11 +11,9 @@ import '../core/storage.dart';
 import '../models.dart';
 import '../models/tool.dart';
 import '../services/chat_service.dart';
-import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
-import '../widgets/reasoning_button.dart';
 import 'history_drawer.dart';
 import 'settings_screen.dart';
 
@@ -41,21 +39,17 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _stick = true;
   Timer? _uiTimer;
 
-  /// Уровень размышлений: 0 = Low, 1 = Medium, 2 = High.
+  /// Уровень размышлений: 0 = Низкий, 1 = Средний, 2 = Высокий.
   int _reasoningLevel = 0;
 
   // Вложения, ожидающие отправки (файлы и картинки).
   final List<PlatformFile> _pending = [];
-
-  // Голосовой ввод: базовый текст поля на момент старта записи.
-  String _speechBase = '';
 
   @override
   void dispose() {
     _uiTimer?.cancel();
     _chatService.cancel();
     ttsService.stop();
-    speechService.stop();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
@@ -140,37 +134,6 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() => _pending.addAll(fresh));
     } catch (_) {
       if (mounted) _snack('Не удалось открыть выбор файлов');
-    }
-  }
-
-  // ---------- голосовой ввод ----------
-
-  /// Старт/стоп распознавания речи. Распознанный текст вставляется
-  /// в поле ввода по мере поступления; ошибки показываются снекбаром.
-  Future<void> _toggleSpeech() async {
-    if (speechService.listening.value) {
-      await speechService.stop();
-      return;
-    }
-    _speechBase = _input.text;
-    try {
-      await speechService.start(
-        localeId: 'ru_RU',
-        onText: (text) {
-          if (!mounted) return;
-          final base = _speechBase.trim();
-          final full = base.isEmpty ? text : '$base $text';
-          _input.text = full;
-          _input.selection = TextSelection.collapsed(offset: full.length);
-        },
-        onError: (msg) {
-          if (mounted) _snack(msg);
-        },
-      );
-    } on SpeechServiceException catch (e) {
-      if (mounted) _snack(e.message);
-    } catch (_) {
-      if (mounted) _snack('Не удалось запустить распознавание речи');
     }
   }
 
@@ -259,8 +222,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    // Уровень размышлений: Low — поле не отправляется (прежнее поведение),
-    // Medium и High — соответствующие значения reasoning_effort.
+    // Уровень размышлений: Низкий — поле не отправляется (прежнее поведение),
+    // Средний и Высокий — соответствующие значения reasoning_effort.
     final String? reasoningEffort = switch (_reasoningLevel) {
       1 => 'medium',
       2 => 'high',
@@ -498,8 +461,8 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Чипы выбранных файлов над полем ввода: имя и кнопка удаления.
-  /// Скрепка теперь живёт в самой панели ввода, поэтому при пустом
-  /// списке строка не занимает места.
+  /// Скрепка живёт в самой панели ввода, поэтому при пустом списке
+  /// строка не занимает места.
   Widget _attachmentActions(Palette p) {
     if (_pending.isEmpty) return const SizedBox.shrink();
     return Padding(
@@ -538,10 +501,9 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Поле ввода: компактная капсула с плавной анимацией высоты
-  /// (AnimatedSize, рост вверх). Внутри — два яруса: сверху текст
-  /// на всю ширину, снизу ряд иконок (скрепка, микрофон, уровень
-  /// размышлений, поиск) и круглая кнопка отправки справа.
+  /// Поле ввода: капсула с плавной анимацией высоты (AnimatedSize,
+  /// рост вверх). Сверху — текстовое поле на всю ширину, снизу — ряд
+  /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой отправки.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
@@ -577,12 +539,15 @@ class _ChatScreenState extends State<ChatScreen> {
                 minLines: 1,
                 maxLines: 6,
               ),
-              // Нижний ярус: иконки слева, отправка справа. Ряд всегда
-              // остаётся снизу, капсула растёт вверх при наборе текста.
+              // Нижний ярус: капсулы слева, скрепка и отправка справа.
               Padding(
-                padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
                 child: Row(
                   children: [
+                    _reasoningCapsule(),
+                    const SizedBox(width: 8),
+                    _searchCapsule(p),
+                    const Spacer(),
                     IconButton(
                       tooltip: 'Прикрепить файл',
                       padding: EdgeInsets.zero,
@@ -595,48 +560,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       icon: Icon(Icons.attach_file, size: 22, color: p.muted),
                       onPressed: _streaming ? null : _attach,
                     ),
-                    ValueListenableBuilder<bool>(
-                      valueListenable: speechService.listening,
-                      builder: (context, listening, _) => IconButton(
-                        tooltip: listening
-                            ? 'Остановить запись'
-                            : 'Голосовой ввод',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 44,
-                          minHeight: 44,
-                        ),
-                        visualDensity: VisualDensity.compact,
-                        iconSize: 22,
-                        icon: Icon(
-                          Icons.mic,
-                          size: 22,
-                          color: listening
-                              ? const Color(0xFFE53935)
-                              : p.muted,
-                        ),
-                        onPressed: _streaming ? null : _toggleSpeech,
-                      ),
-                    ),
-                    const Spacer(),
-                    ReasoningButton(
-                      level: _reasoningLevel,
-                      onTap: _streaming ? null : _cycleReasoning,
-                    ),
-                    IconButton(
-                      tooltip: 'Поиск',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 44,
-                        minHeight: 44,
-                      ),
-                      visualDensity: VisualDensity.compact,
-                      iconSize: 22,
-                      icon: Icon(Icons.search, size: 22, color: p.muted),
-                      onPressed: _streaming
-                          ? null
-                          : () => _snack('Поиск по чату появится позже'),
-                    ),
+                    const SizedBox(width: 2),
                     IconButton.filled(
                       visualDensity: VisualDensity.compact,
                       onPressed: _streaming ? _stop : _send,
@@ -656,6 +580,91 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  /// Капсула «Мышление»: циклически Низкий (amber) -> Средний (blue)
+  /// -> Высокий (red), при переключении лёгкая вибрация.
+  Widget _reasoningCapsule() {
+    final Color color = switch (_reasoningLevel) {
+      1 => Colors.blue,
+      2 => Colors.red,
+      _ => Colors.amber,
+    };
+    final String label = switch (_reasoningLevel) {
+      1 => 'Средний',
+      2 => 'Высокий',
+      _ => 'Низкий',
+    };
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: _streaming ? null : _cycleReasoning,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.psychology, size: 16, color: color),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Капсула «Поиск»: серая, переключает встроенный поиск Вкл/Выкл.
+  Widget _searchCapsule(Palette p) {
+    final on = settings.webSearchEnabled;
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: _streaming ? null : () => settings.setWebSearch(!on),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: p.muted.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: p.border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'Поиск',
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+                color: p.muted,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              on ? 'Вкл' : 'Выкл',
+              style: TextStyle(
+                fontSize: 12.5,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+                color: p.muted,
+              ),
+            ),
+          ],
         ),
       ),
     );
