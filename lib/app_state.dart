@@ -167,6 +167,10 @@ class AppSettings extends ChangeNotifier {
   /// Режим для профи (Advanced): полные настройки вместо быстрой настройки.
   bool advancedMode = true;
 
+  /// Главный тумблер экрана «Коннекторы»: использовать ли MCP-серверы.
+  /// По умолчанию включён — прежнее поведение не меняется.
+  bool mcpEnabled = true;
+
   /// Размер шрифта вынесен отдельно, чтобы щипок не перестраивал всё приложение.
   final ValueNotifier<double> fontSizeN = ValueNotifier<double>(17);
 
@@ -190,6 +194,7 @@ class AppSettings extends ChangeNotifier {
     autoTts = p.getBool('autoTts') ?? false;
     webSearchEnabled = p.getBool('webSearchEnabled') ?? true;
     advancedMode = p.getBool('advancedMode') ?? true;
+    mcpEnabled = p.getBool('mcpEnabled') ?? true;
   }
 
   Future<void> _persist() async {
@@ -207,6 +212,7 @@ class AppSettings extends ChangeNotifier {
     await p.setBool('autoTts', autoTts);
     await p.setBool('webSearchEnabled', webSearchEnabled);
     await p.setBool('advancedMode', advancedMode);
+    await p.setBool('mcpEnabled', mcpEnabled);
   }
 
   Future<void> saveNow() => _persist();
@@ -260,6 +266,12 @@ class AppSettings extends ChangeNotifier {
 
   void setAdvancedMode(bool v) {
     advancedMode = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setMcpEnabled(bool v) {
+    mcpEnabled = v;
     _persist();
     notifyListeners();
   }

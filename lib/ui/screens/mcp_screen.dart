@@ -227,6 +227,17 @@ class _McpScreenState extends State<McpScreen> {
                 // не перекрывала последнюю карточку списка.
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 28),
                 children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Использовать MCP-серверы'),
+                    subtitle: Text(
+                      'Инструменты подключённых серверов доступны модели',
+                      style: TextStyle(color: p.muted, fontSize: 12),
+                    ),
+                    value: settings.mcpEnabled,
+                    onChanged: (v) => settings.setMcpEnabled(v),
+                  ),
+                  const SizedBox(height: 4),
                   _catalogSection(p),
                   const SizedBox(height: 16),
                   if (_servers.isEmpty)

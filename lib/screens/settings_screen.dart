@@ -174,7 +174,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       child: Text(
         title,
         style: TextStyle(
-          fontSize: 13,
+          fontSize: 16,
           fontWeight: FontWeight.w700,
           letterSpacing: 0.6,
           color: p.accent,
