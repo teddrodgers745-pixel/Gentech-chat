@@ -4,6 +4,7 @@ import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../core/storage.dart';
@@ -14,7 +15,7 @@ import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
-import '../widgets/mic_button.dart';
+import '../widgets/reasoning_button.dart';
 import 'history_drawer.dart';
 import 'settings_screen.dart';
 
@@ -37,9 +38,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _pinching = false;
 
   bool _streaming = false;
-  bool _reasoningEnabled = false;
   bool _stick = true;
   Timer? _uiTimer;
+
+  /// Уровень размышлений: 0 = Low, 1 = Medium, 2 = High.
+  int _reasoningLevel = 0;
 
   // Вложения, ожидающие отправки (файлы и картинки).
   final List<PlatformFile> _pending = [];
@@ -171,6 +174,13 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  // ---------- уровень размышлений ----------
+
+  void _cycleReasoning() {
+    HapticFeedback.lightImpact();
+    setState(() => _reasoningLevel = (_reasoningLevel + 1) % 3);
+  }
+
   // ---------- отправка ----------
 
   Future<void> _send() async {
@@ -249,7 +259,13 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    final reasoningEffort = _reasoningEnabled ? 'high' : null;
+    // Уровень размышлений: Low — поле не отправляется (прежнее поведение),
+    // Medium и High — соответствующие значения reasoning_effort.
+    final String? reasoningEffort = switch (_reasoningLevel) {
+      1 => 'medium',
+      2 => 'high',
+      _ => null,
+    };
     final msgs = <Map<String, dynamic>>[
       if (cfg.systemPrompt.trim().isNotEmpty)
         <String, dynamic>{
@@ -481,22 +497,14 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Чипы выбранных файлов над полем ввода. Кнопка-скрепка переехала
-  /// в панель ввода, поэтому при пустом списке строка не занимает места.
+  /// Чипы выбранных файлов над полем ввода: имя и кнопка удаления.
+  /// Скрепка теперь живёт в самой панели ввода, поэтому при пустом
+  /// списке строка не занимает места.
   Widget _attachmentActions(Palette p) {
     if (_pending.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Row(
-        children: [
-          IconButton(
-            tooltip: 'Прикрепить файл',
-            icon: Icon(Icons.attach_file, size: 22, color: p.muted),
-            onPressed: _streaming ? null : _attach,
-          ),
-          Expanded(child: _attachmentsBar(p)),
-        ],
-      ),
+      child: _attachmentsBar(p),
     );
   }
 
@@ -530,9 +538,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Поле ввода: капсула с плавной анимацией высоты (AnimatedSize).
-  /// Внутри — два яруса: сверху текст на всю ширину, снизу ряд иконок
-  /// (скрепка, мозг, микрофон) и круглая кнопка отправки справа.
+  /// Поле ввода: компактная капсула с плавной анимацией высоты
+  /// (AnimatedSize, рост вверх). Внутри — два яруса: сверху текст
+  /// на всю ширину, снизу ряд иконок (скрепка, микрофон, уровень
+  /// размышлений, поиск) и круглая кнопка отправки справа.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 4, 4, 4),
@@ -545,33 +554,33 @@ class _ChatScreenState extends State<ChatScreen> {
             borderRadius: BorderRadius.circular(24),
             border: Border.all(color: p.border),
           ),
-          padding: const EdgeInsets.fromLTRB(4, 4, 6, 4),
+          padding: const EdgeInsets.fromLTRB(2, 2, 4, 2),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               // Верхний ярус: текст на всю ширину капсулы.
               TextField(
                 controller: _input,
-                minLines: 1,
-                maxLines: 8,
                 keyboardType: TextInputType.multiline,
                 textCapitalization: TextCapitalization.sentences,
                 cursorColor: p.accent,
                 style: fontStyle(settings.bodyFont, size: 16, color: p.text),
                 decoration: InputDecoration(
+                  isDense: true,
                   hintText: 'Сообщение',
                   hintStyle: TextStyle(color: p.muted),
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  contentPadding: const EdgeInsets.fromLTRB(18, 14, 18, 4),
+                  contentPadding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
                 ),
+                minLines: 1,
+                maxLines: 6,
               ),
-              // Нижний ярус: иконки слева, отправка справа. Левый отступ
-              // меньше отступа текста: иконка центрируется внутри кнопки
-              // 44dp и визуально встаёт на одну вертикаль с текстом.
+              // Нижний ярус: иконки слева, отправка справа. Ряд всегда
+              // остаётся снизу, капсула растёт вверх при наборе текста.
               Padding(
-                padding: const EdgeInsets.only(left: 3, right: 2, bottom: 2),
+                padding: const EdgeInsets.fromLTRB(8, 0, 8, 6),
                 child: Row(
                   children: [
                     IconButton(
@@ -586,40 +595,50 @@ class _ChatScreenState extends State<ChatScreen> {
                       icon: Icon(Icons.attach_file, size: 22, color: p.muted),
                       onPressed: _streaming ? null : _attach,
                     ),
+                    ValueListenableBuilder<bool>(
+                      valueListenable: speechService.listening,
+                      builder: (context, listening, _) => IconButton(
+                        tooltip: listening
+                            ? 'Остановить запись'
+                            : 'Голосовой ввод',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 44,
+                          minHeight: 44,
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        iconSize: 22,
+                        icon: Icon(
+                          Icons.mic,
+                          size: 22,
+                          color: listening
+                              ? const Color(0xFFE53935)
+                              : p.muted,
+                        ),
+                        onPressed: _streaming ? null : _toggleSpeech,
+                      ),
+                    ),
+                    const Spacer(),
+                    ReasoningButton(
+                      level: _reasoningLevel,
+                      onTap: _streaming ? null : _cycleReasoning,
+                    ),
                     IconButton(
+                      tooltip: 'Поиск',
                       padding: EdgeInsets.zero,
                       constraints: const BoxConstraints(
                         minWidth: 44,
                         minHeight: 44,
                       ),
                       visualDensity: VisualDensity.compact,
-                      tooltip: _reasoningEnabled
-                          ? 'Выключить подробные размышления'
-                          : 'Включить подробные размышления',
-                      isSelected: _reasoningEnabled,
-                      icon: Icon(
-                        Icons.psychology,
-                        size: 22,
-                        color: _reasoningEnabled
-                            ? const Color(0xFFE53935)
-                            : p.muted,
-                      ),
+                      iconSize: 22,
+                      icon: Icon(Icons.search, size: 22, color: p.muted),
                       onPressed: _streaming
                           ? null
-                          : () => setState(() {
-                                _reasoningEnabled = !_reasoningEnabled;
-                              }),
+                          : () => _snack('Поиск по чату появится позже'),
                     ),
-                    ValueListenableBuilder<bool>(
-                      valueListenable: speechService.listening,
-                      builder: (context, listening, _) => MicButton(
-                        listening: listening,
-                        onTap: _streaming ? null : _toggleSpeech,
-                        mutedColor: p.muted,
-                      ),
-                    ),
-                    const Spacer(),
                     IconButton.filled(
+                      visualDensity: VisualDensity.compact,
                       onPressed: _streaming ? _stop : _send,
                       style: IconButton.styleFrom(
                         backgroundColor: p.accent,
@@ -629,6 +648,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         _streaming
                             ? Icons.stop_rounded
                             : Icons.arrow_upward_rounded,
+                        size: 22,
                       ),
                     ),
                   ],
