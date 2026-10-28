@@ -39,11 +39,35 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _stick = true;
   Timer? _uiTimer;
 
-  /// Уровень размышлений: 0 = Низкий, 1 = Средний, 2 = Высокий.
+  /// Уровень размышлений: 0 = Low, 1 = Medium, 2 = High.
   int _reasoningLevel = 0;
 
   // Вложения, ожидающие отправки (файлы и картинки).
   final List<PlatformFile> _pending = [];
+
+  /// Подписи уровней мышления (строго на английском).
+  static const List<String> _reasoningLabels = <String>[
+    'Low',
+    'Medium',
+    'High',
+  ];
+
+  /// Плотность акцента капсулы «Мышление» для каждого уровня:
+  /// чем выше уровень, тем плотнее заливка.
+  static const List<double> _reasoningStrength = <double>[0.30, 0.62, 1.0];
+
+  /// Металлическое серебро для иконки мозга: светлое на тёмной капсуле,
+  /// стальное — на светлой.
+  static const List<Color> _metalOnDark = <Color>[
+    Color(0xFFF8FAFC),
+    Color(0xFFE2E8F0),
+    Color(0xFF94A3B8),
+  ];
+  static const List<Color> _metalOnLight = <Color>[
+    Color(0xFFE2E8F0),
+    Color(0xFF94A3B8),
+    Color(0xFF475569),
+  ];
 
   @override
   void dispose() {
@@ -223,8 +247,8 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    // Уровень размышлений: Низкий — поле не отправляется (прежнее поведение),
-    // Средний и Высокий — соответствующие значения reasoning_effort.
+    // Уровень размышлений: Low — поле не отправляется (прежнее поведение),
+    // Medium и High — соответствующие значения reasoning_effort.
     final String? reasoningEffort = switch (_reasoningLevel) {
       1 => 'medium',
       2 => 'high',
@@ -462,21 +486,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Чипы выбранных файлов над полем ввода: имя и кнопка удаления.
   /// Скрепка живёт в самой панели ввода, поэтому при пустом списке
-  /// строка не занимает места.
+  /// строка не занимает места. Отступы совпадают с панелью ввода.
   Widget _attachmentActions(Palette p) {
     if (_pending.isEmpty) return const SizedBox.shrink();
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: _attachmentsBar(p),
-    );
-  }
-
-  /// Чипы выбранных файлов над полем ввода: имя и кнопка удаления.
-  Widget _attachmentsBar(Palette p) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 4),
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
       child: SizedBox(
-        height: 46,
+        height: 44,
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
           itemCount: _pending.length,
@@ -501,14 +517,16 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Поле ввода: капсула с плавной анимацией высоты (AnimatedSize,
-  /// рост вверх). Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
-  /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой отправки.
+  /// Нижняя панель ввода: единая капсула с плавной анимацией высоты.
+  /// Внешний контейнер, его фон и поле ввода используют один и тот же
+  /// радиус 24 — прямоугольных нахлёстов и торчащих уголков нет.
+  /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
+  /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
   Widget _inputBar(Palette p) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(2, 4, 2, 4),
+      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
       child: AnimatedSize(
-        duration: const Duration(milliseconds: 150),
+        duration: const Duration(milliseconds: 160),
         alignment: Alignment.bottomCenter,
         // Тень должна выходить за границы капсулы, поэтому без обрезки.
         clipBehavior: Clip.none,
@@ -519,17 +537,20 @@ class _ChatScreenState extends State<ChatScreen> {
             border: Border.all(color: p.border),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 10,
-                offset: const Offset(0, 2),
+                color: Colors.black.withValues(alpha: 0.10),
+                blurRadius: 14,
+                offset: const Offset(0, 3),
               ),
             ],
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+          // Дети обрезаются по скруглению капсулы: ничего не торчит.
+          clipBehavior: Clip.antiAlias,
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               // Верхний ярус: текст на всю ширину капсулы.
+              // filled: false убирает прямоугольную заливку из темы.
               TextField(
                 controller: _input,
                 keyboardType: TextInputType.multiline,
@@ -538,65 +559,38 @@ class _ChatScreenState extends State<ChatScreen> {
                 style: fontStyle(settings.bodyFont, size: 16, color: p.text),
                 decoration: InputDecoration(
                   isDense: true,
+                  filled: false,
                   hintText: 'Сообщение',
                   hintStyle: TextStyle(color: p.muted),
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  contentPadding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                  contentPadding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
                 ),
                 minLines: 1,
                 maxLines: 6,
               ),
               // Нижний ярус: капсулы слева, скрепка и отправка справа.
-              Padding(
-                padding: const EdgeInsets.only(
-                  top: 4,
-                  bottom: 4,
-                  left: 8,
-                  right: 8,
-                ),
-                child: Row(
-                  children: [
-                    _reasoningCapsule(p),
-                    const SizedBox(width: 8),
-                    _searchCapsule(p),
-                    const Spacer(),
-                    IconButton(
-                      tooltip: 'Прикрепить файл',
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(
-                        minWidth: 44,
-                        minHeight: 44,
-                      ),
-                      visualDensity: VisualDensity.compact,
-                      iconSize: 28,
-                      icon: Icon(Icons.attach_file, size: 28, color: p.muted),
-                      onPressed: _streaming ? null : _attach,
-                    ),
-                    const SizedBox(width: 2),
-                    IconButton.filled(
-                      tooltip: _streaming ? 'Остановить' : 'Отправить',
-                      visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints(
-                        minWidth: 48,
-                        minHeight: 48,
-                      ),
-                      onPressed: _streaming ? _stop : _send,
-                      style: IconButton.styleFrom(
-                        backgroundColor: p.accent,
-                        foregroundColor: Colors.white,
-                        shape: const CircleBorder(),
-                      ),
-                      icon: Icon(
-                        _streaming
-                            ? Icons.stop_rounded
-                            : Icons.rocket_launch_rounded,
-                        size: 26,
+              Row(
+                children: [
+                  Expanded(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _reasoningCapsule(p),
+                          const SizedBox(width: 8),
+                          _searchCapsule(p),
+                        ],
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 4),
+                  _attachButton(p),
+                  const SizedBox(width: 4),
+                  _sendButton(p),
+                ],
               ),
             ],
           ),
@@ -605,44 +599,110 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Мышление»: циклический выбор уровня. Иконка — строго мозг 🧠
-  /// (никаких голов и шестерёнок), заливка — тёплый терракотовый акцент
-  /// в общей гамме темы.
+  /// Кнопка скрепки: выбор файлов для отправки.
+  Widget _attachButton(Palette p) {
+    return IconButton(
+      tooltip: 'Прикрепить файл',
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+      visualDensity: VisualDensity.compact,
+      iconSize: 26,
+      icon: Icon(Icons.attach_file, size: 26, color: p.muted),
+      onPressed: _streaming ? null : _attach,
+    );
+  }
+
+  /// Круглая акцентная кнопка: отправка сообщения или остановка ответа.
+  Widget _sendButton(Palette p) {
+    return IconButton.filled(
+      tooltip: _streaming ? 'Остановить' : 'Отправить',
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+      onPressed: _streaming ? _stop : _send,
+      style: IconButton.styleFrom(
+        backgroundColor: p.accent,
+        foregroundColor: Colors.white,
+        shape: const CircleBorder(),
+      ),
+      icon: Icon(
+        _streaming ? Icons.stop_rounded : Icons.rocket_launch_rounded,
+        size: 26,
+      ),
+    );
+  }
+
+  /// Реальный цвет капсулы «Мышление»: акцент темы смешивается с фоном
+  /// карточки, поэтому контраст всегда считается по итоговому цвету.
+  Color _reasoningFill(Palette p) {
+    final a = _reasoningStrength[_reasoningLevel];
+    return Color.alphaBlend(p.accent.withValues(alpha: a), p.card);
+  }
+
+  /// Цвет, который лучше всего читается на заливке [fill]:
+  /// сравниваем контраст светлого и тёмного вариантов.
+  Color _readableOn(Color fill) {
+    const light = Color(0xFFF7F2EC);
+    const dark = Color(0xFF241C16);
+    final bg = fill.computeLuminance();
+    final lightRatio = (light.computeLuminance() + 0.05) / (bg + 0.05);
+    final darkRatio = (bg + 0.05) / (dark.computeLuminance() + 0.05);
+    return lightRatio >= darkRatio ? light : dark;
+  }
+
+  /// Металлическая серебристая иконка мозга (строго Icons.psychology).
+  /// Оттенок серебра подстраивается под заливку капсулы, чтобы иконка
+  /// всегда читалась и выглядела объёмной.
+  Widget _metalBrain(Color fill) {
+    final fg = _readableOn(fill);
+    final onDark = fg.computeLuminance() > 0.5;
+    final colors = onDark ? _metalOnDark : _metalOnLight;
+    return ShaderMask(
+      blendMode: BlendMode.srcIn,
+      shaderCallback: (bounds) => LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: colors,
+      ).createShader(bounds),
+      child: const Icon(Icons.psychology, size: 16, color: Color(0xFFE2E8F0)),
+    );
+  }
+
+  /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
+  /// Цвет текста и иконки вычисляется под активный цвет капсулы,
+  /// поэтому надпись всегда читается.
   Widget _reasoningCapsule(Palette p) {
-    const Color fill = Color(0xFFC87D55);
-    const Color fg = Color(0xFF2B211A);
-    final String label = switch (_reasoningLevel) {
-      1 => 'Средний',
-      2 => 'Высокий',
-      _ => 'Низкий',
-    };
-    return InkWell(
-      borderRadius: BorderRadius.circular(20),
-      onTap: _streaming ? null : _cycleReasoning,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: fill,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: fill),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Строго мозг 🧠 — вместо прежней иконки «голова с шестерёнкой».
-            const Text('🧠', style: TextStyle(fontSize: 15)),
-            const SizedBox(width: 5),
-            Text(
-              label,
-              maxLines: 1,
-              style: const TextStyle(
-                fontSize: 12.5,
-                height: 1.2,
-                fontWeight: FontWeight.w700,
-                color: fg,
+    final fill = _reasoningFill(p);
+    final fg = _readableOn(fill);
+    final label = _reasoningLabels[_reasoningLevel];
+    return Tooltip(
+      message: 'Уровень размышлений: $label',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: _streaming ? null : _cycleReasoning,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: fill,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: fill),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _metalBrain(fill),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  height: 1.2,
+                  fontWeight: FontWeight.w700,
+                  color: fg,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -654,7 +714,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final on = settings.webSearchEnabled;
     const Color olive = Color(0xFF4C6B4E);
     final Color fill = on ? olive : p.muted.withValues(alpha: 0.12);
-    final Color fg = on ? Colors.white : p.muted;
+    final Color effective = Color.alphaBlend(fill, p.card);
+    final Color fg = _readableOn(effective);
     final Color borderColor = on ? olive : p.border;
     return InkWell(
       borderRadius: BorderRadius.circular(20),
