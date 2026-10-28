@@ -143,9 +143,9 @@ class GenTechChatApp extends StatelessWidget {
   }
 }
 
-/// Экран-заставка в стиле системной заставки Android:
-/// светло-серый фон, стандартный логотип Flutter и подпись sans-serif.
-/// Через 2 секунды плавно переходит на ChatScreen.
+/// Экран-заставка: серый фон, в центре белый скруглённый квадрат
+/// с логотипом (три медные искры) и подписью «GenTech Chat».
+/// Через 1.5 секунды плавно переходит на ChatScreen.
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
 
@@ -157,7 +157,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    Timer(const Duration(seconds: 2), () {
+    Timer(const Duration(milliseconds: 1500), () {
       if (!mounted) return;
       Navigator.of(context).pushReplacement(
         PageRouteBuilder(
@@ -174,26 +174,77 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[300],
+      backgroundColor: const Color(0xFFE0E0E0),
       body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const FlutterLogo(size: 120),
-            const SizedBox(height: 24),
-            Text(
-              'GenTech Chat',
-              style: TextStyle(
-                fontFamily: 'sans-serif',
-                fontFamilyFallback: const ['Roboto', 'Arial'],
-                fontSize: 26,
-                fontWeight: FontWeight.w500,
-                color: Colors.blueGrey[900],
-                letterSpacing: 0.2,
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(32, 28, 32, 24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const _SparklesLogo(size: 76),
+              const SizedBox(height: 14),
+              const Text(
+                'GenTech Chat',
+                style: TextStyle(
+                  fontFamily: 'sans-serif',
+                  fontFamilyFallback: ['Roboto', 'Arial'],
+                  fontSize: 19,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF2B2824),
+                  letterSpacing: 0.2,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// Логотип приложения: три четырёхконечные звезды-искры акцентного
+/// (медного) цвета — крупная справа и две поменьше слева.
+class _SparklesLogo extends StatelessWidget {
+  final double size;
+
+  const _SparklesLogo({required this.size});
+
+  @override
+  Widget build(BuildContext context) {
+    const Color accent = Color(0xFFD99A6C);
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        children: [
+          Positioned(
+            left: 0,
+            top: size * 0.06,
+            child: Icon(
+              Icons.auto_awesome,
+              size: size * 0.30,
+              color: accent.withValues(alpha: 0.75),
+            ),
+          ),
+          Positioned(
+            left: size * 0.06,
+            bottom: 0,
+            child: Icon(
+              Icons.auto_awesome,
+              size: size * 0.34,
+              color: accent.withValues(alpha: 0.9),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            top: size * 0.18,
+            child: Icon(Icons.auto_awesome, size: size * 0.58, color: accent),
+          ),
+        ],
       ),
     );
   }
