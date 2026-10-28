@@ -182,12 +182,12 @@ class _SplashScreenState extends State<SplashScreen> {
             color: Colors.white,
             borderRadius: BorderRadius.circular(24),
           ),
-          child: Column(
+          child: const Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const _SparklesLogo(size: 76),
-              const SizedBox(height: 14),
-              const Text(
+              _SparklesLogo(size: 76),
+              SizedBox(height: 14),
+              Text(
                 'GenTech Chat',
                 style: TextStyle(
                   fontFamily: 'sans-serif',
