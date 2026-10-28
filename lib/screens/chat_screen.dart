@@ -502,7 +502,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Поле ввода: капсула с плавной анимацией высоты (AnimatedSize,
-  /// рост вверх). Сверху — текстовое поле на всю ширину, снизу — ряд
+  /// рост вверх). Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
   /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой отправки.
   Widget _inputBar(Palette p) {
     return Padding(
@@ -519,13 +519,13 @@ class _ChatScreenState extends State<ChatScreen> {
             border: Border.all(color: p.border),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
+                color: Colors.black.withValues(alpha: 0.08),
                 blurRadius: 10,
                 offset: const Offset(0, 2),
               ),
             ],
           ),
-          padding: const EdgeInsets.fromLTRB(2, 2, 4, 2),
+          padding: const EdgeInsets.symmetric(horizontal: 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -599,14 +599,19 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Мышление»: циклически Низкий (amber) -> Средний (blue)
-  /// -> Высокий (red), при переключении лёгкая вибрация.
+  /// Капсула «Мышление»: циклически Низкий (янтарь) -> Средний (синий)
+  /// -> Высокий (красный), при переключении лёгкая вибрация.
+  /// Активное состояние — плотная сочная заливка: ярко и контрастно.
   Widget _reasoningCapsule() {
-    final Color color = switch (_reasoningLevel) {
-      1 => Colors.blue,
-      2 => Colors.red,
-      _ => Colors.amber,
+    final Color fill = switch (_reasoningLevel) {
+      1 => const Color(0xFF1565C0), // насыщенный синий
+      2 => const Color(0xFFC62828), // насыщенный красный
+      _ => const Color(0xFFF5A623), // сочный янтарный/золотой
     };
+    // На янтарной заливке тёмный текст читается заметно лучше белого.
+    final Color fg = _reasoningLevel == 0
+        ? const Color(0xFF3A2600)
+        : Colors.white;
     final String label = switch (_reasoningLevel) {
       1 => 'Средний',
       2 => 'Высокий',
@@ -618,14 +623,14 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
+          color: fill,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: color.withValues(alpha: 0.4)),
+          border: Border.all(color: fill),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.psychology, size: 16, color: color),
+            Icon(Icons.psychology, size: 16, color: fg),
             const SizedBox(width: 5),
             Text(
               label,
@@ -633,8 +638,8 @@ class _ChatScreenState extends State<ChatScreen> {
               style: TextStyle(
                 fontSize: 12.5,
                 height: 1.2,
-                fontWeight: FontWeight.w600,
-                color: color,
+                fontWeight: FontWeight.w700,
+                color: fg,
               ),
             ),
           ],
@@ -644,10 +649,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Капсула «Поиск»: в выключенном состоянии серая с подписью «Поиск Выкл»,
-  /// во включённом — зеленеет и меняет подпись на «Поиск Вкл».
+  /// во включённом — плотная насыщенно-зелёная заливка с белым текстом
+  /// «Поиск Вкл» (яркая контрастная подсветка активного режима).
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
-    final Color color = on ? Colors.green : p.muted;
+    const Color green = Color(0xFF2E7D32); // насыщенный зелёный
+    final Color fill = on ? green : p.muted.withValues(alpha: 0.12);
+    final Color fg = on ? Colors.white : p.muted;
+    final Color borderColor = on ? green : p.border;
     return InkWell(
       borderRadius: BorderRadius.circular(20),
       onTap: _streaming
@@ -659,11 +668,9 @@ class _ChatScreenState extends State<ChatScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.12),
+          color: fill,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: on ? Colors.green.withValues(alpha: 0.4) : p.border,
-          ),
+          border: Border.all(color: borderColor),
         ),
         child: Text(
           on ? 'Поиск Вкл' : 'Поиск Выкл',
@@ -671,8 +678,8 @@ class _ChatScreenState extends State<ChatScreen> {
           style: TextStyle(
             fontSize: 12.5,
             height: 1.2,
-            fontWeight: FontWeight.w600,
-            color: color,
+            fontWeight: on ? FontWeight.w700 : FontWeight.w600,
+            color: fg,
           ),
         ),
       ),
