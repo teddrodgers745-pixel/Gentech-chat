@@ -1,5 +1,4 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
-// Updated with Icons.psychology and cohesive colors
 
 import 'dart:async';
 
@@ -156,7 +155,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     final picked = <PickedFileRef>[
       for (final f in _pending)
-        if (f.path != null && f.path!.isNotEmpty) PickedFileRef(f.name, f.path!),
+        if (f.path != null && f.path!.isNotEmpty)
+          PickedFileRef(f.name, f.path!),
     ];
     // Готовим content для API (base64-картинки, текст файлов) заранее:
     // любые ошибки чтения уже обработаны внутри, отправка не падает.
@@ -330,8 +330,7 @@ class _ChatScreenState extends State<ChatScreen> {
               chat?.title ?? 'Новый чат',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontSize: 17, fontWeight: FontWeight.w600),
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
             ),
             actions: [
               IconButton(
@@ -577,11 +576,17 @@ class _ChatScreenState extends State<ChatScreen> {
                     ),
                     const SizedBox(width: 2),
                     IconButton.filled(
+                      tooltip: _streaming ? 'Остановить' : 'Отправить',
                       visualDensity: VisualDensity.compact,
+                      constraints: const BoxConstraints(
+                        minWidth: 48,
+                        minHeight: 48,
+                      ),
                       onPressed: _streaming ? _stop : _send,
                       style: IconButton.styleFrom(
                         backgroundColor: p.accent,
                         foregroundColor: Colors.white,
+                        shape: const CircleBorder(),
                       ),
                       icon: Icon(
                         _streaming
@@ -600,10 +605,10 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Мышление»: циклический выбор уровня с фирменным акцентом.
+  /// Капсула «Мышление»: циклический выбор уровня с терракотовым акцентом.
   Widget _reasoningCapsule(Palette p) {
-    final fill = p.accent;
-    final fg = p.id == 'sepia' ? Colors.white : const Color(0xFF2B211A);
+    const Color fill = Color(0xFFC87D55);
+    const Color fg = Color(0xFF2B211A);
     final String label = switch (_reasoningLevel) {
       1 => 'Средний',
       2 => 'Высокий',
@@ -622,12 +627,12 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.psychology, size: 16, color: fg),
+            const Icon(Icons.psychology, size: 16, color: fg),
             const SizedBox(width: 5),
             Text(
               label,
               maxLines: 1,
-              style: TextStyle(
+              style: const TextStyle(
                 fontSize: 12.5,
                 height: 1.2,
                 fontWeight: FontWeight.w700,
@@ -643,7 +648,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Поиск»: приглушённый оливковый цвет во включённом состоянии.
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
-    const Color olive = Color(0xFF68734F);
+    const Color olive = Color(0xFF556B4F);
     final Color fill = on ? olive : p.muted.withValues(alpha: 0.12);
     final Color fg = on ? Colors.white : p.muted;
     final Color borderColor = on ? olive : p.border;
