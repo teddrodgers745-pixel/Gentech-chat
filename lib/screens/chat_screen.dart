@@ -591,8 +591,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       icon: Icon(
                         _streaming
                             ? Icons.stop_rounded
-                            : Icons.arrow_upward_rounded,
-                        size: 28,
+                            : Icons.rocket_launch_rounded,
+                        size: 26,
                       ),
                     ),
                   ],
@@ -605,7 +605,9 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Мышление»: циклический выбор уровня с терракотовым акцентом.
+  /// Капсула «Мышление»: циклический выбор уровня. Иконка — строго мозг 🧠
+  /// (никаких голов и шестерёнок), заливка — тёплый терракотовый акцент
+  /// в общей гамме темы.
   Widget _reasoningCapsule(Palette p) {
     const Color fill = Color(0xFFC87D55);
     const Color fg = Color(0xFF2B211A);
@@ -627,7 +629,8 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.psychology, size: 16, color: fg),
+            // Строго мозг 🧠 — вместо прежней иконки «голова с шестерёнкой».
+            const Text('🧠', style: TextStyle(fontSize: 15)),
             const SizedBox(width: 5),
             Text(
               label,
@@ -645,10 +648,11 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Поиск»: приглушённый оливковый цвет во включённом состоянии.
+  /// Капсула «Поиск»: приглушённый мягкий оливково-зелёный цвет
+  /// во включённом состоянии.
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
-    const Color olive = Color(0xFF556B4F);
+    const Color olive = Color(0xFF4C6B4E);
     final Color fill = on ? olive : p.muted.withValues(alpha: 0.12);
     final Color fg = on ? Colors.white : p.muted;
     final Color borderColor = on ? olive : p.border;
