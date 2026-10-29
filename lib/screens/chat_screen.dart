@@ -59,23 +59,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Цвет заливки капсулы «Мышление» зависит от выбранного уровня:
   /// Low — спокойный тёплый графит, Medium — насыщенный терракотовый,
-  /// High — контрастный красный.
+  /// High — контрастный красный Color(0xFFEF4444).
   static const List<Color> _reasoningFills = <Color>[
     Color(0xFF71594B), // Low — спокойный, гармоничный к палитре
     Color(0xFFC07650), // Medium — насыщенный терракотовый
     Color(0xFFEF4444), // High — красный
   ];
 
-  /// Цвет подписи уровня мышления: Low — янтарный, Medium — синий,
-  /// High — красный. Цвет самой SVG-иконки мозга задан в её файлах.
+  /// Цвет подписи уровня мышления. Подпись обязана читаться на своей
+  /// заливке, поэтому Low — янтарный, Medium — светло-синий, High —
+  /// тёплый белый: тёмно-синий на терракоте и красный на красном
+  /// сливались бы с фоном капсулы.
   static const List<Color> _reasoningLevelColors = <Color>[
-    Colors.amber, // Low
-    Colors.blue, // Medium
-    Colors.red, // High
+    Color(0xFFFFC107), // Low — янтарный, читается на тёплом графите
+    Color(0xFFBFDBFE), // Medium — светло-синий, читается на терракоте
+    Color(0xFFFFF4F0), // High — тёплый белый, читается на красном
   ];
 
   /// SVG-файлы иконки мозга для капсулы «Мышление»: свой файл
-  /// для каждого уровня, нужные цвета уже внутри файлов.
+  /// для каждого уровня. Цвет мозга задан внутри самих файлов
+  /// и совпадает с [_reasoningLevelColors], поэтому colorFilter
+  /// в коде не используется.
   static const List<String> _reasoningBrainAssets = <String>[
     'assets/icons/brain_low.svg', // Low
     'assets/icons/brain_medium.svg', // Medium
@@ -537,9 +541,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// [_radius] — прямоугольных нахлёстов и торчащих уголков нет.
   /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
   /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
-  /// Точная подгонка: поле ввода утончено (~5% по вертикали), строка
-  /// текста приподнята (верх contentPadding уменьшен), капсулы
-  /// опущены чуть ниже относительно поля ввода.
+  /// Строка печати принудительно поднята к верхней границе поля:
+  /// верхний отступ contentPadding уменьшен до 2.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
@@ -569,8 +572,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               // Верхний ярус: текст на всю ширину капсулы.
               // filled: false убирает прямоугольную заливку из темы.
-              // contentPadding: верх уменьшён — строка ввода приподнята;
-              // низ уменьшен (~5%) — поле тоньше.
+              // contentPadding: верх уменьшен до 2 — строка ввода
+              // принудительно приподнята к верхней границе поля.
               TextField(
                 controller: _input,
                 keyboardType: TextInputType.multiline,
@@ -585,7 +588,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.fromLTRB(16, 10.6, 16, 11.6),
+                  contentPadding: EdgeInsets.fromLTRB(16, 2, 16, 11.6),
                 ),
                 minLines: 1,
                 maxLines: 6,
@@ -656,10 +659,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
   /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]):
-  /// High залит красным.
-  /// Слева от подписи — SVG-иконка мозга, файл зависит от уровня
-  /// (см. [_reasoningBrainAssets]), размер 20x20; цвета заданы в самих
-  /// SVG-файлах, поэтому colorFilter не используется.
+  /// High залит красным Color(0xFFEF4444).
+  /// Слева от подписи — SVG-иконка мозга 20x20, файл зависит от уровня
+  /// (см. [_reasoningBrainAssets]); цвет иконки задан в самом файле,
+  /// поэтому colorFilter не используется.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
@@ -711,12 +714,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Капсула «Поиск».
-  /// Выключена: прозрачная капсула без фоновой заливки, короткий
-  /// текст «Поиск», тонкая рамка и приглушённый цвет текста.
-  /// Включена: капсула загорается светло-синим (0xFF3B82F6),
+  /// Выключена: прозрачная капсула без фоновой заливки
+  /// (Colors.transparent), короткий текст «Поиск», тонкая рамка
+  /// и приглушённый цвет текста.
+  /// Включена: капсула загорается светло-синим (Color(0xFF3B82F6)),
   /// текст «Поиск Вкл», размер растёт динамически под длину текста
   /// (AnimatedContainer + AnimatedSize + MainAxisSize.min).
-  /// Лупа (icon_search.svg) увеличена до 20x20.
+  /// Лупа из search.svg крупная (20x20) и заметная: толстое кольцо
+  /// и рукоять; при включении она дополнительно становится яркой
+  /// (светлый colorFilter на синей заливке).
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
     final label = on ? 'Поиск Вкл' : 'Поиск';
@@ -741,7 +747,7 @@ class _ChatScreenState extends State<ChatScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             SvgPicture.asset(
-              'assets/icons/icon_search.svg',
+              'assets/icons/search.svg',
               width: 20,
               height: 20,
               colorFilter: ColorFilter.mode(
