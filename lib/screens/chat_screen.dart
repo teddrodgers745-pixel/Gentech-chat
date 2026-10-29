@@ -473,7 +473,7 @@ class _ChatScreenState extends State<ChatScreen> {
             Icon(Icons.auto_awesome, size: 36, color: p.accent),
             const SizedBox(height: 16),
             Text(
-              'GenTech Chat V2',
+              'GenTech Chat',
               style: fontStyle(
                 settings.bodyFont,
                 size: 26,
