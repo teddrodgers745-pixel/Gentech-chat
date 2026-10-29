@@ -59,11 +59,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Цвет заливки капсулы «Мышление» зависит от выбранного уровня:
   /// Low — спокойный тёплый графит, Medium — насыщенный терракотовый,
-  /// High — глубокий контрастный медно-янтарный.
+  /// High — контрастный красный.
   static const List<Color> _reasoningFills = <Color>[
     Color(0xFF71594B), // Low — спокойный, гармоничный к палитре
     Color(0xFFC07650), // Medium — насыщенный терракотовый
-    Color(0xFFE08A3C), // High — контрастный медно-янтарный
+    Color(0xFFEF4444), // High — красный
   ];
 
   /// Контрастные светлые цвета подписи уровня мышления: чем выше
@@ -74,12 +74,11 @@ class _ChatScreenState extends State<ChatScreen> {
     Color(0xFFFFFFFF), // High
   ];
 
-  /// Глубокий матовый оливковый цвет капсулы «Поиск» (включённое
-  /// состояние).
-  static const Color _searchFill = Color(0xFF4C6B4E);
+  /// Светло-синяя заливка капсулы «Поиск» (включённое состояние).
+  static const Color _searchFill = Color(0xFF3B82F6);
 
-  /// Светлый текст и иконка на оливковой заливке.
-  static const Color _searchTextOn = Color(0xFFF1F6EE);
+  /// Светлый текст и иконка на синей заливке.
+  static const Color _searchTextOn = Color(0xFFF3F7FF);
 
   @override
   void dispose() {
@@ -531,8 +530,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
   /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
   /// Точная подгонка: поле ввода утончено (~5% по вертикали), строка
-  /// текста приподнята (верх contentPadding уменьшен на ~2%),
-  /// капсулы опущены чуть ниже относительно поля ввода.
+  /// текста приподнята (верх contentPadding уменьшен), капсулы
+  /// опущены чуть ниже относительно поля ввода.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
@@ -562,8 +561,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               // Верхний ярус: текст на всю ширину капсулы.
               // filled: false убирает прямоугольную заливку из темы.
-              // contentPadding: верх уменьшен (~2%) — строка ввода
-              // приподнята; низ уменьшен (~5%) — поле тоньше.
+              // contentPadding: верх уменьшён — строка ввода приподнята;
+              // низ уменьшен (~5%) — поле тоньше.
               TextField(
                 controller: _input,
                 keyboardType: TextInputType.multiline,
@@ -578,14 +577,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.fromLTRB(16, 11.9, 16, 12.2),
+                  contentPadding: EdgeInsets.fromLTRB(16, 10.6, 16, 11.6),
                 ),
                 minLines: 1,
                 maxLines: 6,
               ),
               // «Воздух» между полем и рядом нижних кнопок: капсулы
               // опущены чуть ниже, чтобы не прилипали к тексту.
-              const SizedBox(height: 13),
+              const SizedBox(height: 13.3),
               // Нижний ярус: капсулы слева, скрепка и отправка справа.
               Row(
                 children: [
@@ -648,9 +647,10 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
-  /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]).
+  /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]):
+  /// High залит красным.
   /// Слева от подписи — SVG-иконка мышления (icon_thought.svg),
-  /// размер 18x18, цвет подбирается под заливку уровня.
+  /// размер 20x20, цвет подбирается под заливку уровня.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
@@ -680,8 +680,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               SvgPicture.asset(
                 'assets/icons/icon_thought.svg',
-                width: 18,
-                height: 18,
+                width: 20,
+                height: 20,
                 colorFilter: const ColorFilter.mode(
                   Color(0xFFF6EFE6),
                   BlendMode.srcIn,
@@ -706,11 +706,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Капсула «Поиск».
-  /// Выключена: прозрачная капсула минимального размера под короткий
+  /// Выключена: прозрачная капсула без фоновой заливки, короткий
   /// текст «Поиск», тонкая рамка и приглушённый цвет текста.
-  /// Включена: заливка глубоким матовым оливковым (0xFF4C6B4E),
+  /// Включена: капсула загорается светло-синим (0xFF3B82F6),
   /// текст «Поиск Вкл», размер растёт динамически под длину текста
-  /// (AnimatedSize + MainAxisSize.min).
+  /// (AnimatedContainer + AnimatedSize + MainAxisSize.min).
+  /// Лупа (icon_search.svg) увеличена до 20x20.
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
     final label = on ? 'Поиск Вкл' : 'Поиск';
@@ -736,8 +737,8 @@ class _ChatScreenState extends State<ChatScreen> {
           children: [
             SvgPicture.asset(
               'assets/icons/icon_search.svg',
-              width: 15,
-              height: 15,
+              width: 20,
+              height: 20,
               colorFilter: ColorFilter.mode(
                 on ? _searchTextOn : p.muted,
                 BlendMode.srcIn,
