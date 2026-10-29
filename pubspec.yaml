@@ -28,6 +28,8 @@ dependencies:
   # Голосовой ввод (Speech-to-Text) и запрос разрешения на микрофон.
   speech_to_text: ^7.0.0
   permission_handler: ^11.0.0
+  # SVG-иконки капсул «Поиск» и «Мышление» в панели ввода.
+  flutter_svg: ^2.0.9
 
 dev_dependencies:
   flutter_test:
@@ -35,3 +37,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/icons/
