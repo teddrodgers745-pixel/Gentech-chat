@@ -53,7 +53,7 @@ class _ChatScreenState extends State<ChatScreen> {
     'High',
   ];
 
-  /// Единый радиус скругления панели ввода и капсул: без прямых углов
+  /// Единый радиус скругления панели ввода и капсулы: без прямых углов
   /// и без артефактов нахлёстов.
   static const double _radius = 24;
 
@@ -74,16 +74,6 @@ class _ChatScreenState extends State<ChatScreen> {
     Color(0xFFFFC107), // Low — янтарный, читается на тёплом графите
     Color(0xFFBFDBFE), // Medium — светло-синий, читается на терракоте
     Color(0xFFFFF4F0), // High — тёплый белый, читается на красном
-  ];
-
-  /// SVG-файлы иконки мозга для капсулы «Мышление»: свой файл
-  /// для каждого уровня. Цвет мозга задан внутри самих файлов
-  /// и совпадает с [_reasoningLevelColors], поэтому colorFilter
-  /// в коде не используется.
-  static const List<String> _reasoningBrainAssets = <String>[
-    'assets/icons/brain_low.svg', // Low
-    'assets/icons/brain_medium.svg', // Medium
-    'assets/icons/brain_high.svg', // High
   ];
 
   /// Светло-синяя заливка капсулы «Поиск» (включённое состояние).
@@ -660,13 +650,19 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
   /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]):
   /// High залит красным Color(0xFFEF4444).
-  /// Слева от подписи — SVG-иконка мозга 20x20, файл зависит от уровня
-  /// (см. [_reasoningBrainAssets]); цвет иконки задан в самом файле,
-  /// поэтому colorFilter не используется.
+  /// Слева от подписи — SVG-иконка мозга 20x20, файл зависит от уровня:
+  /// Low -> 'assets/icons/brain_low.svg',
+  /// Medium -> 'assets/icons/brain_medium.svg',
+  /// High -> 'assets/icons/brain_high.svg'.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
     final levelColor = _reasoningLevelColors[_reasoningLevel];
+    final assetPath = switch (_reasoningLevel) {
+      0 => 'assets/icons/brain_low.svg',
+      1 => 'assets/icons/brain_medium.svg',
+      _ => 'assets/icons/brain_high.svg',
+    };
     return Tooltip(
       message: 'Уровень размышлений: $label',
       child: InkWell(
@@ -691,7 +687,7 @@ class _ChatScreenState extends State<ChatScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               SvgPicture.asset(
-                _reasoningBrainAssets[_reasoningLevel],
+                assetPath,
                 width: 20,
                 height: 20,
               ),
