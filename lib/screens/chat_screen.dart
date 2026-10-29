@@ -650,18 +650,18 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
   /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]):
   /// High залит красным Color(0xFFEF4444).
-  /// Слева от подписи — SVG-иконка мозга 20x20, файл зависит от уровня:
-  /// Low -> 'assets/icons/brain_low.svg',
-  /// Medium -> 'assets/icons/brain_medium.svg',
-  /// High -> 'assets/icons/brain_high.svg'.
+  /// Слева от подписи — картинка 24x24, файл зависит от уровня:
+  /// Low -> 'assets/icons/brain_low.png',
+  /// Medium -> 'assets/icons/brain_medium.png',
+  /// High -> 'assets/icons/brain_high.png'.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
     final levelColor = _reasoningLevelColors[_reasoningLevel];
     final assetPath = switch (_reasoningLevel) {
-      0 => 'assets/icons/brain_low.svg',
-      1 => 'assets/icons/brain_medium.svg',
-      _ => 'assets/icons/brain_high.svg',
+      0 => 'assets/icons/brain_low.png',
+      1 => 'assets/icons/brain_medium.png',
+      _ => 'assets/icons/brain_high.png',
     };
     return Tooltip(
       message: 'Уровень размышлений: $label',
@@ -686,10 +686,11 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SvgPicture.asset(
+              Image.asset(
                 assetPath,
-                width: 20,
-                height: 20,
+                width: 24,
+                height: 24,
+                fit: BoxFit.contain,
               ),
               const SizedBox(width: 6),
               Text(
