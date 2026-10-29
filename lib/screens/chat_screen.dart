@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import '../app_state.dart';
 import '../core/storage.dart';
@@ -21,7 +22,7 @@ class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
   @override
-  State<ChatScreen> createState() => _ChatScreenState();
+  State<ChatScreen> createState()() => _ChatScreenState();
 }
 
 class _ChatScreenState extends State<ChatScreen> {
@@ -57,33 +58,28 @@ class _ChatScreenState extends State<ChatScreen> {
   static const double _radius = 24;
 
   /// Цвет заливки капсулы «Мышление» зависит от выбранного уровня:
-  /// Low — спокойный приглушённый, Medium — насыщенный терракотовый,
-  /// High — глубокий акцентный медно-янтарный.
+  /// Low — спокойный тёплый графит, Medium — насыщенный терракотовый,
+  /// High — глубокий контрастный медно-янтарный.
   static const List<Color> _reasoningFills = <Color>[
-    Color(0xFF8B6B58), // Low
-    Color(0xFFC87D55), // Medium
-    Color(0xFFD97706), // High
+    Color(0xFF71594B), // Low — спокойный, гармоничный к палитре
+    Color(0xFFC07650), // Medium — насыщенный терракотовый
+    Color(0xFFE08A3C), // High — контрастный медно-янтарный
   ];
 
   /// Контрастные светлые цвета подписи уровня мышления: чем выше
   /// уровень, тем светлее и чище текст на заливке.
   static const List<Color> _reasoningTextColors = <Color>[
-    Color(0xFFF3E2D2), // Low
-    Color(0xFFFFF4E6), // Medium
+    Color(0xFFF3E6D8), // Low
+    Color(0xFFFFF3E3), // Medium
     Color(0xFFFFFFFF), // High
   ];
 
-  /// Иконка капсулы мышления: Icons.memory серебристо-белого цвета.
-  static const Color _brainIcon = Color(0xFFE2E8F0);
-
-  /// Глубокий матовый оливковый цвет капсулы «Поиск».
+  /// Глубокий матовый оливковый цвет капсулы «Поиск» (включённое
+  /// состояние).
   static const Color _searchFill = Color(0xFF4C6B4E);
 
-  /// Тёмно-оливковый для выключенного поиска.
-  static const Color _searchFillOff = Color(0xFF3F523E);
-
-  /// Светлый текст на оливковой заливке.
-  static const Color _searchText = Color(0xFFF1F6EE);
+  /// Светлый текст и иконка на оливковой заливке.
+  static const Color _searchTextOn = Color(0xFFF1F6EE);
 
   @override
   void dispose() {
@@ -535,8 +531,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
   /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
   /// Точная подгонка: поле ввода утончено (~5% по вертикали), строка
-  /// текста приподнята (contentPadding сверху уменьшен на ~3%),
-  /// капсулы опущены на ~2% ниже относительно поля ввода.
+  /// текста приподнята (верх contentPadding уменьшен на ~2%),
+  /// капсулы опущены чуть ниже относительно поля ввода.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
@@ -566,8 +562,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               // Верхний ярус: текст на всю ширину капсулы.
               // filled: false убирает прямоугольную заливку из темы.
-              // contentPadding: верх уменьшен (~3%) — строка ввода
-              // приподнята; низ тоже уменьшен (~5%) — поле тоньше.
+              // contentPadding: верх уменьшен (~2%) — строка ввода
+              // приподнята; низ уменьшен (~5%) — поле тоньше.
               TextField(
                 controller: _input,
                 keyboardType: TextInputType.multiline,
@@ -582,15 +578,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  contentPadding:
-                      EdgeInsets.fromLTRB(16, 12.4, 16, 12.9),
+                  contentPadding: EdgeInsets.fromLTRB(16, 11.9, 16, 12.2),
                 ),
                 minLines: 1,
                 maxLines: 6,
               ),
               // «Воздух» между полем и рядом нижних кнопок: капсулы
-              // опущены на ~2% ниже, чтобы не прилипали к тексту.
-              const SizedBox(height: 12),
+              // опущены чуть ниже, чтобы не прилипали к тексту.
+              const SizedBox(height: 13),
               // Нижний ярус: капсулы слева, скрепка и отправка справа.
               Row(
                 children: [
@@ -653,11 +648,9 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
-  /// Заливка капсулы меняется вместе с уровнем: Low — спокойный
-  /// приглушённый 0xFF8B6B58, Medium — насыщенный терракотовый
-  /// 0xFFC87D55, High — глубокий медно-янтарный 0xFFD97706.
-  /// Слева от подписи — иконка Icons.memory цвета 0xFFE2E8F0 (размер 18)
-  /// с отступом 6 px.
+  /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]).
+  /// Слева от подписи — SVG-иконка мышления (icon_thought.svg),
+  /// размер 18x18, цвет подбирается под заливку уровня.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
@@ -685,10 +678,14 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Icon(
-                Icons.memory,
-                size: 18,
-                color: _brainIcon,
+              SvgPicture.asset(
+                'assets/icons/icon_thought.svg',
+                width: 18,
+                height: 18,
+                colorFilter: const ColorFilter.mode(
+                  Color(0xFFF6EFE6),
+                  BlendMode.srcIn,
+                ),
               ),
               const SizedBox(width: 6),
               Text(
@@ -708,12 +705,15 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Поиск»: глубокий матовый оливковый цвет 0xFF4C6B4E
-  /// во включённом состоянии, светлый контрастный текст и иконка.
-  /// Горизонтальные отступы меньше, чем у капсулы «Мышление».
+  /// Капсула «Поиск».
+  /// Выключена: прозрачная капсула минимального размера под короткий
+  /// текст «Поиск», тонкая рамка и приглушённый цвет текста.
+  /// Включена: заливка глубоким матовым оливковым (0xFF4C6B4E),
+  /// текст «Поиск Вкл», размер растёт динамически под длину текста
+  /// (AnimatedSize + MainAxisSize.min).
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
-    final Color fill = on ? _searchFill : _searchFillOff;
+    final label = on ? 'Поиск Вкл' : 'Поиск';
     return InkWell(
       borderRadius: BorderRadius.circular(_radius),
       onTap: _streaming
@@ -722,26 +722,41 @@ class _ChatScreenState extends State<ChatScreen> {
               HapticFeedback.lightImpact();
               setState(() => settings.setWebSearch(!on));
             },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.symmetric(horizontal: on ? 14 : 10, vertical: 8),
         decoration: BoxDecoration(
-          color: fill,
+          color: on ? _searchFill : Colors.transparent,
           borderRadius: BorderRadius.circular(_radius),
           border: Border.all(color: on ? _searchFill : p.border),
         ),
-        child: const Row(
+        child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.search_rounded, size: 15, color: _searchText),
-            SizedBox(width: 6),
-            Text(
-              'Поиск',
-              maxLines: 1,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.2,
-                fontWeight: FontWeight.w700,
-                color: _searchText,
+            SvgPicture.asset(
+              'assets/icons/icon_search.svg',
+              width: 15,
+              height: 15,
+              colorFilter: ColorFilter.mode(
+                on ? _searchTextOn : p.muted,
+                BlendMode.srcIn,
+              ),
+            ),
+            const SizedBox(width: 6),
+            AnimatedSize(
+              duration: const Duration(milliseconds: 160),
+              curve: Curves.easeOut,
+              alignment: Alignment.centerLeft,
+              child: Text(
+                label,
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.2,
+                  fontWeight: FontWeight.w700,
+                  color: on ? _searchTextOn : p.muted,
+                ),
               ),
             ),
           ],
