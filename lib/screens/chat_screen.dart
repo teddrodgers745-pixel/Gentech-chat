@@ -52,25 +52,31 @@ class _ChatScreenState extends State<ChatScreen> {
     'High',
   ];
 
-  /// Единый радиус скругления панели ввода и капсул: без прямых углов.
+  /// Единый радиус скругления панели ввода и капсул: без прямых углов
+  /// и без артефактов нахлёстов.
   static const double _radius = 24;
 
-  /// Насыщенный глянцевый терракотово-медный цвет капсулы «Мышление».
-  static const Color _reasoningFill = Color(0xFFC87D55);
+  /// Цвет заливки капсулы «Мышление» зависит от выбранного уровня:
+  /// Low — спокойный приглушённый, Medium — насыщенный терракотовый,
+  /// High — глубокий акцентный медно-янтарный.
+  static const List<Color> _reasoningFills = <Color>[
+    Color(0xFF8B6B58), // Low
+    Color(0xFFC87D55), // Medium
+    Color(0xFFD97706), // High
+  ];
 
-  /// Контрастные цвета подписи уровня мышления: чем выше уровень,
-  /// тем светлее текст на медной заливке.
+  /// Контрастные светлые цвета подписи уровня мышления: чем выше
+  /// уровень, тем светлее и чище текст на заливке.
   static const List<Color> _reasoningTextColors = <Color>[
     Color(0xFFF3E2D2), // Low
     Color(0xFFFFF4E6), // Medium
     Color(0xFFFFFFFF), // High
   ];
 
-  /// Аккуратный светлый цвет иконки мозга (Icons.psychology):
-  /// чётко читается на медной заливке капсулы, без градиентов.
+  /// Иконка капсулы мышления: Icons.memory серебристо-белого цвета.
   static const Color _brainIcon = Color(0xFFE2E8F0);
 
-  /// Глубокий матовый оливковый цвет капсулы «Поиск» (без ядовитой зелени).
+  /// Глубокий матовый оливковый цвет капсулы «Поиск».
   static const Color _searchFill = Color(0xFF4C6B4E);
 
   /// Тёмно-оливковый для выключенного поиска.
@@ -528,9 +534,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// [_radius] — прямоугольных нахлёстов и торчащих уголков нет.
   /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
   /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
-  /// Точная подгонка: поле ввода чуть компактнее по вертикали (~3%),
-  /// капсулы опущены на ~2% вниз внутри панели для баланса, общее
-  /// положение панели на экране не меняется.
+  /// Точная подгонка: поле ввода утончено (~5% по вертикали), строка
+  /// текста приподнята (contentPadding сверху уменьшен на ~3%),
+  /// капсулы опущены на ~2% ниже относительно поля ввода.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
@@ -554,43 +560,37 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           // Дети обрезаются по скруглению капсулы: ничего не торчит.
           clipBehavior: Clip.antiAlias,
-          // Нижний внутренний отступ на 2 px меньше «воздуха» над
-          // капсулами: капсулы опущены на ~2% вниз, а высота панели
-          // от этого перераспределения не изменилась.
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               // Верхний ярус: текст на всю ширину капсулы.
               // filled: false убирает прямоугольную заливку из темы.
+              // contentPadding: верх уменьшен (~3%) — строка ввода
+              // приподнята; низ тоже уменьшен (~5%) — поле тоньше.
               TextField(
                 controller: _input,
                 keyboardType: TextInputType.multiline,
                 textCapitalization: TextCapitalization.sentences,
                 cursorColor: p.accent,
                 style: fontStyle(settings.bodyFont, size: 16, color: p.text),
-                decoration: InputDecoration(
+                decoration: const InputDecoration(
                   isDense: true,
                   filled: false,
                   hintText: 'Сообщение',
-                  hintStyle: TextStyle(color: p.muted),
+                  hintStyle: TextStyle(color: Color(0xFFA8A096)),
                   border: InputBorder.none,
                   enabledBorder: InputBorder.none,
                   focusedBorder: InputBorder.none,
-                  // Текст с солидным запасом со всех сторон: ввод
-                  // не прижимается ни к краям капсулы, ни к нижним
-                  // кнопкам. Вертикальные отступы уменьшены на ~3% —
-                  // поле стало чуть компактнее по высоте.
                   contentPadding:
-                      const EdgeInsets.fromLTRB(16, 13.5, 16, 13.5),
+                      EdgeInsets.fromLTRB(16, 12.4, 16, 12.9),
                 ),
                 minLines: 1,
                 maxLines: 6,
               ),
-              // «Воздух» между полем и рядом нижних кнопок: на 2 px
-              // больше прежнего, поэтому капсулы сидят ниже и смотрятся
-              // сбалансированно.
-              const SizedBox(height: 10),
+              // «Воздух» между полем и рядом нижних кнопок: капсулы
+              // опущены на ~2% ниже, чтобы не прилипали к тексту.
+              const SizedBox(height: 12),
               // Нижний ярус: капсулы слева, скрепка и отправка справа.
               Row(
                 children: [
@@ -653,12 +653,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
-  /// Заливка — насыщенный терракотово-медный цвет с комфортным «воздухом»,
-  /// текст — светлый тёплый с контрастом по уровню, слева от подписи —
-  /// иконка мозга Icons.psychology чистого серебристо-белого цвета
-  /// 0xFFE2E8F0 с отступом 6 px, чтобы подпись не прилипала к иконке.
+  /// Заливка капсулы меняется вместе с уровнем: Low — спокойный
+  /// приглушённый 0xFF8B6B58, Medium — насыщенный терракотовый
+  /// 0xFFC87D55, High — глубокий медно-янтарный 0xFFD97706.
+  /// Слева от подписи — иконка Icons.memory цвета 0xFFE2E8F0 (размер 18)
+  /// с отступом 6 px.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
+    final fill = _reasoningFills[_reasoningLevel];
     final textColor = _reasoningTextColors[_reasoningLevel];
     return Tooltip(
       message: 'Уровень размышлений: $label',
@@ -669,12 +671,12 @@ class _ChatScreenState extends State<ChatScreen> {
           constraints: const BoxConstraints(minWidth: 112),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
           decoration: BoxDecoration(
-            color: _reasoningFill,
+            color: fill,
             borderRadius: BorderRadius.circular(_radius),
-            border: Border.all(color: _reasoningFill),
+            border: Border.all(color: fill),
             boxShadow: [
               BoxShadow(
-                color: _reasoningFill.withValues(alpha: 0.35),
+                color: fill.withValues(alpha: 0.35),
                 blurRadius: 10,
                 offset: const Offset(0, 3),
               ),
@@ -684,7 +686,7 @@ class _ChatScreenState extends State<ChatScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Icon(
-                Icons.psychology,
+                Icons.memory,
                 size: 18,
                 color: _brainIcon,
               ),
@@ -706,9 +708,9 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Поиск»: глубокий матовый оливковый цвет во включённом
-  /// состоянии, светлый текст и светлая иконка поиска. Горизонтальные
-  /// отступы меньше, чем у капсулы «Мышление», — капсула компактнее.
+  /// Капсула «Поиск»: глубокий матовый оливковый цвет 0xFF4C6B4E
+  /// во включённом состоянии, светлый контрастный текст и иконка.
+  /// Горизонтальные отступы меньше, чем у капсулы «Мышление».
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
     final Color fill = on ? _searchFill : _searchFillOff;
@@ -727,15 +729,15 @@ class _ChatScreenState extends State<ChatScreen> {
           borderRadius: BorderRadius.circular(_radius),
           border: Border.all(color: on ? _searchFill : p.border),
         ),
-        child: Row(
+        child: const Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.search_rounded, size: 15, color: _searchText),
-            const SizedBox(width: 6),
+            Icon(Icons.search_rounded, size: 15, color: _searchText),
+            SizedBox(width: 6),
             Text(
-              on ? 'Поиск Вкл' : 'Поиск Выкл',
+              'Поиск',
               maxLines: 1,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 13,
                 height: 1.2,
                 fontWeight: FontWeight.w700,
