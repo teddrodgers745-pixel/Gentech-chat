@@ -66,13 +66,18 @@ class _ChatScreenState extends State<ChatScreen> {
     Color(0xFFEF4444), // High — красный
   ];
 
-  /// Контрастные светлые цвета подписи уровня мышления: чем выше
-  /// уровень, тем светлее и чище текст на заливке.
-  static const List<Color> _reasoningTextColors = <Color>[
-    Color(0xFFF3E6D8), // Low
-    Color(0xFFFFF3E3), // Medium
-    Color(0xFFFFFFFF), // High
+  /// Цвет SVG-иконки мозга и подписи уровня мышления: Low — янтарный,
+  /// Medium — синий, High — красный.
+  static const List<Color> _reasoningLevelColors = <Color>[
+    Colors.amber, // Low
+    Colors.blue, // Medium
+    Colors.red, // High
   ];
+
+  /// SVG-иконка мозга с искрами для капсулы «Мышление»;
+  /// красится цветом уровня через ColorFilter.mode(..., BlendMode.srcIn).
+  static const String _brainSparkSvg =
+      "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z'/><path d='M19 3l1.5-1.5L22 3l-1.5 1.5zM5 3l1.5-1.5L8 3 6.5 4.5zM12 22l1.5-1.5L15 22l-1.5 1.5z'/></svg>";
 
   /// Светло-синяя заливка капсулы «Поиск» (включённое состояние).
   static const Color _searchFill = Color(0xFF3B82F6);
@@ -649,12 +654,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
   /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]):
   /// High залит красным.
-  /// Слева от подписи — SVG-иконка мышления (icon_thought.svg),
-  /// размер 20x20, цвет подбирается под заливку уровня.
+  /// Слева от подписи — SVG-иконка мозга с искрами (инлайн-SVG),
+  /// размер 20x20, цвет зависит от уровня мышления.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
-    final textColor = _reasoningTextColors[_reasoningLevel];
+    final levelColor = _reasoningLevelColors[_reasoningLevel];
     return Tooltip(
       message: 'Уровень размышлений: $label',
       child: InkWell(
@@ -678,14 +683,11 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SvgPicture.asset(
-                'assets/icons/icon_thought.svg',
+              SvgPicture.string(
+                _brainSparkSvg,
                 width: 20,
                 height: 20,
-                colorFilter: const ColorFilter.mode(
-                  Color(0xFFF6EFE6),
-                  BlendMode.srcIn,
-                ),
+                colorFilter: ColorFilter.mode(levelColor, BlendMode.srcIn),
               ),
               const SizedBox(width: 6),
               Text(
@@ -695,7 +697,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   fontSize: 13,
                   height: 1.2,
                   fontWeight: FontWeight.w700,
-                  color: textColor,
+                  color: levelColor,
                 ),
               ),
             ],
