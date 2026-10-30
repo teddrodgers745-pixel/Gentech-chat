@@ -650,7 +650,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
   /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]):
   /// High залит благородным терракотово-кирпичным Color(0xFFB85D4B).
-  /// Слева от подписи — картинка 32x32, файл зависит от уровня:
+  /// Слева от подписи — картинка 24x24, файл зависит от уровня:
   /// Low -> 'assets/icons/brain_low.png',
   /// Medium -> 'assets/icons/brain_medium.png',
   /// High -> 'assets/icons/brain_high.png'.
@@ -669,8 +669,9 @@ class _ChatScreenState extends State<ChatScreen> {
         borderRadius: BorderRadius.circular(_radius),
         onTap: _streaming ? null : _cycleReasoning,
         child: Container(
+          height: 38,
           constraints: const BoxConstraints(minWidth: 112),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
           decoration: BoxDecoration(
             color: fill,
             borderRadius: BorderRadius.circular(_radius),
@@ -688,8 +689,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               Image.asset(
                 assetPath,
-                width: 32,
-                height: 32,
+                width: 24,
+                height: 24,
                 fit: BoxFit.contain,
               ),
               const SizedBox(width: 6),
@@ -762,3 +763,4 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
+
