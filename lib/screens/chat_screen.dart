@@ -689,8 +689,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               Image.asset(
                 assetPath,
-                width: 24,
-                height: 24,
+                width: 28,
+                height: 28,
                 fit: BoxFit.contain,
               ),
               const SizedBox(width: 6),
