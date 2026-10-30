@@ -728,7 +728,7 @@ class _ChatScreenState extends State<ChatScreen> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+        padding: const EdgeInsets.only(left: 12, right: 24, top: 6, bottom: 6),
         decoration: BoxDecoration(
           color: on ? _searchFill : Colors.transparent,
           borderRadius: BorderRadius.circular(_radius),
