@@ -59,11 +59,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Цвет заливки капсулы «Мышление» зависит от выбранного уровня:
   /// Low — спокойный тёплый графит, Medium — насыщенный терракотовый,
-  /// High — контрастный красный Color(0xFFEF4444).
+  /// High — благородный терракотово-кирпичный Color(0xFFB85D4B).
   static const List<Color> _reasoningFills = <Color>[
     Color(0xFF71594B), // Low — спокойный, гармоничный к палитре
     Color(0xFFC07650), // Medium — насыщенный терракотовый
-    Color(0xFFEF4444), // High — красный
+    Color(0xFFB85D4B), // High — благородный терракотово-кирпичный
   ];
 
   /// Цвет подписи уровня мышления. Подпись обязана читаться на своей
@@ -73,7 +73,7 @@ class _ChatScreenState extends State<ChatScreen> {
   static const List<Color> _reasoningLevelColors = <Color>[
     Color(0xFFFFC107), // Low — янтарный, читается на тёплом графите
     Color(0xFFBFDBFE), // Medium — светло-синий, читается на терракоте
-    Color(0xFFFFF4F0), // High — тёплый белый, читается на красном
+    Color(0xFFFFF4F0), // High — тёплый белый, читается на терракотово-кирпичном
   ];
 
   /// Светло-синяя заливка капсулы «Поиск» (включённое состояние).
@@ -649,8 +649,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
   /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]):
-  /// High залит красным Color(0xFFEF4444).
-  /// Слева от подписи — картинка 24x24, файл зависит от уровня:
+  /// High залит благородным терракотово-кирпичным Color(0xFFB85D4B).
+  /// Слева от подписи — картинка 32x32, файл зависит от уровня:
   /// Low -> 'assets/icons/brain_low.png',
   /// Medium -> 'assets/icons/brain_medium.png',
   /// High -> 'assets/icons/brain_high.png'.
@@ -688,8 +688,8 @@ class _ChatScreenState extends State<ChatScreen> {
             children: [
               Image.asset(
                 assetPath,
-                width: 24,
-                height: 24,
+                width: 32,
+                height: 32,
                 fit: BoxFit.contain,
               ),
               const SizedBox(width: 6),
@@ -711,18 +711,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Капсула «Поиск».
-  /// Выключена: прозрачная капсула без фоновой заливки
-  /// (Colors.transparent), короткий текст «Поиск», тонкая рамка
-  /// и приглушённый цвет текста.
-  /// Включена: капсула загорается светло-синим (Color(0xFF3B82F6)),
-  /// текст «Поиск Вкл», размер растёт динамически под длину текста
-  /// (AnimatedContainer + AnimatedSize + MainAxisSize.min).
-  /// Лупа из search.svg крупная (20x20) и заметная: толстое кольцо
-  /// и рукоять; при включении она дополнительно становится яркой
-  /// (светлый colorFilter на синей заливке).
+  /// Текст ВСЕГДА просто 'Поиск'. Без AnimatedSize, только AnimatedContainer
+  /// для изменения цвета фона (синий при включении, прозрачный при выключении).
+  /// Ширина капсулы не меняется.
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
-    final label = on ? 'Поиск Вкл' : 'Поиск';
     return InkWell(
       borderRadius: BorderRadius.circular(_radius),
       onTap: _streaming
@@ -734,7 +727,7 @@ class _ChatScreenState extends State<ChatScreen> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOut,
-        padding: EdgeInsets.symmetric(horizontal: on ? 14 : 10, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: on ? _searchFill : Colors.transparent,
           borderRadius: BorderRadius.circular(_radius),
@@ -753,19 +746,14 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ),
             const SizedBox(width: 6),
-            AnimatedSize(
-              duration: const Duration(milliseconds: 160),
-              curve: Curves.easeOut,
-              alignment: Alignment.centerLeft,
-              child: Text(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.2,
-                  fontWeight: FontWeight.w700,
-                  color: on ? _searchTextOn : p.muted,
-                ),
+            Text(
+              'Поиск',
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.2,
+                fontWeight: FontWeight.w700,
+                color: on ? _searchTextOn : p.muted,
               ),
             ),
           ],
