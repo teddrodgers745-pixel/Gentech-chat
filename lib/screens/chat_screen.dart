@@ -714,7 +714,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Поиск».
   /// Текст ВСЕГДА просто 'Поиск'. Без AnimatedSize, только AnimatedContainer
   /// для изменения цвета фона (синий при включении, прозрачный при выключении).
-  /// Ширина капсулы не меняется.
+  /// Ширина капсулы слегка увеличена вправо (горизонтальный padding увеличен до 13).
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
     return InkWell(
@@ -728,7 +728,7 @@ class _ChatScreenState extends State<ChatScreen> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOut,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
         decoration: BoxDecoration(
           color: on ? _searchFill : Colors.transparent,
           borderRadius: BorderRadius.circular(_radius),
@@ -763,4 +763,3 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
-
