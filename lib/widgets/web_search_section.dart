@@ -6,8 +6,13 @@ import '../app_state.dart';
 import '../theme.dart';
 
 /// Секция настройки поиска в интернете.
-/// Четыре режима: Выключен, Авто (Polza), Sonar (Perplexity), DeepSeek (все-в-одном).
-/// Для режима «Авто (Polza)» доступен дополнительный тумблер «Чтение страниц (Fetch)».
+/// Главный тумблер «Использовать поиск»:
+///  - выключен — режим принудительно 'off', радио-кнопки режимов и тумблер
+///    Fetch полностью скрыты;
+///  - включён — список режимов раскрывается плавно (анимация), а тумблер
+///    «Чтение страниц (Fetch)» виден только для режима «Авто (Polza)».
+/// Все значения сохраняются через AppSettings (SharedPreferences):
+/// режим — webSearchMode, Fetch — webSearchEnabled.
 class WebSearchSection extends StatelessWidget {
   const WebSearchSection({super.key});
 
@@ -18,18 +23,33 @@ class WebSearchSection extends StatelessWidget {
       builder: (context, _) {
         final p = settings.palette;
         final mode = settings.webSearchMode;
-        final showFetch = mode == 'polza';
+        final enabled = mode != 'off';
+        final showFetch = enabled && mode == 'polza';
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _sectionHeader(p, 'ПОИСК В ИНТЕРНЕТЕ'),
-            const SizedBox(height: 8),
-            _modeTiles(p, mode),
-            if (showFetch) ...[
-              const SizedBox(height: 8),
-              _fetchTile(p),
-            ],
+            _masterTile(p, enabled),
+            AnimatedCrossFade(
+              duration: const Duration(milliseconds: 220),
+              sizeCurve: Curves.easeOutCubic,
+              crossFadeState: enabled
+                  ? CrossFadeState.showSecond
+                  : CrossFadeState.showFirst,
+              firstChild: const SizedBox(width: double.infinity),
+              secondChild: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const SizedBox(height: 8),
+                  _modeTiles(p, mode),
+                  if (showFetch) ...[
+                    const SizedBox(height: 8),
+                    _fetchTile(p),
+                  ],
+                ],
+              ),
+            ),
           ],
         );
       },
@@ -45,6 +65,23 @@ class WebSearchSection extends StatelessWidget {
         letterSpacing: 0.6,
         color: p.accent,
       ),
+    );
+  }
+
+  /// Главный тумблер. Значение выводится из режима: включён = режим не 'off'.
+  /// Выключение всегда приводит режим к 'off' и скрывает весь список;
+  /// включение возвращает режим к «Авто (Polza)».
+  Widget _masterTile(Palette p, bool enabled) {
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      title: const Text('Использовать поиск'),
+      subtitle: Text(
+        'Включить инструменты поиска в чате',
+        style: TextStyle(color: p.muted, fontSize: 12),
+      ),
+      value: enabled,
+      onChanged: (v) => settings.setWebSearchMode(v ? 'polza' : 'off'),
+      activeThumbColor: p.accent,
     );
   }
 
@@ -111,6 +148,8 @@ class WebSearchSection extends StatelessWidget {
     );
   }
 
+  /// Тумблер «Чтение страниц (Fetch)»: состояние в webSearchEnabled
+  /// (как и раньше), виден только при включённом поиске в режиме polza.
   Widget _fetchTile(Palette p) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -141,5 +180,3 @@ class _ModeOption {
 
   const _ModeOption(this.value, this.label, this.subtitle);
 }
-
-// trigger rebuild
