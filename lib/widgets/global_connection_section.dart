@@ -156,7 +156,7 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
         Text(
           'ПОДКЛЮЧЕНИЕ',
           style: TextStyle(
-            fontSize: 13,
+            fontSize: 16,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.6,
             color: p.accent,
@@ -210,15 +210,18 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
           ),
         ),
         const SizedBox(height: 8),
-        TextButton.icon(
+        OutlinedButton.icon(
           onPressed: _loadingModels ? null : _loadModels,
+          style: OutlinedButton.styleFrom(
+            side: BorderSide(color: p.accent.withValues(alpha: 0.6), width: 1),
+          ),
           icon: _loadingModels
               ? const SizedBox(
                   width: 16,
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Icon(Icons.cloud_download, size: 18),
+              : const Icon(Icons.cloud_download_outlined, size: 18),
           label: const Text('Загрузить модели'),
         ),
         if (_modelsError != null)

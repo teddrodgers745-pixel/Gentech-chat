@@ -548,6 +548,11 @@ class _ChatScreenState extends State<ChatScreen> {
             border: Border.all(color: p.border),
             boxShadow: [
               BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 15,
+                spreadRadius: 1,
+              ),
+              BoxShadow(
                 color: Colors.black.withValues(alpha: 0.10),
                 blurRadius: 14,
                 offset: const Offset(0, 3),
@@ -669,7 +674,7 @@ class _ChatScreenState extends State<ChatScreen> {
         borderRadius: BorderRadius.circular(_radius),
         onTap: _streaming ? null : _cycleReasoning,
         child: Container(
-          height: 38,
+          height: 36,
           constraints: const BoxConstraints(minWidth: 112),
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
           decoration: BoxDecoration(
@@ -728,7 +733,9 @@ class _ChatScreenState extends State<ChatScreen> {
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOut,
-        padding: const EdgeInsets.only(left: 12, right: 24, top: 6, bottom: 6),
+        height: 36,
+        padding: const EdgeInsets.only(left: 12, right: 24),
+        alignment: Alignment.centerLeft,
         decoration: BoxDecoration(
           color: on ? _searchFill : Colors.transparent,
           borderRadius: BorderRadius.circular(_radius),
