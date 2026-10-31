@@ -664,10 +664,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High
   /// -> xHigh -> Max. Заливка капсулы меняется вместе с уровнем
   /// (см. [_reasoningFills]).
-  /// Слева от подписи — значок уровня 32, выровнен по центру капсулы
-  /// (Row центрирует детей вертикально по умолчанию):
-  /// Low -> Icons.bolt, Medium -> Icons.psychology,
-  /// High -> Icons.auto_awesome,
+  /// Слева от подписи — значок уровня 32, выровнен по центру капсулы.
+  /// Единый линейный комплект иконок по нарастанию накала мысли:
+  /// Low -> Icons.speed (лёгкий, быстрый ход),
+  /// Medium -> Icons.insights (осмысленная глубина),
+  /// High -> Icons.flare (яркая вспышка),
   /// xHigh -> прежняя картинка мозга (assets/icons/brain_high.png, 32x32),
   /// Max -> Icons.biotech. Значки красятся цветом уровня.
   Widget _reasoningCapsule() {
@@ -676,14 +677,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final levelColor = _reasoningLevelColors[_reasoningLevel];
     final Widget leading;
     if (_reasoningLevel == 0) {
-      // Low: иконка «молния» цвета уровня.
-      leading = Icon(Icons.bolt, size: 32, color: levelColor);
+      // Low: «спидометр» цвета уровня — лёгкий, быстрый режим.
+      leading = Icon(Icons.speed, size: 32, color: levelColor);
     } else if (_reasoningLevel == 1) {
-      // Medium: иконка «психология» цвета уровня.
-      leading = Icon(Icons.psychology, size: 32, color: levelColor);
+      // Medium: «инсайты» цвета уровня — средняя глубина.
+      leading = Icon(Icons.insights, size: 32, color: levelColor);
     } else if (_reasoningLevel == 2) {
-      // High: иконка «искры» цвета уровня.
-      leading = Icon(Icons.auto_awesome, size: 32, color: levelColor);
+      // High: «вспышка» цвета уровня — высокий накал.
+      leading = Icon(Icons.flare, size: 32, color: levelColor);
     } else if (_reasoningLevel == 4) {
       // Max: вместо картинки мозга — иконка «биотех» цвета уровня.
       leading = Icon(Icons.biotech, size: 32, color: levelColor);
@@ -719,6 +720,8 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
+            // Значок и подпись выровнены по вертикальному центру капсулы.
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               leading,
               const SizedBox(width: 6),
