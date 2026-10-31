@@ -664,27 +664,33 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High
   /// -> xHigh -> Max. Заливка капсулы меняется вместе с уровнем
   /// (см. [_reasoningFills]).
-  /// Слева от подписи — картинка мозга 32x32, файл зависит от уровня:
-  /// Low -> 'assets/icons/brain_low.png',
-  /// Medium -> 'assets/icons/brain_medium.png',
-  /// High/xHigh -> 'assets/icons/brain_high.png'.
-  /// Для Max вместо картинки — иконка Icons.biotech 32 цвета уровня.
+  /// Слева от подписи — значок уровня 32, выровнен по центру капсулы
+  /// (Row центрирует детей вертикально по умолчанию):
+  /// Low -> Icons.bolt, Medium -> Icons.psychology,
+  /// High -> Icons.auto_awesome,
+  /// xHigh -> прежняя картинка мозга (assets/icons/brain_high.png, 32x32),
+  /// Max -> Icons.biotech. Значки красятся цветом уровня.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
     final levelColor = _reasoningLevelColors[_reasoningLevel];
     final Widget leading;
-    if (_reasoningLevel == 4) {
+    if (_reasoningLevel == 0) {
+      // Low: иконка «молния» цвета уровня.
+      leading = Icon(Icons.bolt, size: 32, color: levelColor);
+    } else if (_reasoningLevel == 1) {
+      // Medium: иконка «психология» цвета уровня.
+      leading = Icon(Icons.psychology, size: 32, color: levelColor);
+    } else if (_reasoningLevel == 2) {
+      // High: иконка «искры» цвета уровня.
+      leading = Icon(Icons.auto_awesome, size: 32, color: levelColor);
+    } else if (_reasoningLevel == 4) {
       // Max: вместо картинки мозга — иконка «биотех» цвета уровня.
       leading = Icon(Icons.biotech, size: 32, color: levelColor);
     } else {
-      final assetPath = switch (_reasoningLevel) {
-        0 => 'assets/icons/brain_low.png',
-        1 => 'assets/icons/brain_medium.png',
-        _ => 'assets/icons/brain_high.png',
-      };
+      // xHigh: прежняя картинка мозга 32x32 — без изменений.
       leading = Image.asset(
-        assetPath,
+        'assets/icons/brain_high.png',
         width: 32,
         height: 32,
         fit: BoxFit.contain,
