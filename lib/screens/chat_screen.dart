@@ -667,8 +667,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Слева от подписи — значок уровня 32, выровнен по центру капсулы.
   /// Единый линейный комплект иконок по нарастанию накала мысли:
   /// Low -> Icons.speed (лёгкий, быстрый ход),
-  /// Medium -> Icons.insights (осмысленная глубина),
-  /// High -> Icons.flare (яркая вспышка),
+  /// Medium -> Icons.lightbulb_outline (осмысленная глубина),
+  /// High -> Icons.troubleshoot (высокий накал),
   /// xHigh -> прежняя картинка мозга (assets/icons/brain_high.png, 32x32),
   /// Max -> Icons.biotech. Значки красятся цветом уровня.
   Widget _reasoningCapsule() {
@@ -680,11 +680,11 @@ class _ChatScreenState extends State<ChatScreen> {
       // Low: «спидометр» цвета уровня — лёгкий, быстрый режим.
       leading = Icon(Icons.speed, size: 32, color: levelColor);
     } else if (_reasoningLevel == 1) {
-      // Medium: «инсайты» цвета уровня — средняя глубина.
-      leading = Icon(Icons.insights, size: 32, color: levelColor);
+      // Medium: «лампочка» цвета уровня — средняя глубина.
+      leading = Icon(Icons.lightbulb_outline, size: 32, color: levelColor);
     } else if (_reasoningLevel == 2) {
-      // High: «вспышка» цвета уровня — высокий накал.
-      leading = Icon(Icons.flare, size: 32, color: levelColor);
+      // High: «поиск неполадок» цвета уровня — высокий накал.
+      leading = Icon(Icons.troubleshoot, size: 32, color: levelColor);
     } else if (_reasoningLevel == 4) {
       // Max: вместо картинки мозга — иконка «биотех» цвета уровня.
       leading = Icon(Icons.biotech, size: 32, color: levelColor);
