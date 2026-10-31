@@ -131,4 +131,4 @@ class _ModeOption {
   const _ModeOption(this.value, this.label, this.subtitle);
 }
 
-=== конец lib/widgets/web_search_section.dart
+// trigger rebuild
