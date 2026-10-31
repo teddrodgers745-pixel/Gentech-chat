@@ -30,6 +30,10 @@ dependencies:
   permission_handler: ^11.0.0
   # SVG-иконки капсул «Поиск» и «Мышление» в панели ввода.
   flutter_svg: ^2.0.9
+  # Голосовой Live-режим (WebSocket, запись PCM 16-bit, воспроизведение аудио).
+  web_socket_channel: any
+  record: ^5.1.2
+  just_audio: ^0.9.40
 
 dev_dependencies:
   flutter_test:
