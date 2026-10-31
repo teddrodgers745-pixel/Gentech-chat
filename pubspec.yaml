@@ -35,6 +35,9 @@ dependencies:
   record: ^5.1.2
   just_audio: ^0.9.40
 
+dependency_overrides:
+  record_linux: ^1.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
