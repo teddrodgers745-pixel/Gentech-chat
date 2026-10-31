@@ -25,7 +25,7 @@ class WebSearchSection extends StatelessWidget {
           children: [
             _sectionHeader(p, 'ПОИСК В ИНТЕРНЕТЕ'),
             const SizedBox(height: 8),
-            ..._modeTiles(p, mode),
+            _modeTiles(p, mode),
             if (showFetch) ...[
               const SizedBox(height: 8),
               _fetchTile(p),
@@ -48,8 +48,11 @@ class WebSearchSection extends StatelessWidget {
     );
   }
 
-  List<Widget> _modeTiles(Palette p, String current) {
-    final modes = <_ModeOption>[
+  /// Радио-список режимов. Начиная с Flutter 3.32 значение группы
+  /// управляется виджетом-предком RadioGroup: у RadioListTile
+  /// groupValue/onChanged больше не задаются напрямую.
+  Widget _modeTiles(Palette p, String current) {
+    const modes = <_ModeOption>[
       _ModeOption('off', 'Выключен', ''),
       _ModeOption('polza', 'Авто (Polza)', 'Базовый поиск через провайдера Polza'),
       _ModeOption('sonar', 'Sonar (Perplexity)', 'Поиск через Perplexity Sonar'),
@@ -60,44 +63,52 @@ class WebSearchSection extends StatelessWidget {
       ),
     ];
 
-    return [
-      for (final opt in modes)
-        Container(
-          margin: const EdgeInsets.only(bottom: 8),
-          decoration: BoxDecoration(
-            color: p.card,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: current == opt.value ? p.accent : p.border,
-              width: current == opt.value ? 2 : 1,
-            ),
-          ),
-          child: RadioListTile<String>(
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-            visualDensity: VisualDensity.compact,
-            dense: true,
-            value: opt.value,
-            groupValue: current,
-            onChanged: (v) => settings.setWebSearchMode(v!),
-            activeColor: p.accent,
-            title: Text(
-              opt.label,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: p.text,
-              ),
-            ),
-            subtitle: opt.subtitle.isNotEmpty
-                ? Text(
-                    opt.subtitle,
-                    style: TextStyle(color: p.muted, fontSize: 12),
-                  )
-                : null,
-            controlAffinity: ListTileControlAffinity.trailing,
+    return RadioGroup<String>(
+      groupValue: current,
+      onChanged: (v) => settings.setWebSearchMode(v!),
+      child: Column(
+        children: [
+          for (final opt in modes) _modeTile(p, opt, current),
+        ],
+      ),
+    );
+  }
+
+  Widget _modeTile(Palette p, _ModeOption opt, String current) {
+    final selected = current == opt.value;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: selected ? p.accent : p.border,
+          width: selected ? 2 : 1,
+        ),
+      ),
+      child: RadioListTile<String>(
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+        visualDensity: VisualDensity.compact,
+        dense: true,
+        value: opt.value,
+        activeColor: p.accent,
+        title: Text(
+          opt.label,
+          style: TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w600,
+            color: p.text,
           ),
         ),
-    ];
+        subtitle: opt.subtitle.isNotEmpty
+            ? Text(
+                opt.subtitle,
+                style: TextStyle(color: p.muted, fontSize: 12),
+              )
+            : null,
+        controlAffinity: ListTileControlAffinity.trailing,
+      ),
+    );
   }
 
   Widget _fetchTile(Palette p) {
@@ -117,7 +128,7 @@ class WebSearchSection extends StatelessWidget {
         ),
         value: settings.webSearchEnabled,
         onChanged: (v) => settings.setWebSearch(v),
-        activeColor: p.accent,
+        activeThumbColor: p.accent,
       ),
     );
   }
