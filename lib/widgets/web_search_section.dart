@@ -148,26 +148,85 @@ class WebSearchSection extends StatelessWidget {
     );
   }
 
-  /// Тумблер «Чтение страниц (Fetch)»: состояние в webSearchEnabled
-  /// (как и раньше), виден только при включённом поиске в режиме polza.
+  /// Пункт «Чтение страниц (Fetch)» в стиле остальных режимов:
+  /// карточка с радио-кружочком (точка акцентного цвета, когда включено).
+  /// Состояние по-прежнему в webSearchEnabled, сохранение не изменилось.
+  /// Виден только при включённом поиске в режиме polza.
   Widget _fetchTile(Palette p) {
+    final on = settings.webSearchEnabled;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: BoxDecoration(
-        color: p.surface,
+        color: p.card,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: p.border),
-      ),
-      child: SwitchListTile(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Чтение страниц (Fetch)'),
-        subtitle: Text(
-          'Позволяет модели загружать и читать содержимое найденных страниц',
-          style: TextStyle(color: p.muted, fontSize: 12),
+        border: Border.all(
+          color: on ? p.accent : p.border,
+          width: on ? 2 : 1,
         ),
-        value: settings.webSearchEnabled,
-        onChanged: (v) => settings.setWebSearch(v),
-        activeThumbColor: p.accent,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => settings.setWebSearch(!on),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Чтение страниц (Fetch)',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: p.text,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Позволяет модели загружать и читать содержимое найденных страниц',
+                        style: TextStyle(color: p.muted, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                _fetchRadioDot(p, on),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Кружочек в стиле радио-кнопки остальных режимов: с точкой
+  /// акцентного цвета, когда Fetch включён, пустой — когда выключен.
+  Widget _fetchRadioDot(Palette p, bool selected) {
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOut,
+      width: 22,
+      height: 22,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: selected ? p.accent : p.muted,
+          width: 2,
+        ),
+      ),
+      alignment: Alignment.center,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        width: selected ? 11 : 0,
+        height: selected ? 11 : 0,
+        decoration: BoxDecoration(
+          color: p.accent,
+          shape: BoxShape.circle,
+        ),
       ),
     );
   }
