@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="120" height="120">
+  <defs>
+    <radialGradient id="brainGlow">
+      <stop offset="0%" stop-color="#ffe57a" stop-opacity="1"/>
+      <stop offset="60%" stop-color="#ffb300" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#ff6f00" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="brainStroke" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#7c4dff"/>
+      <stop offset="100%" stop-color="#448aff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- внутреннее свечение -->
+  <circle cx="50" cy="50" r="30" fill="url(#brainGlow)">
+    <animate attributeName="r" values="22;30;22" dur="2s" repeatCount="indefinite"/>
+    <animate attributeName="opacity" values="0.4;1;0.4" dur="2s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- контур мозга -->
+  <g fill="none" stroke="url(#brainStroke)" stroke-width="2.5" stroke-linecap="round">
+    <path d="M30,30 C25,20 40,15 48,22 C52,15 65,15 70,22 C78,18 85,28 80,38 C88,42 88,55 80,60 C84,70 75,80 65,76 C60,84 48,84 44,76 C34,80 25,70 28,60 C20,55 20,42 30,38 C25,34 26,28 30,30 Z"/>
+    <!-- извилины -->
+    <path d="M40,35 C45,32 50,35 52,40"/>
+    <path d="M55,35 C60,35 65,40 63,45"/>
+    <path d="M35,50 C40,48 45,52 45,58"/>
+    <path d="M55,55 C60,52 65,58 62,63"/>
+    <path d="M45,68 C48,64 55,64 58,68"/>
+  </g>
+
+  <!-- нейронные вспышки -->
+  <g fill="#fff8c4">
+    <circle cx="45" cy="40" r="2.5">
+      <animate attributeName="opacity" values="0;1;0" dur="1.5s" begin="0s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="58" cy="48" r="2.5">
+      <animate attributeName="opacity" values="0;1;0" dur="1.5s" begin="0.5s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="50" cy="62" r="2.5">
+      <animate attributeName="opacity" values="0;1;0" dur="1.5s" begin="1s" repeatCount="indefinite"/>
+    </circle>
+  </g>
+</svg>
