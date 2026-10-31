@@ -10,7 +10,6 @@ import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../app_state.dart';
 
@@ -26,18 +25,20 @@ class LiveScreen extends StatefulWidget {
 
 class _LiveScreenState extends State<LiveScreen>
     with SingleTickerProviderStateMixin {
-  static const String _wsEndpoint =
+  static const String _wsBaseUrl =
       'wss://generativelanguage.googleapis.com/ws/'
       'google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
 
-  /// Константа ключа по умолчанию (если не передан через настройки).
+  static const String _defaultLiveModel = 'models/gemini-2.0-flash-exp';
+  static const String _inputAudioMime = 'audio/pcm;rate=16000';
+  static const String _outputAudioMime = 'audio/pcm;rate=24000';
   static const String _fallbackGeminiApiKey = '';
 
   late final AnimationController _pulseController;
   final AudioRecorder _recorder = AudioRecorder();
   final AudioPlayer _player = AudioPlayer();
 
-  WebSocketChannel? _channel;
+  WebSocket? _ws;
   StreamSubscription<dynamic>? _wsSub;
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<PlayerState>? _playerSub;
@@ -46,7 +47,9 @@ class _LiveScreenState extends State<LiveScreen>
   bool _connected = false;
   bool _speaking = false;
   bool _muted = false;
+  bool _closingManually = false;
   String _status = 'Подключение...';
+  String? _errorDetails;
 
   @override
   void initState() {
@@ -62,7 +65,9 @@ class _LiveScreenState extends State<LiveScreen>
         if (_speaking) {
           setState(() {
             _speaking = false;
-            if (_connected) _status = 'Слушаю...';
+            if (_connected) {
+              _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+            }
           });
         }
       }
@@ -73,6 +78,7 @@ class _LiveScreenState extends State<LiveScreen>
 
   @override
   void dispose() {
+    _closingManually = true;
     _stopSession();
     _playerSub?.cancel();
     _pulseController.dispose();
@@ -84,69 +90,163 @@ class _LiveScreenState extends State<LiveScreen>
   Future<String> _resolveApiKey() async {
     final direct = widget.apiKey?.trim() ?? '';
     if (direct.isNotEmpty) return direct;
+
     try {
       final f = File('gemini_api.txt');
       if (await f.exists()) {
         final txt = (await f.readAsString()).trim();
         if (txt.isNotEmpty) return txt;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Gemini Live: не удалось прочитать gemini_api.txt: $e');
+    }
+
     final cfgKey = effectiveConfig().apiKey.trim();
     if (cfgKey.isNotEmpty) return cfgKey;
+
+    final settingsKey = settings.apiKey.trim();
+    if (settingsKey.isNotEmpty) return settingsKey;
+
     return _fallbackGeminiApiKey;
   }
 
+  String _resolveModel() {
+    final raw = effectiveConfig().model.trim();
+    if (raw.contains('gemini-2.0-flash-exp') || raw.contains('gemini-3.8-live')) {
+      return raw.startsWith('models/') ? raw : 'models/$raw';
+    }
+    return _defaultLiveModel;
+  }
+
+  String _formatReason(Object error, [String? closeReason, int? closeCode]) {
+    final combined = '${error.toString()} ${closeReason ?? ''}'.toLowerCase();
+    if (combined.contains('api_key_invalid') ||
+        combined.contains('api key not valid') ||
+        combined.contains('invalid api key') ||
+        combined.contains('unauthenticated') ||
+        combined.contains('permission_denied') ||
+        combined.contains('401') ||
+        combined.contains('403') ||
+        closeCode == 1008) {
+      return 'Ошибка: Неверный ключ';
+    }
+    if (combined.contains('not found') ||
+        combined.contains('not_found') ||
+        combined.contains('404') ||
+        combined.contains('model')) {
+      if (combined.contains('not found') ||
+          combined.contains('not_found') ||
+          combined.contains('404') ||
+          combined.contains('unsupported')) {
+        return 'Ошибка: Модель не найдена';
+      }
+    }
+    if (combined.contains('quota') ||
+        combined.contains('resource_exhausted') ||
+        combined.contains('429')) {
+      return 'Ошибка: Превышен лимит запросов (429)';
+    }
+    if (closeReason != null && closeReason.trim().isNotEmpty) {
+      return 'Ошибка: ${closeReason.trim()}';
+    }
+    final raw = error.toString().trim();
+    if (raw.isNotEmpty && raw != 'null') {
+      return 'Ошибка: $raw';
+    }
+    return 'Ошибка соединения с Gemini Live API';
+  }
+
+  void _reportError(String message, [Object? rawError, StackTrace? st]) {
+    debugPrint('Gemini Live error: $message | raw: $rawError');
+    if (st != null) {
+      debugPrint(st.toString());
+    }
+    if (!mounted) return;
+    setState(() {
+      _connected = false;
+      _speaking = false;
+      _status = message;
+      _errorDetails = rawError?.toString();
+    });
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
   Future<void> _startSession() async {
+    _closingManually = false;
     setState(() {
       _status = 'Подключение...';
+      _errorDetails = null;
       _connected = false;
       _speaking = false;
     });
 
-    final perm = await Permission.microphone.request();
-    if (!perm.isGranted) {
-      if (!mounted) return;
-      setState(() => _status = 'Нет доступа к микрофону');
-      return;
-    }
-
-    final key = await _resolveApiKey();
-    final uri = Uri.parse(
-      key.isEmpty ? _wsEndpoint : '$_wsEndpoint?key=${Uri.encodeQueryComponent(key)}',
-    );
-
     try {
-      final channel = WebSocketChannel.connect(uri);
-      _channel = channel;
-      _wsSub = channel.stream.listen(
-        _onWsMessage,
-        onError: (_) {
-          if (!mounted) return;
-          setState(() {
-            _connected = false;
-            _speaking = false;
-            _status = 'Ошибка соединения';
-          });
-        },
-        onDone: () {
-          if (!mounted) return;
-          setState(() {
-            _connected = false;
-            _speaking = false;
-            _status = 'Соединение закрыто';
-          });
-        },
-      );
+      final perm = await Permission.microphone.request();
+      if (!perm.isGranted) {
+        _reportError('Ошибка: Нет доступа к микрофону');
+        return;
+      }
 
+      final key = await _resolveApiKey();
+      if (key.isEmpty) {
+        _reportError('Ошибка: Неверный ключ (API-ключ не задан в настройках)');
+        return;
+      }
+
+      final url = '$_wsBaseUrl?key=${Uri.encodeQueryComponent(key)}';
+      debugPrint('Gemini Live: подключение к $_wsBaseUrl');
+
+      final ws = await WebSocket.connect(url).timeout(
+        const Duration(seconds: 20),
+      );
+      _ws = ws;
+
+      final modelName = _resolveModel();
       final setupMsg = <String, dynamic>{
         'setup': <String, dynamic>{
-          'model': 'models/gemini-2.0-flash-exp',
+          'model': modelName,
           'generationConfig': <String, dynamic>{
             'responseModalities': <String>['AUDIO'],
           },
         },
       };
-      channel.sink.add(jsonEncode(setupMsg));
+      debugPrint(
+        'Gemini Live: отправка setup ($modelName, input=$_inputAudioMime, output=$_outputAudioMime)',
+      );
+      ws.add(jsonEncode(setupMsg));
+
+      _wsSub = ws.listen(
+        _onWsMessage,
+        onError: (Object err, StackTrace st) {
+          if (_closingManually) return;
+          final msg = _formatReason(err, ws.closeReason, ws.closeCode);
+          _reportError(msg, err, st);
+        },
+        onDone: () {
+          if (_closingManually || !mounted) return;
+          final code = ws.closeCode;
+          final reason = ws.closeReason;
+          debugPrint('Gemini Live: WebSocket закрыт (code=$code, reason=$reason)');
+          if ((reason != null && reason.trim().isNotEmpty) ||
+              (code != null && code != WebSocketStatus.normalClosure)) {
+            final msg = _formatReason(
+              reason ?? 'Код закрытия $code',
+              reason,
+              code,
+            );
+            _reportError(msg, 'code=$code, reason=$reason');
+          } else {
+            setState(() {
+              _connected = false;
+              _speaking = false;
+              _status = 'Соединение завершено';
+            });
+          }
+        },
+        cancelOnError: false,
+      );
 
       await _startMicStream();
       if (!mounted) return;
@@ -154,12 +254,11 @@ class _LiveScreenState extends State<LiveScreen>
         _connected = true;
         _status = 'Слушаю...';
       });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _connected = false;
-        _status = 'Не удалось подключиться';
-      });
+    } on TimeoutException catch (e, st) {
+      _reportError('Ошибка: Таймаут подключения к серверу', e, st);
+    } catch (e, st) {
+      final msg = _formatReason(e);
+      _reportError(msg, e, st);
     }
   }
 
@@ -175,22 +274,30 @@ class _LiveScreenState extends State<LiveScreen>
         numChannels: 1,
       ),
     );
-    _micSub = stream.listen((chunk) {
-      if (_muted || !_connected || chunk.isEmpty) return;
-      final payload = <String, dynamic>{
-        'realtimeInput': <String, dynamic>{
-          'mediaChunks': <Map<String, dynamic>>[
-            <String, dynamic>{
-              'mimeType': 'audio/pcm;rate=16000',
-              'data': base64Encode(chunk),
-            },
-          ],
-        },
-      };
-      try {
-        _channel?.sink.add(jsonEncode(payload));
-      } catch (_) {}
-    });
+    _micSub = stream.listen(
+      (chunk) {
+        final ws = _ws;
+        if (_muted || !_connected || chunk.isEmpty || ws == null) return;
+        final payload = <String, dynamic>{
+          'realtimeInput': <String, dynamic>{
+            'mediaChunks': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'mimeType': _inputAudioMime,
+                'data': base64Encode(chunk),
+              },
+            ],
+          },
+        };
+        try {
+          ws.add(jsonEncode(payload));
+        } catch (e, st) {
+          debugPrint('Gemini Live: ошибка отправки аудио: $e\n$st');
+        }
+      },
+      onError: (Object e, StackTrace st) {
+        debugPrint('Gemini Live: ошибка потока микрофона: $e\n$st');
+      },
+    );
   }
 
   void _onWsMessage(dynamic raw) {
@@ -205,6 +312,15 @@ class _LiveScreenState extends State<LiveScreen>
       }
       final decoded = jsonDecode(text);
       if (decoded is! Map) return;
+
+      final errorObj = decoded['error'];
+      if (errorObj is Map) {
+        final errMsg = errorObj['message']?.toString() ?? errorObj.toString();
+        final formatted = _formatReason(errMsg);
+        _reportError(formatted, errMsg);
+        return;
+      }
+
       final serverContent = decoded['serverContent'];
       if (serverContent is Map) {
         final modelTurn = serverContent['modelTurn'];
@@ -213,8 +329,11 @@ class _LiveScreenState extends State<LiveScreen>
             if (part is! Map) continue;
             final inlineData = part['inlineData'];
             if (inlineData is Map) {
+              final mime = (inlineData['mimeType'] as String?) ?? _outputAudioMime;
               final data = inlineData['data'];
-              if (data is String && data.isNotEmpty) {
+              if (data is String &&
+                  data.isNotEmpty &&
+                  mime.startsWith('audio/pcm')) {
                 _incomingPcmBuffer.addAll(base64Decode(data));
                 if (mounted && !_speaking) {
                   setState(() {
@@ -233,7 +352,9 @@ class _LiveScreenState extends State<LiveScreen>
           _playPcmBytes(bytes);
         }
       }
-    } catch (_) {}
+    } catch (e, st) {
+      debugPrint('Gemini Live: ошибка разбора сообщения: $e\n$st');
+    }
   }
 
   Future<void> _playPcmBytes(Uint8List pcmBytes) async {
@@ -251,7 +372,8 @@ class _LiveScreenState extends State<LiveScreen>
       });
       await _player.setFilePath(file.path);
       await _player.play();
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('Gemini Live: ошибка воспроизведения PCM: $e\n$st');
       if (!mounted) return;
       setState(() {
         _speaking = false;
@@ -269,30 +391,26 @@ class _LiveScreenState extends State<LiveScreen>
     final blockAlign = channels * 2;
     final dataSize = pcm.length;
     final header = ByteData(44);
-    // "RIFF"
     header.setUint8(0, 0x52);
     header.setUint8(1, 0x49);
     header.setUint8(2, 0x46);
     header.setUint8(3, 0x46);
     header.setUint32(4, 36 + dataSize, Endian.little);
-    // "WAVE"
     header.setUint8(8, 0x57);
     header.setUint8(9, 0x41);
     header.setUint8(10, 0x56);
     header.setUint8(11, 0x45);
-    // "fmt "
     header.setUint8(12, 0x66);
     header.setUint8(13, 0x6D);
     header.setUint8(14, 0x74);
     header.setUint8(15, 0x20);
     header.setUint32(16, 16, Endian.little);
-    header.setUint16(20, 1, Endian.little); // PCM
+    header.setUint16(20, 1, Endian.little);
     header.setUint16(22, channels, Endian.little);
     header.setUint32(24, sampleRate, Endian.little);
     header.setUint32(28, byteRate, Endian.little);
     header.setUint16(32, blockAlign, Endian.little);
-    header.setUint16(34, 16, Endian.little); // 16-bit
-    // "data"
+    header.setUint16(34, 16, Endian.little);
     header.setUint8(36, 0x64);
     header.setUint8(37, 0x61);
     header.setUint8(38, 0x74);
@@ -306,20 +424,36 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   Future<void> _stopSession() async {
+    _closingManually = true;
     try {
       await _micSub?.cancel();
       _micSub = null;
       await _recorder.stop();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Gemini Live: ошибка остановки микрофона: $e');
+    }
     try {
       await _wsSub?.cancel();
       _wsSub = null;
-      await _channel?.sink.close();
-      _channel = null;
-    } catch (_) {}
+      final ws = _ws;
+      _ws = null;
+      if (ws != null) {
+        await ws.close();
+      }
+    } catch (e) {
+      debugPrint('Gemini Live: ошибка закрытия WebSocket: $e');
+    }
     try {
       await _player.stop();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Gemini Live: ошибка остановки плеера: $e');
+    }
+  }
+
+  Future<void> _endCall() async {
+    await _stopSession();
+    if (!mounted) return;
+    Navigator.of(context).pop();
   }
 
   @override
@@ -342,66 +476,84 @@ class _LiveScreenState extends State<LiveScreen>
           children: [
             const SizedBox(height: 24),
             Center(
-              child: AnimatedBuilder(
-                animation: _pulseController,
-                builder: (context, _) {
-                  final t = _pulseController.value;
-                  final scale = _connected ? (1.0 + t * 0.22) : 1.0;
-                  final circleColor = _speaking
-                      ? accent
-                      : (_connected
-                          ? accent.withValues(alpha: 0.75)
-                          : muted.withValues(alpha: 0.35));
-                  return Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                       SizedBox(
-                        width: 220,
-                        height: 220,
-                        child: Center(
-                          child: Transform.scale(
-                            scale: scale,
-                            child: Container(
-                              width: 150,
-                              height: 150,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: circleColor.withValues(alpha: 0.2),
-                                border: Border.all(
-                                  color: circleColor,
-                                  width: 3,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: circleColor.withValues(alpha: 0.35),
-                                    blurRadius: 32,
-                                    spreadRadius: 6,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: AnimatedBuilder(
+                  animation: _pulseController,
+                  builder: (context, _) {
+                    final t = _pulseController.value;
+                    final scale = _connected ? (1.0 + t * 0.22) : 1.0;
+                    final circleColor = _speaking
+                        ? accent
+                        : (_connected
+                            ? accent.withValues(alpha: 0.75)
+                            : muted.withValues(alpha: 0.35));
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        SizedBox(
+                          width: 220,
+                          height: 220,
+                          child: Center(
+                            child: Transform.scale(
+                              scale: scale,
+                              child: Container(
+                                width: 150,
+                                height: 150,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: circleColor.withValues(alpha: 0.2),
+                                  border: Border.all(
+                                    color: circleColor,
+                                    width: 3,
                                   ),
-                                ],
-                              ),
-                              child: Icon(
-                                _speaking
-                                    ? Icons.graphic_eq_rounded
-                                    : Icons.mic_rounded,
-                                size: 56,
-                                color: text,
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: circleColor.withValues(alpha: 0.35),
+                                      blurRadius: 32,
+                                      spreadRadius: 6,
+                                    ),
+                                  ],
+                                ),
+                                child: Icon(
+                                  _speaking
+                                      ? Icons.graphic_eq_rounded
+                                      : Icons.mic_rounded,
+                                  size: 56,
+                                  color: text,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(height: 28),
-                      Text(
-                        _status,
-                        style: const TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w600,
-                          color: text,
+                        const SizedBox(height: 28),
+                        Text(
+                          _status,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w600,
+                            color: text,
+                          ),
                         ),
-                      ),
-                    ],
-                  );
-                },
+                        if (_errorDetails != null &&
+                            _errorDetails!.trim().isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            _errorDetails!,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 13,
+                              color: muted,
+                            ),
+                          ),
+                        ],
+                      ],
+                    );
+                  },
+                ),
               ),
             ),
             Padding(
@@ -429,7 +581,7 @@ class _LiveScreenState extends State<LiveScreen>
                   const SizedBox(width: 24),
                   IconButton.filled(
                     tooltip: 'Завершить',
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: _endCall,
                     style: IconButton.styleFrom(
                       backgroundColor: const Color(0xFFB3261E),
                       foregroundColor: Colors.white,
