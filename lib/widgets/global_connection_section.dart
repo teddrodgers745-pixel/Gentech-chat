@@ -221,7 +221,7 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : const Icon(Icons.cloud_download_outlined, size: 18),
+              : const Icon(Icons.keyboard_double_arrow_down, size: 24),
           label: const Text('Загрузить модели'),
         ),
         if (_modelsError != null)

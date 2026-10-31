@@ -40,7 +40,8 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _stick = true;
   Timer? _uiTimer;
 
-  /// Уровень размышлений: 0 = Low, 1 = Medium, 2 = High.
+  /// Уровень размышлений: 0 = Low, 1 = Medium, 2 = High,
+  /// 3 = xHigh, 4 = Max.
   int _reasoningLevel = 0;
 
   /// Вложения, ожидающие отправки (файлы и картинки).
@@ -51,6 +52,8 @@ class _ChatScreenState extends State<ChatScreen> {
     'Low',
     'Medium',
     'High',
+    'xHigh',
+    'Max',
   ];
 
   /// Единый радиус скругления панели ввода и капсулы: без прямых углов
@@ -59,21 +62,27 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Цвет заливки капсулы «Мышление» зависит от выбранного уровня:
   /// Low — спокойный тёплый графит, Medium — насыщенный терракотовый,
-  /// High — благородный терракотово-кирпичный Color(0xFFB85D4B).
+  /// High — благородный терракотово-кирпичный Color(0xFFB85D4B),
+  /// xHigh — глубокий терракотово-кирпичный, Max — жжёный тёмный кирпич.
   static const List<Color> _reasoningFills = <Color>[
     Color(0xFF71594B), // Low — спокойный, гармоничный к палитре
     Color(0xFFC07650), // Medium — насыщенный терракотовый
     Color(0xFFB85D4B), // High — благородный терракотово-кирпичный
+    Color(0xFF9C4A34), // xHigh — глубокий терракотово-кирпичный
+    Color(0xFF7D3524), // Max — жжёный тёмный кирпич
   ];
 
   /// Цвет подписи уровня мышления. Подпись обязана читаться на своей
   /// заливке, поэтому Low — янтарный, Medium — светло-синий, High —
   /// тёплый белый: тёмно-синий на терракоте и красный на красном
-  /// сливались бы с фоном капсулы.
+  /// сливались бы с фоном капсулы. xHigh — светлая медь, Max — тёплый
+  /// кремовый: оба хорошо читаются на тёмных кирпичных заливках.
   static const List<Color> _reasoningLevelColors = <Color>[
     Color(0xFFFFC107), // Low — янтарный, читается на тёплом графите
     Color(0xFFBFDBFE), // Medium — светло-синий, читается на терракоте
     Color(0xFFFFF4F0), // High — тёплый белый, читается на терракотово-кирпичном
+    Color(0xFFFFCF9E), // xHigh — светлая медь, читается на глубоком кирпичном
+    Color(0xFFFFEFD9), // Max — тёплый кремовый, читается на жжёном кирпиче
   ];
 
   /// Светло-синяя заливка капсулы «Поиск» (включённое состояние).
@@ -177,7 +186,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _cycleReasoning() {
     HapticFeedback.lightImpact();
-    setState(() => _reasoningLevel = (_reasoningLevel + 1) % 3);
+    setState(() => _reasoningLevel = (_reasoningLevel + 1) % 5);
   }
 
   // ---------- отправка ----------
@@ -652,22 +661,35 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High.
-  /// Заливка капсулы меняется вместе с уровнем (см. [_reasoningFills]):
-  /// High залит благородным терракотово-кирпичным Color(0xFFB85D4B).
-  /// Слева от подписи — картинка 24x24, файл зависит от уровня:
+  /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High
+  /// -> xHigh -> Max. Заливка капсулы меняется вместе с уровнем
+  /// (см. [_reasoningFills]).
+  /// Слева от подписи — картинка мозга 32x32, файл зависит от уровня:
   /// Low -> 'assets/icons/brain_low.png',
   /// Medium -> 'assets/icons/brain_medium.png',
-  /// High -> 'assets/icons/brain_high.png'.
+  /// High/xHigh -> 'assets/icons/brain_high.png'.
+  /// Для Max вместо картинки — иконка Icons.biotech 32 цвета уровня.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
     final levelColor = _reasoningLevelColors[_reasoningLevel];
-    final assetPath = switch (_reasoningLevel) {
-      0 => 'assets/icons/brain_low.png',
-      1 => 'assets/icons/brain_medium.png',
-      _ => 'assets/icons/brain_high.png',
-    };
+    final Widget leading;
+    if (_reasoningLevel == 4) {
+      // Max: вместо картинки мозга — иконка «биотех» цвета уровня.
+      leading = Icon(Icons.biotech, size: 32, color: levelColor);
+    } else {
+      final assetPath = switch (_reasoningLevel) {
+        0 => 'assets/icons/brain_low.png',
+        1 => 'assets/icons/brain_medium.png',
+        _ => 'assets/icons/brain_high.png',
+      };
+      leading = Image.asset(
+        assetPath,
+        width: 32,
+        height: 32,
+        fit: BoxFit.contain,
+      );
+    }
     return Tooltip(
       message: 'Уровень размышлений: $label',
       child: InkWell(
@@ -692,12 +714,7 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Image.asset(
-                assetPath,
-                width: 28,
-                height: 28,
-                fit: BoxFit.contain,
-              ),
+              leading,
               const SizedBox(width: 6),
               Text(
                 label,
