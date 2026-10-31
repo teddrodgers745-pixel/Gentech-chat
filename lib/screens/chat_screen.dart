@@ -17,6 +17,7 @@ import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
+import 'live_screen.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -73,17 +74,13 @@ class _ChatScreenState extends State<ChatScreen> {
     Color(0xFF7D3524), // Max — жжёный тёмный кирпич
   ];
 
-  /// Цвет подписи уровня мышления. Подпись обязана читаться на своей
-  /// заливке, поэтому Low — янтарный, Medium — светло-синий, High —
-  /// тёплый белый: тёмно-синий на терракоте и красный на красном
-  /// сливались бы с фоном капсулы. xHigh — светлая медь, Max — тёплый
-  /// кремовый: оба хорошо читаются на тёмных кирпичных заливках.
+  /// Цвет подписи уровня мышления.
   static const List<Color> _reasoningLevelColors = <Color>[
-    Color(0xFFFFC107), // Low — янтарный, читается на тёплом графите
-    Color(0xFFBFDBFE), // Medium — светло-синий, читается на терракоте
-    Color(0xFFFFF4F0), // High — тёплый белый, читается на терракотово-кирпичном
-    Color(0xFFFFCF9E), // xHigh — светлая медь, читается на глубоком кирпичном
-    Color(0xFFFFEFD9), // Max — тёплый кремовый, читается на жжёном кирпиче
+    Color(0xFFFFC107), // Low — янтарный
+    Color(0xFFBFDBFE), // Medium — светло-синий
+    Color(0xFFFFF4F0), // High — тёплый белый
+    Color(0xFFFFCF9E), // xHigh — светлая медь
+    Color(0xFFFFEFD9), // Max — тёплый кремовый
   ];
 
   /// Светло-синяя заливка капсулы «Поиск» (включённое состояние).
@@ -163,9 +160,7 @@ class _ChatScreenState extends State<ChatScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  /// Шторка «Быстрый доступ»: список доступных моделей текстом —
-  /// модели всех пресетов-провайдеров плюс модель из общих настроек.
-  /// Выбор модели на лету добавим позже; сейчас список только показывается.
+  /// Шторка «Быстрый доступ»: список доступных моделей из пресетов и общих настроек.
   void _openQuickAccess() {
     final models = <String>[];
     void addModel(String raw) {
@@ -182,8 +177,9 @@ class _ChatScreenState extends State<ChatScreen> {
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (_) {
+      builder: (ctx) {
         final p = settings.palette;
+        final currentModel = effectiveConfig().model.trim();
         return SafeArea(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
@@ -194,7 +190,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
                   child: Text(
-                    'Быстрый доступ: модели',
+                    'Быстрый доступ',
                     style: TextStyle(
                       fontSize: 20,
                       fontWeight: FontWeight.w700,
@@ -219,15 +215,8 @@ class _ChatScreenState extends State<ChatScreen> {
                         for (final m in models)
                           ListTile(
                             dense: true,
-                            leading: Icon(
-                              Icons.auto_awesome,
-                              size: 16,
-                              color: p.accent,
-                            ),
                             title: Text(
                               m,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 14,
                                 color: p.text,
@@ -235,6 +224,25 @@ class _ChatScreenState extends State<ChatScreen> {
                                 fontFamilyFallback: const ['monospace'],
                               ),
                             ),
+                            trailing: m == currentModel
+                                ? Icon(Icons.check, size: 18, color: p.accent)
+                                : null,
+                            onTap: () {
+                              Preset? matched;
+                              for (final pr in presets.items) {
+                                if (pr.model.trim() == m) {
+                                  matched = pr;
+                                  break;
+                                }
+                              }
+                              if (matched != null) {
+                                presets.setActive(matched.id);
+                              } else {
+                                settings.setConnection(mdl: m);
+                                setState(() {});
+                              }
+                              Navigator.pop(ctx);
+                            },
                           ),
                     ],
                   ),
@@ -249,8 +257,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ---------- голосовой ввод ----------
 
-  /// Кнопка микрофона: старт/стоп распознавания речи. Распознанный текст
-  /// подставляется в поле ввода, промежуточные результаты видны сразу.
   Future<void> _toggleMic() async {
     if (speechService.listening.value) {
       await speechService.stop();
@@ -287,7 +293,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final res = await FilePicker.platform.pickFiles(allowMultiple: true);
       if (!mounted) return;
-      if (res == null) return; // пользователь отменил выбор
+      if (res == null) return;
       final fresh =
           res.files.where((f) => f.path != null && f.path!.isNotEmpty).toList();
       if (fresh.isEmpty) {
@@ -321,8 +327,6 @@ class _ChatScreenState extends State<ChatScreen> {
         if (f.path != null && f.path!.isNotEmpty)
           PickedFileRef(f.name, f.path!),
     ];
-    // content для API (base64-картинки, текст файлов) готовим заранее:
-    // ошибки чтения уже обработаны внутри, отправка не падает.
     dynamic apiContent;
     try {
       apiContent = await ChatService.buildUserContent(txt, picked);
@@ -360,7 +364,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _stop() => _chatService.cancel();
 
-  /// Активные инструменты: разрешённые в текущем пресете.
   Future<List<Tool>> _activeTools() async {
     try {
       final pr = presets.active;
@@ -383,8 +386,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    // Low — поле не отправляется (прежнее поведение),
-    // Medium и High — соответствующие значения reasoning_effort.
     final String? reasoningEffort = switch (_reasoningLevel) {
       1 => 'medium',
       2 => 'high',
@@ -400,8 +401,6 @@ class _ChatScreenState extends State<ChatScreen> {
         if (!identical(m, reply) && !m.isToolCall && m.content.isNotEmpty)
           <String, dynamic>{'role': m.role, 'content': m.content},
     ];
-    // Для последнего пользовательского сообщения подставляем расширенный
-    // content (base64-картинки и содержимое текстовых файлов).
     if (userApiContent != null) {
       for (int i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i]['role'] == 'user') {
@@ -426,8 +425,6 @@ class _ChatScreenState extends State<ChatScreen> {
         tools: tools,
       )) {
         if (ch.toolName != null) {
-          // Сообщение-вызов инструмента: создаётся на старте вызова
-          // и обновляется по завершению (готово/ошибка).
           if (ch.toolStatus == toolStatusRunning) {
             toolMsg = ChatMessage(
               id: newId(),
@@ -467,7 +464,6 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _streaming = false);
     store.touch(chat);
     await store.save();
-    // Автоозвучка: читаем готовый ответ вслух, не блокируя интерфейс.
     if (error == null && settings.autoTts && reply.content.trim().isNotEmpty) {
       ttsService.speakAuto(reply.id, reply.content);
     }
@@ -483,8 +479,6 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (context, _) {
         final chat = store.current;
         final p = settings.palette;
-        // Активная модель для чипа «Быстрый доступ»:
-        // активный пресет либо модель из общих настроек.
         final activeModel = effectiveConfig().model.trim();
         return Scaffold(
           appBar: AppBar(
@@ -520,16 +514,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.auto_awesome, size: 13, color: p.accent),
-                        const SizedBox(width: 5),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 190),
+                        Flexible(
                           child: Text(
-                            activeModel.isEmpty
-                                ? 'Быстрый доступ: модель не задана'
-                                : 'Быстрый доступ: $activeModel',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                            activeModel.isEmpty ? 'Быстрый доступ' : activeModel,
+                            softWrap: false,
                             style: TextStyle(
                               fontSize: 12,
                               height: 1.2,
@@ -538,7 +526,7 @@ class _ChatScreenState extends State<ChatScreen> {
                             ),
                           ),
                         ),
-                        const SizedBox(width: 2),
+                        const SizedBox(width: 4),
                         Icon(Icons.expand_more, size: 15, color: p.accent),
                       ],
                     ),
@@ -547,6 +535,17 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
             actions: [
+              IconButton(
+                tooltip: 'Live-режим',
+                icon: const Icon(Icons.record_voice_over_outlined),
+                onPressed: () {
+                  ttsService.stop();
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LiveScreen()),
+                  );
+                },
+              ),
               IconButton(
                 tooltip: 'Новый чат',
                 icon: const Icon(Icons.add_comment_outlined),
@@ -561,7 +560,6 @@ class _ChatScreenState extends State<ChatScreen> {
                 tooltip: 'Настройки',
                 icon: const Icon(Icons.tune_rounded),
                 onPressed: () {
-                  // Озвучка не должна продолжаться на другом экране.
                   ttsService.stop();
                   Navigator.push(
                     context,
@@ -674,9 +672,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Чипы выбранных файлов над полем ввода: имя и кнопка удаления.
-  /// Скрепка живёт в самой панели ввода, поэтому при пустом списке
-  /// строка не занимает места.
   Widget _attachmentActions(Palette p) {
     if (_pending.isEmpty) return const SizedBox.shrink();
     return Padding(
@@ -707,21 +702,12 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Нижняя панель ввода: единая капсула с плавной анимацией высоты.
-  /// Контейнер, его фон и капсулы используют один и тот же радиус
-  /// [_radius] — прямоугольных нахлёстов и торчащих уголков нет.
-  /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
-  /// с капсулами «Мышление» и «Поиск», микрофоном, скрепкой и
-  /// круглой кнопкой отправки.
-  /// Строка печати принудительно поднята к верхней границе поля:
-  /// верхний отступ contentPadding уменьшен до 2.
   Widget _inputBar(Palette p) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
       child: AnimatedSize(
         duration: const Duration(milliseconds: 160),
         alignment: Alignment.bottomCenter,
-        // Тень должна выходить за границы капсулы, поэтому без обрезки.
         clipBehavior: Clip.none,
         child: Container(
           decoration: BoxDecoration(
@@ -741,16 +727,11 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             ],
           ),
-          // Дети обрезаются по скруглению капсулы: ничего не торчит.
           clipBehavior: Clip.antiAlias,
           padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Верхний ярус: текст на всю ширину капсулы.
-              // filled: false убирает прямоугольную заливку из темы.
-              // contentPadding: верх уменьшен до 2 — строка ввода
-              // принудительно приподнята к верхней границе поля.
               TextField(
                 controller: _input,
                 keyboardType: TextInputType.multiline,
@@ -770,12 +751,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 minLines: 1,
                 maxLines: 6,
               ),
-              // «Воздух» между полем и рядом нижних кнопок: капсулы
-              // опущены чуть ниже, чтобы не прилипали к тексту.
               const SizedBox(height: 13.3),
-              // Нижний ярус: капсулы слева; справа — микрофон, скрепка
-              // и круглая кнопка отправки. Кнопки прижаты друг к другу:
-              // горизонтальные отступы между ними минимальны.
               Row(
                 children: [
                   Expanded(
@@ -816,7 +792,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Кнопка скрепки: выбор файлов для отправки.
   Widget _attachButton(Palette p) {
     return IconButton(
       tooltip: 'Прикрепить файл',
@@ -829,7 +804,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Круглая акцентная кнопка: отправка сообщения или остановка ответа.
   Widget _sendButton(Palette p) {
     return IconButton.filled(
       tooltip: _streaming ? 'Остановить' : 'Отправить',
@@ -848,35 +822,20 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Мышление»: циклический выбор уровня Low -> Medium -> High
-  /// -> xHigh -> Max. Заливка капсулы меняется вместе с уровнем
-  /// (см. [_reasoningFills]).
-  /// Слева от подписи — значок уровня 32, выровнен по центру капсулы.
-  /// Единый линейный комплект иконок по нарастанию накала мысли:
-  /// Low -> Icons.speed (лёгкий, быстрый ход),
-  /// Medium -> Icons.lightbulb_outline (осмысленная глубина),
-  /// High -> Icons.troubleshoot (высокий накал),
-  /// xHigh -> прежняя картинка мозга (assets/icons/brain_high.png, 32x32),
-  /// Max -> Icons.biotech. Значки красятся цветом уровня.
   Widget _reasoningCapsule() {
     final label = _reasoningLabels[_reasoningLevel];
     final fill = _reasoningFills[_reasoningLevel];
     final levelColor = _reasoningLevelColors[_reasoningLevel];
     final Widget leading;
     if (_reasoningLevel == 0) {
-      // Low: «спидометр» цвета уровня — лёгкий, быстрый режим.
       leading = Icon(Icons.speed, size: 32, color: levelColor);
     } else if (_reasoningLevel == 1) {
-      // Medium: «лампочка» цвета уровня — средняя глубина.
       leading = Icon(Icons.lightbulb_outline, size: 32, color: levelColor);
     } else if (_reasoningLevel == 2) {
-      // High: «поиск неполадок» цвета уровня — высокий накал.
       leading = Icon(Icons.troubleshoot, size: 32, color: levelColor);
     } else if (_reasoningLevel == 4) {
-      // Max: вместо картинки мозга — иконка «биотех» цвета уровня.
       leading = Icon(Icons.biotech, size: 32, color: levelColor);
     } else {
-      // xHigh: прежняя картинка мозга 32x32 — без изменений.
       leading = Image.asset(
         'assets/icons/brain_high.png',
         width: 32,
@@ -907,7 +866,6 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
-            // Значок и подпись выровнены по вертикальному центру капсулы.
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               leading,
@@ -929,10 +887,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Капсула «Поиск».
-  /// Текст ВСЕГДА просто 'Поиск'. Без AnimatedSize, только AnimatedContainer
-  /// для изменения цвета фона (синий при включении, прозрачный при выключении).
-  /// Ширина капсулы слегка увеличена вправо (горизонтальный padding увеличен до 13).
   Widget _searchCapsule(Palette p) {
     final on = settings.webSearchEnabled;
     return InkWell(
