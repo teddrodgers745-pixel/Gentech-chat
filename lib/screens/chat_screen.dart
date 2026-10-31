@@ -16,9 +16,7 @@ import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
-import '../widgets/mic_button.dart';
 import 'history_drawer.dart';
-import 'presets_sheet.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -165,12 +163,87 @@ class _ChatScreenState extends State<ChatScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  /// Шторка выбора пресета (модели): список всех профилей подключения.
-  void _openPresets() {
+  /// Шторка «Быстрый доступ»: список доступных моделей текстом —
+  /// модели всех пресетов-провайдеров плюс модель из общих настроек.
+  /// Выбор модели на лету добавим позже; сейчас список только показывается.
+  void _openQuickAccess() {
+    final models = <String>[];
+    void addModel(String raw) {
+      final m = raw.trim();
+      if (m.isEmpty || models.contains(m)) return;
+      models.add(m);
+    }
+
+    for (final pr in presets.items) {
+      addModel(pr.model);
+    }
+    addModel(settings.model);
+
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (_) => const PresetsSheet(),
+      builder: (_) {
+        final p = settings.palette;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: Text(
+                    'Быстрый доступ: модели',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: p.text,
+                    ),
+                  ),
+                ),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    padding: EdgeInsets.zero,
+                    children: [
+                      if (models.isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          child: Text(
+                            'Моделей пока нет. Задайте модель в настройках провайдера.',
+                            style: TextStyle(color: p.muted, fontSize: 13),
+                          ),
+                        )
+                      else
+                        for (final m in models)
+                          ListTile(
+                            dense: true,
+                            leading: Icon(
+                              Icons.auto_awesome,
+                              size: 16,
+                              color: p.accent,
+                            ),
+                            title: Text(
+                              m,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: p.text,
+                                fontFamily: 'JetBrains Mono',
+                                fontFamilyFallback: const ['monospace'],
+                              ),
+                            ),
+                          ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -410,6 +483,9 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (context, _) {
         final chat = store.current;
         final p = settings.palette;
+        // Активная модель для чипа «Быстрый доступ»:
+        // активный пресет либо модель из общих настроек.
+        final activeModel = effectiveConfig().model.trim();
         return Scaffold(
           appBar: AppBar(
             toolbarHeight: 76,
@@ -427,7 +503,47 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ),
                 const SizedBox(height: 3),
-                PresetChip(onTap: _openPresets),
+                InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: _openQuickAccess,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: p.accent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(20),
+                      border:
+                          Border.all(color: p.accent.withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.auto_awesome, size: 13, color: p.accent),
+                        const SizedBox(width: 5),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 190),
+                          child: Text(
+                            activeModel.isEmpty
+                                ? 'Быстрый доступ: модель не задана'
+                                : 'Быстрый доступ: $activeModel',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.2,
+                              color: p.accent,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Icon(Icons.expand_more, size: 15, color: p.accent),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
             actions: [
@@ -595,7 +711,8 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Контейнер, его фон и капсулы используют один и тот же радиус
   /// [_radius] — прямоугольных нахлёстов и торчащих уголков нет.
   /// Сверху — текстовое поле на всю ширину капсулы, снизу — ряд
-  /// с капсулами «Мышление» и «Поиск», скрепкой и круглой кнопкой.
+  /// с капсулами «Мышление» и «Поиск», микрофоном, скрепкой и
+  /// круглой кнопкой отправки.
   /// Строка печати принудительно поднята к верхней границе поля:
   /// верхний отступ contentPadding уменьшен до 2.
   Widget _inputBar(Palette p) {
@@ -656,7 +773,9 @@ class _ChatScreenState extends State<ChatScreen> {
               // «Воздух» между полем и рядом нижних кнопок: капсулы
               // опущены чуть ниже, чтобы не прилипали к тексту.
               const SizedBox(height: 13.3),
-              // Нижний ярус: капсулы слева, скрепка и отправка справа.
+              // Нижний ярус: капсулы слева; справа — микрофон, скрепка
+              // и круглая кнопка отправки. Кнопки прижаты друг к другу:
+              // горизонтальные отступы между ними минимальны.
               Row(
                 children: [
                   Expanded(
@@ -672,17 +791,20 @@ class _ChatScreenState extends State<ChatScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  _attachButton(p),
                   const SizedBox(width: 2),
-                  ValueListenableBuilder<bool>(
-                    valueListenable: speechService.listening,
-                    builder: (context, listening, _) => MicButton(
-                      listening: listening,
-                      onTap: _streaming ? null : _toggleMic,
-                      mutedColor: p.muted,
+                  IconButton(
+                    tooltip: 'Голосовой ввод',
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(
+                      minWidth: 44,
+                      minHeight: 44,
                     ),
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 28,
+                    icon: Icon(Icons.mic, size: 28, color: p.muted),
+                    onPressed: _streaming ? null : _toggleMic,
                   ),
+                  _attachButton(p),
                   const SizedBox(width: 2),
                   _sendButton(p),
                 ],
