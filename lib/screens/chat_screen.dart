@@ -12,10 +12,13 @@ import '../core/storage.dart';
 import '../models.dart';
 import '../models/tool.dart';
 import '../services/chat_service.dart';
+import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
 import '../widgets/message_view.dart';
+import '../widgets/mic_button.dart';
 import 'history_drawer.dart';
+import 'presets_sheet.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -160,6 +163,48 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _snack(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+  }
+
+  /// Шторка выбора пресета (модели): список всех профилей подключения.
+  void _openPresets() {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => const PresetsSheet(),
+    );
+  }
+
+  // ---------- голосовой ввод ----------
+
+  /// Кнопка микрофона: старт/стоп распознавания речи. Распознанный текст
+  /// подставляется в поле ввода, промежуточные результаты видны сразу.
+  Future<void> _toggleMic() async {
+    if (speechService.listening.value) {
+      await speechService.stop();
+      return;
+    }
+    try {
+      await speechService.start(
+        localeId: 'ru_RU',
+        onText: (text) {
+          if (!mounted) return;
+          setState(() {
+            _input.text = text;
+            _input.selection = TextSelection.collapsed(offset: text.length);
+          });
+        },
+        onError: (msg) {
+          if (!mounted) return;
+          _snack(msg);
+        },
+      );
+    } on SpeechServiceException catch (e) {
+      if (!mounted) return;
+      _snack(e.message);
+    } catch (_) {
+      if (!mounted) return;
+      _snack('Не удалось запустить голосовой ввод');
+    }
   }
 
   // ---------- вложения ----------
@@ -368,11 +413,22 @@ class _ChatScreenState extends State<ChatScreen> {
         return Scaffold(
           appBar: AppBar(
             toolbarHeight: 76,
-            title: Text(
-              chat?.title ?? 'Новый чат',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+            title: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  chat?.title ?? 'Новый чат',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                PresetChip(onTap: _openPresets),
+              ],
             ),
             actions: [
               IconButton(
@@ -618,7 +674,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                   const SizedBox(width: 4),
                   _attachButton(p),
-                  const SizedBox(width: 4),
+                  const SizedBox(width: 2),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: speechService.listening,
+                    builder: (context, listening, _) => MicButton(
+                      listening: listening,
+                      onTap: _streaming ? null : _toggleMic,
+                      mutedColor: p.muted,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
                   _sendButton(p),
                 ],
               ),

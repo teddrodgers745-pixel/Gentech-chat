@@ -226,11 +226,11 @@ class _ToolsScreenState extends State<ToolsScreen> {
                   : '${t.method.toUpperCase()} · ${t.endpoint}',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.transparent,
+              style: TextStyle(
+                color: p.muted,
                 fontSize: 11,
                 fontFamily: 'JetBrains Mono',
-                fontFamilyFallback: ['monospace'],
+                fontFamilyFallback: const ['monospace'],
               ),
             ),
           ],
