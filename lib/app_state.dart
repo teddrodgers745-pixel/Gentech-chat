@@ -164,6 +164,9 @@ class AppSettings extends ChangeNotifier {
   /// Встроенный «Базовый поиск в интернете» для пресетов с поддержкой поиска.
   bool webSearchEnabled = true;
 
+  /// Режим поиска в интернете: 'off', 'polza', 'sonar', 'deepseek'.
+  String webSearchMode = 'off';
+
   /// Режим для профи (Advanced): полные настройки вместо быстрой настройки.
   bool advancedMode = true;
 
@@ -193,6 +196,7 @@ class AppSettings extends ChangeNotifier {
     fontSizeN.value = p.getDouble('fontSize') ?? 17;
     autoTts = p.getBool('autoTts') ?? false;
     webSearchEnabled = p.getBool('webSearchEnabled') ?? true;
+    webSearchMode = p.getString('webSearchMode') ?? 'off';
     advancedMode = p.getBool('advancedMode') ?? true;
     mcpEnabled = p.getBool('mcpEnabled') ?? true;
   }
@@ -211,6 +215,7 @@ class AppSettings extends ChangeNotifier {
     await p.setDouble('fontSize', fontSizeN.value);
     await p.setBool('autoTts', autoTts);
     await p.setBool('webSearchEnabled', webSearchEnabled);
+    await p.setString('webSearchMode', webSearchMode);
     await p.setBool('advancedMode', advancedMode);
     await p.setBool('mcpEnabled', mcpEnabled);
   }
@@ -260,6 +265,12 @@ class AppSettings extends ChangeNotifier {
 
   void setWebSearch(bool v) {
     webSearchEnabled = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setWebSearchMode(String v) {
+    webSearchMode = v;
     _persist();
     notifyListeners();
   }
