@@ -35,6 +35,10 @@ class _LiveScreenState extends State<LiveScreen>
   static const String _inputAudioMime = 'audio/pcm;rate=16000';
   static const String _outputAudioMime = 'audio/pcm;rate=24000';
 
+  /// 40 мс PCM 16-bit mono 16 кГц = 16000 * 2 * 0.04 = 1280 байт
+  /// (порции микрофона: 20-40 мс = 640-1280 байт).
+  static const int _micChunkBytes = 1280;
+
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnim;
   late final TextEditingController _keyController;
@@ -47,6 +51,16 @@ class _LiveScreenState extends State<LiveScreen>
   StreamSubscription<PlayerState>? _playerSub;
 
   final List<int> _incomingPcmBuffer = <int>[];
+
+  /// Буфер микрофона: накапливаем чанки и отправляем в WebSocket
+  /// порциями 20-40 мс (640-1280 байт PCM 16-bit 16 кГц).
+  final List<int> _micBuffer = <int>[];
+
+  /// Handle сессии для sessionResumption (из sessionResumptionUpdate).
+  String? _sessionHandle;
+
+  /// Защита от параллельных переподключений (goAway / обрыв).
+  bool _reconnecting = false;
   bool _connected = false;
   bool _speaking = false;
   bool _muted = false;
@@ -105,6 +119,10 @@ class _LiveScreenState extends State<LiveScreen>
     if (passed.isNotEmpty) return passed;
     return effectiveConfig().apiKey.trim();
   }
+
+  /// Ключ уже сохранён в настройках (пришёл из чата/конфига) —
+  /// поле ввода не показываем, используем сохранённый ключ.
+  bool get _hasSavedKey => _keyController.text.trim().isNotEmpty;
 
   String _formatReason(Object error, [String? closeReason, int? closeCode]) {
     final combined = '${error.toString()} ${closeReason ?? ''}'.toLowerCase();
@@ -190,12 +208,21 @@ class _LiveScreenState extends State<LiveScreen>
         return;
       }
       _ws = ws;
+      // Keep-alive: пинг каждые 15 секунд, чтобы соединение не рвалось
+      // на прокси/нат во время пауз в диалоге.
+      ws.pingInterval = const Duration(seconds: 15);
 
+      final handle = _sessionHandle;
       ws.add(jsonEncode(<String, dynamic>{
         'setup': <String, dynamic>{
           'model': 'models/$_liveModelId',
           'generationConfig': <String, dynamic>{
             'responseModalities': <String>['AUDIO'],
+          },
+          // Возобновление сессии: пустой объект без handle,
+          // с handle — после первого sessionResumptionUpdate.
+          'sessionResumption': <String, dynamic>{
+            if (handle != null && handle.isNotEmpty) 'handle': handle,
           },
         },
       }));
@@ -267,27 +294,64 @@ class _LiveScreenState extends State<LiveScreen>
     );
     _micSub = stream.listen(
       (chunk) {
-        final ws = _ws;
-        if (_muted || !_connected || chunk.isEmpty || ws == null) return;
-        try {
-          ws.add(jsonEncode(<String, dynamic>{
-            'realtimeInput': <String, dynamic>{
-              'mediaChunks': <Map<String, dynamic>>[
-                <String, dynamic>{
-                  'mimeType': _inputAudioMime,
-                  'data': base64Encode(chunk),
-                },
-              ],
-            },
-          }));
-        } catch (e, st) {
-          debugPrint('Gemini Live: ошибка отправки аудио: $e\n$st');
+        if (_muted || !_connected || chunk.isEmpty) return;
+        // Накапливаем и режем на порции 20-40 мс (640-1280 байт):
+        // record отдаёт чанки произвольного размера.
+        _micBuffer.addAll(chunk);
+        while (_micBuffer.length >= _micChunkBytes) {
+          final piece =
+              Uint8List.fromList(_micBuffer.sublist(0, _micChunkBytes));
+          _micBuffer.removeRange(0, _micChunkBytes);
+          _sendMicChunk(piece);
         }
       },
       onError: (Object e, StackTrace st) {
         debugPrint('Gemini Live: ошибка потока микрофона: $e\n$st');
       },
     );
+  }
+
+  /// Отправка одной порции аудио в WebSocket. Поток микрофона не
+  /// останавливается после turnComplete/воспроизведения: чанки продолжают
+  /// уходить, пока сессия активна (мьют лишь блокирует отправку).
+  void _sendMicChunk(Uint8List chunk) {
+    final ws = _ws;
+    if (ws == null) return;
+    try {
+      ws.add(jsonEncode(<String, dynamic>{
+        'realtimeInput': <String, dynamic>{
+          'mediaChunks': <Map<String, dynamic>>[
+            <String, dynamic>{
+              'mimeType': _inputAudioMime,
+              'data': base64Encode(chunk),
+            },
+          ],
+        },
+      }));
+    } catch (e, st) {
+      debugPrint('Gemini Live: ошибка отправки аудио: $e\n$st');
+    }
+  }
+
+  /// Переподключение по goAway (или обрыву). Микрофон не трогаем:
+  /// после восстановления соединения чанки продолжают уходить
+  /// в новый WebSocket, handle сессии сохраняется.
+  Future<void> _reconnect() async {
+    if (_reconnecting || _closingManually || !mounted) return;
+    _reconnecting = true;
+    setState(() => _status = 'Переподключение...');
+    try {
+      await _wsSub?.cancel();
+      _wsSub = null;
+      final old = _ws;
+      _ws = null;
+      if (old != null) {
+        await old.close().timeout(const Duration(seconds: 2));
+      }
+    } catch (_) {}
+    _reconnecting = false;
+    if (!mounted || _closingManually) return;
+    await _startSession();
   }
 
   void _onWsMessage(dynamic raw) {
@@ -312,6 +376,23 @@ class _LiveScreenState extends State<LiveScreen>
 
       if (decoded.containsKey('setupComplete')) {
         _onSetupComplete();
+        return;
+      }
+
+      // Сохраняем handle для возобновления сессии.
+      final resumption = decoded['sessionResumptionUpdate'];
+      if (resumption is Map) {
+        final resumable = resumption['resumable'];
+        final newHandle = resumption['newHandle'];
+        if (resumable == true && newHandle is String && newHandle.isNotEmpty) {
+          _sessionHandle = newHandle;
+        }
+      }
+
+      // Сервер просит переподключиться: инициируем reconnect
+      // (поток микрофона при этом не останавливается).
+      if (decoded.containsKey('goAway')) {
+        _reconnect();
         return;
       }
 
@@ -421,6 +502,7 @@ class _LiveScreenState extends State<LiveScreen>
   Future<void> _stopSession() async {
     _running = false;
     _closingManually = true;
+    _micBuffer.clear();
     try {
       await _micSub?.cancel();
       _micSub = null;
@@ -646,44 +728,68 @@ class _LiveScreenState extends State<LiveScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          TextField(
-            controller: _keyController,
-            obscureText: _obscureKey,
-            autocorrect: false,
-            enableSuggestions: false,
-            cursorColor: accent,
-            style: const TextStyle(color: Color(0xFFF5F0EB), fontSize: 15),
-            decoration: InputDecoration(
-              labelText: 'API-ключ',
-              hintText: 'Введите или проверьте ключ Gemini',
-              labelStyle: TextStyle(color: muted),
-              hintStyle: TextStyle(color: muted.withValues(alpha: 0.6)),
-              prefixIcon: Icon(Icons.key_rounded, color: accent, size: 20),
-              suffixIcon: IconButton(
-                tooltip: _obscureKey ? 'Показать ключ' : 'Скрыть ключ',
-                icon: Icon(
-                  _obscureKey ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                  color: muted,
-                  size: 20,
+          if (!_hasSavedKey) ...[
+            TextField(
+              controller: _keyController,
+              obscureText: _obscureKey,
+              autocorrect: false,
+              enableSuggestions: false,
+              cursorColor: accent,
+              style: const TextStyle(color: Color(0xFFF5F0EB), fontSize: 15),
+              decoration: InputDecoration(
+                labelText: 'API-ключ',
+                hintText: 'Введите или проверьте ключ Gemini',
+                labelStyle: TextStyle(color: muted),
+                hintStyle: TextStyle(color: muted.withValues(alpha: 0.6)),
+                prefixIcon: Icon(Icons.key_rounded, color: accent, size: 20),
+                suffixIcon: IconButton(
+                  tooltip: _obscureKey ? 'Показать ключ' : 'Скрыть ключ',
+                  icon: Icon(
+                    _obscureKey
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                    color: muted,
+                    size: 20,
+                  ),
+                  onPressed: () => setState(() => _obscureKey = !_obscureKey),
                 ),
-                onPressed: () => setState(() => _obscureKey = !_obscureKey),
-              ),
-              filled: true,
-              fillColor: const Color(0xFF1B1A19),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(18),
-                borderSide: BorderSide(color: borderCol),
-              ),
-              enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(18),
-                borderSide: BorderSide(color: borderCol),
-              ),
-              focusedBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(18),
-                borderSide: BorderSide(color: accent, width: 1.8),
+                filled: true,
+                fillColor: const Color(0xFF1B1A19),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: BorderSide(color: borderCol),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: BorderSide(color: borderCol),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(18),
+                  borderSide: BorderSide(color: accent, width: 1.8),
+                ),
               ),
             ),
-          ),
+          ] else ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.key_rounded, color: accent, size: 20),
+                  const SizedBox(width: 10),
+                  const Expanded(
+                    child: Text(
+                      'Используется сохранённый API-ключ',
+                      style: TextStyle(
+                        color: Color(0xFFA8A096),
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+                  Icon(Icons.check_circle_rounded, color: accent, size: 20),
+                ],
+              ),
+            ),
+          ],
           if (!_running) ...[
             const SizedBox(height: 14),
             DecoratedBox(
