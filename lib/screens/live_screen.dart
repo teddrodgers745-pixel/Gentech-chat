@@ -47,7 +47,9 @@ class _LiveScreenState extends State<LiveScreen>
   bool _speaking = false;
   bool _muted = false;
   bool _closingManually = false;
-  String _status = 'Подключение...';
+  bool _running = false;
+  final TextEditingController _keyController = TextEditingController();
+  String _status = 'Готов к запуску';
   String? _errorDetails;
 
   @override
@@ -72,7 +74,7 @@ class _LiveScreenState extends State<LiveScreen>
       }
     });
 
-    _startSession();
+    // Сессия запускается кнопкой «Запустить», не автоматически.
   }
 
   @override
@@ -81,6 +83,7 @@ class _LiveScreenState extends State<LiveScreen>
     _stopSession();
     _playerSub?.cancel();
     _pulseController.dispose();
+    _keyController.dispose();
     _recorder.dispose();
     _player.dispose();
     super.dispose();
@@ -89,8 +92,9 @@ class _LiveScreenState extends State<LiveScreen>
   /// Ключ для Live-режима временно захардкожен здесь
   /// (раньше логика читала файл gem.txt в папке данных приложения).
   Future<String> _resolveApiKey() async {
-    final String apiKey = 'AIzaSyBE2MLBvqg9cj-Ouij9sChS4vxUdE23s38';
-    return apiKey;
+    final String apiKey = '';
+    final typed = _keyController.text.trim();
+    return typed.isNotEmpty ? typed : apiKey;
   }
 
   String _formatReason(Object error, [String? closeReason, int? closeCode]) {
@@ -137,6 +141,7 @@ class _LiveScreenState extends State<LiveScreen>
       _connected = false;
       _speaking = false;
       _status = message;
+      _running = false;
       _errorDetails = rawError?.toString();
     });
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -145,7 +150,14 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   Future<void> _startSession() async {
+    if (_keyController.text.trim().isEmpty) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('Введите API-ключ')),
+      );
+      return;
+    }
     _closingManually = false;
+    _running = true;
     setState(() {
       _status = 'Подключение...';
       _errorDetails = null;
@@ -216,6 +228,7 @@ class _LiveScreenState extends State<LiveScreen>
               _connected = false;
               _speaking = false;
               _status = 'Соединение завершено';
+              _running = false;
             });
           }
         },
@@ -416,6 +429,7 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   Future<void> _stopSession() async {
+    _running = false;
     _closingManually = true;
     try {
       await _micSub?.cancel();
@@ -546,6 +560,59 @@ class _LiveScreenState extends State<LiveScreen>
                     );
                   },
                 ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: _keyController,
+                    obscureText: true,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    cursorColor: accent,
+                    style: const TextStyle(color: text),
+                    decoration: InputDecoration(
+                      labelText: 'API-ключ',
+                      labelStyle: const TextStyle(color: muted),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(20),
+                        borderSide: const BorderSide(color: muted),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(20),
+                        borderSide: BorderSide(
+                          color: muted.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(20),
+                        borderSide: const BorderSide(color: accent, width: 2),
+                      ),
+                    ),
+                  ),
+                  if (!_running) ...[
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _startSession,
+                        icon: const Icon(Icons.play_arrow_rounded),
+                        label: const Text('Запустить'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: accent,
+                          foregroundColor: bg,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
             Padding(
