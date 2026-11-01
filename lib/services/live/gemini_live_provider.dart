@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:gemini_live/gemini_live.dart';
@@ -13,7 +12,7 @@ import 'live_provider.dart';
 /// Реализует контракт [LiveProvider]:
 ///  - [connect] создаёт [GoogleGenAI] с переданным пользователем ключом
 ///    и открывает realtime-сессию модели 'gemini-3.8-live' через
-///    [GeminiLiveSessionController];
+///    [GeminiLiveSessionController] (сервис live берётся у genAI);
 ///  - [sendAudio] отправляет фрагмент микрофонного PCM
 ///    (16 кГц, 16-bit, mono) через [GeminiLiveSessionController.sendRealtimeAudio];
 ///  - [audioStream] отдаёт входящие PCM-байты ответа модели (24 кГц)
@@ -46,7 +45,7 @@ class GeminiLiveProvider extends LiveProvider {
 
     final GoogleGenAI genAI = GoogleGenAI(apiKey: apiKey);
     final GeminiLiveSessionController controller =
-        GeminiLiveSessionController(genAI: genAI);
+        GeminiLiveSessionController(liveService: genAI.live);
 
     // Подписка до первого использования, чтобы не потерять
     // начальные фрагменты аудио ответа модели.
