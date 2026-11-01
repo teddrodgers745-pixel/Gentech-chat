@@ -26,8 +26,9 @@ class LiveVoiceInput extends StatelessWidget {
       return;
     }
     ttsService.stop();
+    final key = effectiveConfig().apiKey.trim();
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const LiveScreen()),
+      MaterialPageRoute<void>(builder: (_) => LiveScreen(apiKey: key)),
     );
   }
 

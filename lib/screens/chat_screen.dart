@@ -190,7 +190,12 @@ class _ChatScreenState extends State<ChatScreen> {
                           ListTile(
                             dense: true,
                             title: Text(
-                              m,
+                              m.replaceFirst(
+                                RegExp(r'^models/', caseSensitive: false),
+                                '',
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 14,
                                 color: p.text,
@@ -453,7 +458,10 @@ class _ChatScreenState extends State<ChatScreen> {
       builder: (context, _) {
         final chat = store.current;
         final p = settings.palette;
-        final activeModel = effectiveConfig().model.trim();
+        final cfg = effectiveConfig();
+        final activeModel = cfg.model
+            .trim()
+            .replaceFirst(RegExp(r'^models/', caseSensitive: false), '');
         return Scaffold(
           appBar: AppBar(
             toolbarHeight: 76,
@@ -488,15 +496,24 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        Icon(Icons.auto_awesome, size: 13, color: p.accent),
+                        const SizedBox(width: 5),
                         Flexible(
                           child: Text(
-                            activeModel.isEmpty ? 'Быстрый доступ' : activeModel,
+                            activeModel.isEmpty
+                                ? 'Быстрый доступ'
+                                : activeModel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                             softWrap: false,
-                            style: TextStyle(
-                              fontSize: 12,
+                            style: fontStyle(
+                              activeModel.isEmpty
+                                  ? settings.bodyFont
+                                  : settings.codeFont,
+                              size: 12,
                               height: 1.2,
+                              weight: FontWeight.w600,
                               color: p.accent,
-                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
@@ -509,17 +526,6 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
             actions: [
-              IconButton(
-                tooltip: 'Live-режим',
-                icon: const Icon(Icons.record_voice_over_outlined),
-                onPressed: () {
-                  ttsService.stop();
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const LiveScreen()),
-                  );
-                },
-              ),
               IconButton(
                 tooltip: 'Новый чат',
                 icon: const Icon(Icons.add_comment_outlined),
@@ -559,6 +565,16 @@ class _ChatScreenState extends State<ChatScreen> {
                   onAttach: _attach,
                   onSend: _send,
                   onStop: _stop,
+                  onStartLive: () {
+                    ttsService.stop();
+                    final key = effectiveConfig().apiKey.trim();
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => LiveScreen(apiKey: key),
+                      ),
+                    );
+                  },
                 ),
               ],
             ),
