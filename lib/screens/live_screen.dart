@@ -46,7 +46,12 @@ class _LiveScreenState extends State<LiveScreen>
   Timer? _speechTimer;
 
   SoLoud? _soloud;
-  AudioStream? _soloudStream;
+
+  /// Поток SoLoud: тип результата setBufferStream в разных версиях
+  /// flutter_soloud не экспортируется под стабильным именем класса,
+  /// поэтому значение хранится без явного типа (создаётся только
+  /// в _initSoLoud через setBufferStream).
+  dynamic _soloudStream;
   SoundHandle? _playHandle;
   bool _soloudReady = false;
 
@@ -192,9 +197,12 @@ class _LiveScreenState extends State<LiveScreen>
     if (_soloudReady) return;
     try {
       final sol = SoLoud.instance;
-      final ok = await sol.init();
-      if (!ok) return;
-      final stream = await sol.setBufferStream(
+      // init() в разных версиях flutter_soloud возвращает Future<bool>,
+      // Future<void> либо выполняется синхронно — обрабатываем все
+      // варианты без привязки к конкретному типу результата.
+      final dynamic initResult = sol.init();
+      if (initResult is Future) await initResult;
+      final dynamic stream = await sol.setBufferStream(
         maxBufferSizeBytes: _maxBufferBytes,
         bufferingType: BufferingType.released,
         sampleRate: _outputSampleRate,
@@ -216,7 +224,7 @@ class _LiveScreenState extends State<LiveScreen>
     final stream = _soloudStream;
     if (stream == null || !_soloudReady || bytes.isEmpty) return;
     try {
-      stream.addData(bytes);
+      stream.addData(Uint8List.fromList(bytes));
     } catch (_) {
       return;
     }
