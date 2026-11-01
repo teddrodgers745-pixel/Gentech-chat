@@ -8,7 +8,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
@@ -16,6 +15,10 @@ import '../app_state.dart';
 import '../theme.dart';
 
 /// Экран голосового Live-режима (Gemini Live API по WebSocket).
+/// Цикл диалога непрерывный: микрофон пишется от «Запустить» до «Завершить»,
+/// аудио модели воспроизводится по мере прихода чанков, после turnComplete
+/// статус возвращается к «Слушаю...», и следующий вопрос принимается тем же
+/// потоком записи.
 class LiveScreen extends StatefulWidget {
   final String? apiKey;
 
@@ -23,6 +26,22 @@ class LiveScreen extends StatefulWidget {
 
   @override
   State<LiveScreen> createState() => _LiveScreenState();
+}
+
+/// Источник WAV из памяти: чанк аудио модели сразу превращается в WAV
+/// и отдаётся плееру без записи на диск (минимум задержки).
+class _PcmWavSource extends StreamAudioSource {
+  final Uint8List wavBytes;
+  _PcmWavSource(this.wavBytes);
+
+  @override
+  Future<StreamAudioResponse> request([Map<String, dynamic>? request]) async {
+    return StreamAudioResponse(
+      sourceLength: wavBytes.length,
+      contentType: 'audio/wav',
+      stream: Stream<List<int>>.value(wavBytes),
+    );
+  }
 }
 
 class _LiveScreenState extends State<LiveScreen>
@@ -51,37 +70,30 @@ class _LiveScreenState extends State<LiveScreen>
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<PlayerState>? _playerSub;
 
+  /// Входящий PCM ответа модели (накапливается между base64-частями).
   final List<int> _incomingPcmBuffer = <int>[];
 
-  /// Очередь аудио: чанки ответа модели добавляются в плеер непрерывно,
-  /// без ожидания конца реплики. Очищается только при 'interrupted'.
+  /// Очередь аудио: чанки ответа модели добавляются непрерывно,
+  /// очищается только при 'interrupted'.
   final ConcatenatingAudioSource _audioQueue = ConcatenatingAudioSource(
     children: <AudioSource>[],
   );
 
   /// Порог тишины (RMS по шкале 16-bit) и длительность паузы, после которой
-  /// в WebSocket уходит audioStreamEnd (конец фразы пользователя).
+  /// уходит audioStreamEnd (конец фразы пользователя).
   static const double _silenceRmsThreshold = 350;
   static const Duration _silenceDuration = Duration(milliseconds: 1500);
-
-  /// Время последнего «звукового» чанка микрофона и признак того,
-  /// что маркер конца фразы уже отправлен (не дублируем).
   DateTime _lastVoiceTime = DateTime.now();
   bool _streamEndSent = false;
 
-  /// Минимальный объём PCM (байт) перед добавлением в плеер:
-  /// 24000 Гц * 2 байта * 0.1 с = 4800 байт — низкая задержка.
+  /// Минимальный объём PCM перед добавлением в плеер:
+  /// 24000 Гц * 2 байта * 0.1 с = 4800 байт.
   static const int _minPlaybackBytes = 4800;
-  int _fileSeq = 0;
 
-  /// Буфер микрофона: накапливаем чанки и отправляем в WebSocket
-  /// порциями 20-40 мс (640-1280 байт PCM 16-bit 16 кГц).
+  /// Буфер микрофона: копим чанки record и режем на порции 20-40 мс.
   final List<int> _micBuffer = <int>[];
 
-  /// Handle сессии для sessionResumption (из sessionResumptionUpdate).
   String? _sessionHandle;
-
-  /// Защита от параллельных переподключений (goAway / обрыв).
   bool _reconnecting = false;
   bool _connected = false;
   bool _speaking = false;
@@ -109,8 +121,6 @@ class _LiveScreenState extends State<LiveScreen>
       curve: Curves.easeInOutSine,
     );
 
-    // Непрерывное воспроизведение: плеер сразу играет очередь чанков
-    // ответа модели. Ошибка инициализации не блокирует интерфейс.
     () async {
       try {
         await _player.setAudioSource(_audioQueue);
@@ -119,6 +129,8 @@ class _LiveScreenState extends State<LiveScreen>
       }
     }();
 
+    // Конец очереди: после завершения реплики возвращаем статус к слушанию.
+    // Микрофон при этом не останавливается.
     _playerSub = _player.playerStateStream.listen((state) {
       if (!mounted) return;
       if (state.processingState == ProcessingState.completed && _speaking) {
@@ -130,6 +142,14 @@ class _LiveScreenState extends State<LiveScreen>
         });
       }
     });
+
+    // Логи ошибок плеера: без них не видно, где рвётся цепочка воспроизведения.
+    _player.playbackEventStream.listen(
+      (_) {},
+      onError: (Object e, StackTrace st) {
+        debugPrint('Gemini Live: ошибка плеера: $e\n$st');
+      },
+    );
   }
 
   @override
@@ -151,10 +171,6 @@ class _LiveScreenState extends State<LiveScreen>
     if (passed.isNotEmpty) return passed;
     return effectiveConfig().apiKey.trim();
   }
-
-  /// Ключ уже сохранён в настройках (пришёл из чата/конфига) —
-  /// поле ввода не показываем, используем сохранённый ключ.
-  bool get _hasSavedKey => _keyController.text.trim().isNotEmpty;
 
   String _formatReason(Object error, [String? closeReason, int? closeCode]) {
     final combined = '${error.toString()} ${closeReason ?? ''}'.toLowerCase();
@@ -240,8 +256,6 @@ class _LiveScreenState extends State<LiveScreen>
         return;
       }
       _ws = ws;
-      // Keep-alive: пинг каждые 15 секунд, чтобы соединение не рвалось
-      // на прокси/нат во время пауз в диалоге.
       ws.pingInterval = const Duration(seconds: 15);
 
       final handle = _sessionHandle;
@@ -251,13 +265,12 @@ class _LiveScreenState extends State<LiveScreen>
           'generationConfig': <String, dynamic>{
             'responseModalities': <String>['AUDIO'],
           },
-          // Возобновление сессии: пустой объект без handle,
-          // с handle — после первого sessionResumptionUpdate.
           'sessionResumption': <String, dynamic>{
             if (handle != null && handle.isNotEmpty) 'handle': handle,
           },
         },
       }));
+      debugPrint('Gemini Live => setup отправлен');
       setState(() => _status = 'Настройка сессии...');
 
       _wsSub = ws.listen(
@@ -270,6 +283,7 @@ class _LiveScreenState extends State<LiveScreen>
           if (_closingManually || !mounted) return;
           final code = ws.closeCode;
           final reason = ws.closeReason;
+          debugPrint('Gemini Live: соединение закрыто (code=$code)');
           if ((reason != null && reason.trim().isNotEmpty) ||
               (code != null && code != WebSocketStatus.normalClosure)) {
             _reportError(
@@ -302,6 +316,7 @@ class _LiveScreenState extends State<LiveScreen>
       _connected = true;
       _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
     });
+    debugPrint('Gemini Live: setupComplete — запускаю непрерывный микрофон');
     try {
       await _startMicStream();
     } catch (e, st) {
@@ -309,6 +324,8 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
+  /// Непрерывный поток записи: работает от setupComplete до _stopSession.
+  /// Ответы модели, turnComplete и воспроизведение его НЕ останавливают.
   Future<void> _startMicStream() async {
     await _micSub?.cancel();
     _micSub = null;
@@ -326,14 +343,13 @@ class _LiveScreenState extends State<LiveScreen>
         numChannels: 1,
       ),
     );
+    debugPrint('Gemini Live: микрофон запущен (PCM 16-bit, 16 кГц, mono)');
     _micSub = stream.listen(
       (chunk) {
         if (_muted || !_connected || chunk.isEmpty) return;
-        // Конец фразы: RMS-анализ уровня, при паузе 1.5 с отправляем
-        // audioStreamEnd в WebSocket.
+        // RMS-анализ: при паузе 1.5 с отправляем audioStreamEnd.
         _analyzeMicLevel(chunk);
-        // Накапливаем и режем на порции 20-40 мс (640-1280 байт):
-        // record отдаёт чанки произвольного размера.
+        // Режем на порции 20-40 мс (640-1280 байт PCM 16 кГц).
         _micBuffer.addAll(chunk);
         while (_micBuffer.length >= _micChunkBytes) {
           final piece =
@@ -345,15 +361,20 @@ class _LiveScreenState extends State<LiveScreen>
       onError: (Object e, StackTrace st) {
         debugPrint('Gemini Live: ошибка потока микрофона: $e\n$st');
       },
+      onDone: () {
+        debugPrint('Gemini Live: поток микрофона завершён');
+      },
     );
   }
 
-  /// Отправка одной порции аудио в WebSocket. Поток микрофона не
-  /// останавливается после turnComplete/воспроизведения: чанки продолжают
-  /// уходить, пока сессия активна (мьют лишь блокирует отправку).
+  /// Отправка одной порции аудио: JSON realtimeInput.mediaChunks (base64).
+  /// Поток микрофона не останавливается после ответов модели.
   void _sendMicChunk(Uint8List chunk) {
     final ws = _ws;
-    if (ws == null) return;
+    if (ws == null) {
+      debugPrint('Gemini Live: чанк отброшен — WebSocket отсутствует');
+      return;
+    }
     try {
       ws.add(jsonEncode(<String, dynamic>{
         'realtimeInput': <String, dynamic>{
@@ -371,9 +392,7 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   /// RMS-анализ чанка микрофона. Если уровень ниже порога дольше
-  /// [_silenceDuration], отправляем {'realtimeInput': {'audioStreamEnd': true}}
-  /// — сигнал модели, что фраза пользователя закончена. Когда голос снова
-  /// становится громче порога, маркер сбрасывается до следующей паузы.
+  /// [_silenceDuration], отправляем audioStreamEnd — конец фразы.
   void _analyzeMicLevel(Uint8List chunk) {
     final now = DateTime.now();
     var sumSquares = 0;
@@ -395,8 +414,6 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  /// Отправка маркера конца фразы пользователя. Поток микрофона при этом
-  /// НЕ останавливается: чанки продолжают уходить, пока сессия активна.
   void _sendAudioStreamEnd() {
     final ws = _ws;
     if (ws == null) return;
@@ -404,15 +421,12 @@ class _LiveScreenState extends State<LiveScreen>
       ws.add(jsonEncode(<String, dynamic>{
         'realtimeInput': <String, dynamic>{'audioStreamEnd': true},
       }));
-      debugPrint('Gemini Live: отправлен audioStreamEnd (пауза пользователя)');
+      debugPrint('Gemini Live => audioStreamEnd (пауза пользователя 1.5 с)');
     } catch (e, st) {
       debugPrint('Gemini Live: ошибка отправки audioStreamEnd: $e\n$st');
     }
   }
 
-  /// Переподключение по goAway (или обрыву). Микрофон не трогаем:
-  /// после восстановления соединения чанки продолжают уходить
-  /// в новый WebSocket, handle сессии сохраняется.
   Future<void> _reconnect() async {
     if (_reconnecting || _closingManually || !mounted) return;
     _reconnecting = true;
@@ -443,6 +457,8 @@ class _LiveScreenState extends State<LiveScreen>
       }
       final decoded = jsonDecode(text);
       if (decoded is! Map) return;
+      // Лог каждого входящего сообщения: видно, где рвётся цепочка диалога.
+      debugPrint('Gemini Live <= ${decoded.keys.join(', ')}');
 
       final errorObj = decoded['error'];
       if (errorObj is Map) {
@@ -456,7 +472,6 @@ class _LiveScreenState extends State<LiveScreen>
         return;
       }
 
-      // Сохраняем handle для возобновления сессии.
       final resumption = decoded['sessionResumptionUpdate'];
       if (resumption is Map) {
         final resumable = resumption['resumable'];
@@ -466,18 +481,17 @@ class _LiveScreenState extends State<LiveScreen>
         }
       }
 
-      // Сервер просит переподключиться: инициируем reconnect
-      // (поток микрофона при этом не останавливается).
       if (decoded.containsKey('goAway')) {
+        debugPrint('Gemini Live: получен goAway — переподключаюсь');
         _reconnect();
         return;
       }
 
       final serverContent = decoded['serverContent'];
       if (serverContent is Map) {
-        // Прерывание (модель перебила пользователя): единственный случай,
-        // когда буфер и очередь плеера полностью очищаются.
-        if (serverContent['interrupted'] == true) {
+        // Прерывание: очищаем буфер и очередь плеера.
+        if (serverContent['interrupted'] != null) {
+          debugPrint('Gemini Live <= interrupted: очищаю плеер');
           _clearPlayback();
         }
         final modelTurn = serverContent['modelTurn'];
@@ -492,8 +506,11 @@ class _LiveScreenState extends State<LiveScreen>
               if (data is String &&
                   data.isNotEmpty &&
                   mime.startsWith('audio/pcm')) {
-                // base64 -> PCM-байты, далее непрерывно в плеер.
                 _incomingPcmBuffer.addAll(base64Decode(data));
+                debugPrint(
+                  'Gemini Live <= аудио-часть: ${data.length} b64, '
+                  'буфер ${_incomingPcmBuffer.length} байт',
+                );
                 if (mounted && !_speaking) {
                   setState(() {
                     _speaking = true;
@@ -503,14 +520,20 @@ class _LiveScreenState extends State<LiveScreen>
               }
             }
           }
-          // Отдаём накопленное в плеер сразу, не дожидаясь конца реплики.
           _flushPcmToPlayer();
         }
         if (serverContent['turnComplete'] == true) {
-          // Конец реплики: дожимаем остаток буфера. Микрофон и отправка
-          // аудио НЕ останавливаются — статус вернётся в «Слушаю...»
-          // после завершения воспроизведения.
+          // Конец реплики: дожимаем буфер, статус «Слушаю...»,
+          // микрофон НЕ останавливается — следующий вопрос уже пишется.
           _flushPcmToPlayer(force: true);
+          _lastVoiceTime = DateTime.now();
+          _streamEndSent = false;
+          debugPrint('Gemini Live <= turnComplete: жду следующую фразу');
+          if (mounted) {
+            setState(() {
+              _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+            });
+          }
         }
       }
     } catch (e, st) {
@@ -518,25 +541,21 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  /// Передаёт накопленный PCM в очередь плеера непрерывно: каждый фрагмент
-  /// оборачивается в WAV (24 кГц, mono, 16-bit) и добавляется в
-  /// ConcatenatingAudioSource. Буфер очищается только при 'interrupted'
-  /// (см. [_clearPlayback]); между фрагментами воспроизведение не прерывается.
+  /// Передаёт накопленный PCM в очередь плеера непрерывно (WAV из памяти).
+  /// Если плеер завершил предыдущую очередь (completed), сбрасываем её —
+  /// иначе новые чанки не запускают воспроизведение и модель «замолкает».
   Future<void> _flushPcmToPlayer({bool force = false}) async {
     if (_incomingPcmBuffer.isEmpty) return;
     if (!force && _incomingPcmBuffer.length < _minPlaybackBytes) return;
-    final bytes = Uint8List.fromList(_incomingPcmBuffer);
+    final pcm = Uint8List.fromList(_incomingPcmBuffer);
     _incomingPcmBuffer.clear();
     try {
-      final dir = await getTemporaryDirectory();
-      _fileSeq++;
-      final file = File(
-        '${dir.path}/live_${DateTime.now().millisecondsSinceEpoch}'
-        '_$_fileSeq.wav',
-      );
-      final wav = _buildWav(bytes, sampleRate: 24000, channels: 1);
-      await file.writeAsBytes(wav, flush: true);
-      await _audioQueue.add(AudioSource.file(file.path));
+      if (_player.processingState == ProcessingState.completed) {
+        await _audioQueue.clear();
+        await _player.stop();
+      }
+      final wav = _buildWav(pcm, sampleRate: 24000, channels: 1);
+      await _audioQueue.add(_PcmWavSource(wav));
       if (!_player.playing) {
         await _player.play();
       }
@@ -550,9 +569,7 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  /// Полная очистка воспроизведения — только при получении 'interrupted':
-  /// буфер PCM, очередь плеера и его состояние сбрасываются, статус
-  /// возвращается к прослушиванию микрофона.
+  /// Полная очистка воспроизведения — при 'interrupted'.
   Future<void> _clearPlayback() async {
     _incomingPcmBuffer.clear();
     try {
@@ -815,6 +832,9 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 
+  /// Карточка ключа: поле ввода всегда доступно (предзаполнено сохранённым
+  /// ключом, если он есть). Отдельный блок «Используется сохранённый
+  /// API-ключ» удалён по задаче.
   Widget _buildKeyCard(
     Color cardBg,
     Color borderCol,
@@ -840,68 +860,46 @@ class _LiveScreenState extends State<LiveScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (!_hasSavedKey) ...[
-            TextField(
-              controller: _keyController,
-              obscureText: _obscureKey,
-              autocorrect: false,
-              enableSuggestions: false,
-              cursorColor: accent,
-              style: const TextStyle(color: Color(0xFFF5F0EB), fontSize: 15),
-              decoration: InputDecoration(
-                labelText: 'API-ключ',
-                hintText: 'Введите или проверьте ключ Gemini',
-                labelStyle: TextStyle(color: muted),
-                hintStyle: TextStyle(color: muted.withValues(alpha: 0.6)),
-                prefixIcon: Icon(Icons.key_rounded, color: accent, size: 20),
-                suffixIcon: IconButton(
-                  tooltip: _obscureKey ? 'Показать ключ' : 'Скрыть ключ',
-                  icon: Icon(
-                    _obscureKey
-                        ? Icons.visibility_outlined
-                        : Icons.visibility_off_outlined,
-                    color: muted,
-                    size: 20,
-                  ),
-                  onPressed: () => setState(() => _obscureKey = !_obscureKey),
+          TextField(
+            controller: _keyController,
+            obscureText: _obscureKey,
+            autocorrect: false,
+            enableSuggestions: false,
+            cursorColor: accent,
+            style: const TextStyle(color: Color(0xFFF5F0EB), fontSize: 15),
+            decoration: InputDecoration(
+              labelText: 'API-ключ',
+              hintText: 'Введите или проверьте ключ Gemini',
+              labelStyle: TextStyle(color: muted),
+              hintStyle: TextStyle(color: muted.withValues(alpha: 0.6)),
+              prefixIcon: Icon(Icons.key_rounded, color: accent, size: 20),
+              suffixIcon: IconButton(
+                tooltip: _obscureKey ? 'Показать ключ' : 'Скрыть ключ',
+                icon: Icon(
+                  _obscureKey
+                      ? Icons.visibility_outlined
+                      : Icons.visibility_off_outlined,
+                  color: muted,
+                  size: 20,
                 ),
-                filled: true,
-                fillColor: const Color(0xFF1B1A19),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(18),
-                  borderSide: BorderSide(color: borderCol),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(18),
-                  borderSide: BorderSide(color: borderCol),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(18),
-                  borderSide: BorderSide(color: accent, width: 1.8),
-                ),
+                onPressed: () => setState(() => _obscureKey = !_obscureKey),
+              ),
+              filled: true,
+              fillColor: const Color(0xFF1B1A19),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide(color: borderCol),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide(color: borderCol),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide(color: accent, width: 1.8),
               ),
             ),
-          ] else ...[
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Icon(Icons.key_rounded, color: accent, size: 20),
-                  const SizedBox(width: 10),
-                  const Expanded(
-                    child: Text(
-                      'Используется сохранённый API-ключ',
-                      style: TextStyle(
-                        color: Color(0xFFA8A096),
-                        fontSize: 14,
-                      ),
-                    ),
-                  ),
-                  Icon(Icons.check_circle_rounded, color: accent, size: 20),
-                ],
-              ),
-            ),
-          ],
+          ),
           if (!_running) ...[
             const SizedBox(height: 14),
             DecoratedBox(
@@ -1016,3 +1014,4 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 }
+
