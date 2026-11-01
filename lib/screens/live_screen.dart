@@ -477,19 +477,26 @@ class _LiveScreenState extends State<LiveScreen>
     if (mounted && !_closingManually) await _startSession();
   }
 
-  void _onWsMessage(dynamic raw) {
-    // Печатаем каждое входящее сообщение целиком, чтобы видеть повторные ответы.
-    debugPrint('Gemini Live <= $raw');
-    _addDebugLog('<= $raw');
+  /// Приводит входящий кадр WebSocket к строке. Бинарные кадры (байты)
+  /// декодируются через utf8; при неизвестном типе возвращает null.
+  String? _frameToText(dynamic raw) {
     try {
-      final String text;
-      if (raw is String) {
-        text = raw;
-      } else if (raw is List<int>) {
-        text = utf8.decode(raw, allowMalformed: true);
-      } else {
-        return;
-      }
+      if (raw is String) return raw;
+      if (raw is List<int>) return utf8.decode(raw, allowMalformed: true);
+    } catch (e) {
+      debugPrint('Gemini Live: не удалось декодировать кадр: $e');
+    }
+    debugPrint('Gemini Live: неизвестный тип кадра ${raw.runtimeType}');
+    return null;
+  }
+
+  void _onWsMessage(dynamic raw) {
+    final text = _frameToText(raw);
+    if (text == null) return;
+    // Логируем уже декодированный текст, а не байты-числа.
+    debugPrint('Gemini Live <= $text');
+    _addDebugLog('<= $text');
+    try {
       final decoded = jsonDecode(text);
       if (decoded is! Map) return;
 
