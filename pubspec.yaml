@@ -34,6 +34,9 @@ dependencies:
   web_socket_channel: any
   record: ^5.1.2
   just_audio: ^0.9.40
+  # Live-режим: провайдер realtime-аудио и низкоуровневый аудиодвижок.
+  gemini_live: any
+  flutter_soloud: any
 
 dependency_overrides:
   record_linux: ^1.0.0
