@@ -340,7 +340,7 @@ class _LiveScreenState extends State<LiveScreen>
   void _addDebugLog(String message) {
     if (!mounted) return;
     final clipped =
-        message.length > 100 ? message.substring(0, 100) : message;
+        message.length > 400 ? message.substring(0, 400) : message;
     setState(() => _debugLogs.add(clipped));
   }
 
@@ -495,15 +495,21 @@ class _LiveScreenState extends State<LiveScreen>
     if (text == null) return;
     // Логируем уже декодированный текст, а не байты-числа.
     debugPrint('Gemini Live <= $text');
-    _addDebugLog('<= $text');
+    _addDebugLog('<= ${text.length > 300 ? text.substring(0, 300) : text}');
     try {
       final decoded = jsonDecode(text);
       if (decoded is! Map) return;
+      _addDebugLog('Keys: ${decoded.keys.toList()}');
 
       final error = decoded['error'];
-      if (error is Map) {
-        final message = error['message']?.toString() ?? error.toString();
-        _reportError(_formatReason(message), message);
+      if (error != null) {
+        final full = error.toString();
+        debugPrint('Gemini Live: ошибка сервера полностью: $full');
+        _addDebugLog('Server error: $full');
+        final message = error is Map
+            ? (error['message']?.toString() ?? full)
+            : full;
+        _reportError(_formatReason(message), full);
         return;
       }
       if (decoded.containsKey('setupComplete')) {
@@ -546,7 +552,9 @@ class _LiveScreenState extends State<LiveScreen>
           if (data is! String || data.isEmpty || !mime.startsWith('audio/pcm')) {
             continue;
           }
-          _incomingPcmBuffer.addAll(base64Decode(data));
+          final bytes = base64Decode(data);
+          _addDebugLog('Audio chunk received: ${bytes.length} bytes');
+          _incomingPcmBuffer.addAll(bytes);
           if (mounted) {
             setState(() {
               _speaking = true;
@@ -561,6 +569,7 @@ class _LiveScreenState extends State<LiveScreen>
         unawaited(_flushPcmToPlayer(force: true));
         _lastVoiceTime = DateTime.now();
         _streamEndSent = false;
+        _addDebugLog('TurnComplete received');
         debugPrint('Gemini Live: turnComplete — продолжаю слушать');
         if (mounted) {
           setState(() {
