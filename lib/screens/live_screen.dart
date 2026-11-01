@@ -1,5 +1,10 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+// just_audio 0.10.x помечает StreamAudioSource/StreamAudioResponse как
+// экспериментальные; подавляем анализатор — API стабилен и используется
+// осознанно для воспроизведения PCM из памяти без записи на диск.
+// ignore_for_file: experimental_member_use
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
