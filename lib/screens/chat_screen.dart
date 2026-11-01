@@ -5,16 +5,19 @@ import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 
 import '../app_state.dart';
 import '../core/storage.dart';
 import '../models.dart';
+import '../models/model_config.dart';
 import '../models/tool.dart';
 import '../services/chat_service.dart';
 import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
+import '../widgets/inputs/adaptive_chat_input_bar.dart';
+// ignore: unused_import
+import '../widgets/inputs/text_chat_input.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
 import 'live_screen.dart';
@@ -49,45 +52,16 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Вложения, ожидающие отправки (файлы и картинки).
   final List<PlatformFile> _pending = [];
 
-  /// Подписи уровней мышления (строго на английском).
-  static const List<String> _reasoningLabels = <String>[
-    'Low',
-    'Medium',
-    'High',
-    'xHigh',
-    'Max',
-  ];
-
-  /// Единый радиус скругления панели ввода и капсулы: без прямых углов
-  /// и без артефактов нахлёстов.
-  static const double _radius = 24;
-
-  /// Цвет заливки капсулы «Мышление» зависит от выбранного уровня:
-  /// Low — спокойный тёплый графит, Medium — насыщенный терракотовый,
-  /// High — благородный терракотово-кирпичный Color(0xFFB85D4B),
-  /// xHigh — глубокий терракотово-кирпичный, Max — жжёный тёмный кирпич.
-  static const List<Color> _reasoningFills = <Color>[
-    Color(0xFF71594B), // Low — спокойный, гармоничный к палитре
-    Color(0xFFC07650), // Medium — насыщенный терракотовый
-    Color(0xFFB85D4B), // High — благородный терракотово-кирпичный
-    Color(0xFF9C4A34), // xHigh — глубокий терракотово-кирпичный
-    Color(0xFF7D3524), // Max — жжёный тёмный кирпич
-  ];
-
-  /// Цвет подписи уровня мышления.
-  static const List<Color> _reasoningLevelColors = <Color>[
-    Color(0xFFFFC107), // Low — янтарный
-    Color(0xFFBFDBFE), // Medium — светло-синий
-    Color(0xFFFFF4F0), // High — тёплый белый
-    Color(0xFFFFCF9E), // xHigh — светлая медь
-    Color(0xFFFFEFD9), // Max — тёплый кремовый
-  ];
-
-  /// Светло-синяя заливка капсулы «Поиск» (включённое состояние).
-  static const Color _searchFill = Color(0xFF3B82F6);
-
-  /// Светлый текст и иконка на синей заливке.
-  static const Color _searchTextOn = Color(0xFFF3F7FF);
+  ModelConfig get _currentConfig {
+    final modelId = effectiveConfig().model.toLowerCase();
+    if (modelId.contains('live') || modelId.contains('native-audio')) {
+      return const LiveVoiceModelConfig();
+    }
+    return TextModelConfig(
+      supportsAttachments: true,
+      supportsWebSearch: settings.webSearchMode != 'off',
+    );
+  }
 
   @override
   void dispose() {
@@ -575,7 +549,17 @@ class _ChatScreenState extends State<ChatScreen> {
               children: [
                 Expanded(child: _messages(chat, p)),
                 _attachmentActions(p),
-                _inputBar(p),
+                AdaptiveChatInputBar(
+                  config: _currentConfig,
+                  controller: _input,
+                  streaming: _streaming,
+                  reasoningLevel: _reasoningLevel,
+                  onCycleReasoning: _cycleReasoning,
+                  onToggleMic: _toggleMic,
+                  onAttach: _attach,
+                  onSend: _send,
+                  onStop: _stop,
+                ),
               ],
             ),
           ),
@@ -697,241 +681,6 @@ class _ChatScreenState extends State<ChatScreen> {
               ),
             );
           },
-        ),
-      ),
-    );
-  }
-
-  Widget _inputBar(Palette p) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-      child: AnimatedSize(
-        duration: const Duration(milliseconds: 160),
-        alignment: Alignment.bottomCenter,
-        clipBehavior: Clip.none,
-        child: Container(
-          decoration: BoxDecoration(
-            color: p.card,
-            borderRadius: BorderRadius.circular(_radius),
-            border: Border.all(color: p.border),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 15,
-                spreadRadius: 1,
-              ),
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.10),
-                blurRadius: 14,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          clipBehavior: Clip.antiAlias,
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: _input,
-                keyboardType: TextInputType.multiline,
-                textCapitalization: TextCapitalization.sentences,
-                cursorColor: p.accent,
-                style: fontStyle(settings.bodyFont, size: 16, color: p.text),
-                decoration: const InputDecoration(
-                  isDense: true,
-                  filled: false,
-                  hintText: 'Сообщение',
-                  hintStyle: TextStyle(color: Color(0xFFA8A096)),
-                  border: InputBorder.none,
-                  enabledBorder: InputBorder.none,
-                  focusedBorder: InputBorder.none,
-                  contentPadding: EdgeInsets.fromLTRB(16, 2, 16, 11.6),
-                ),
-                minLines: 1,
-                maxLines: 6,
-              ),
-              const SizedBox(height: 13.3),
-              Row(
-                children: [
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _reasoningCapsule(),
-                          const SizedBox(width: 8),
-                          _searchCapsule(p),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-                  IconButton(
-                    tooltip: 'Голосовой ввод',
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(
-                      minWidth: 44,
-                      minHeight: 44,
-                    ),
-                    visualDensity: VisualDensity.compact,
-                    iconSize: 28,
-                    icon: Icon(Icons.mic, size: 28, color: p.muted),
-                    onPressed: _streaming ? null : _toggleMic,
-                  ),
-                  _attachButton(p),
-                  const SizedBox(width: 2),
-                  _sendButton(p),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _attachButton(Palette p) {
-    return IconButton(
-      tooltip: 'Прикрепить файл',
-      padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
-      visualDensity: VisualDensity.compact,
-      iconSize: 26,
-      icon: Icon(Icons.attach_file, size: 26, color: p.muted),
-      onPressed: _streaming ? null : _attach,
-    );
-  }
-
-  Widget _sendButton(Palette p) {
-    return IconButton.filled(
-      tooltip: _streaming ? 'Остановить' : 'Отправить',
-      visualDensity: VisualDensity.compact,
-      constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-      onPressed: _streaming ? _stop : _send,
-      style: IconButton.styleFrom(
-        backgroundColor: p.accent,
-        foregroundColor: Colors.white,
-        shape: const CircleBorder(),
-      ),
-      icon: Icon(
-        _streaming ? Icons.stop_rounded : Icons.rocket_launch_rounded,
-        size: 26,
-      ),
-    );
-  }
-
-  Widget _reasoningCapsule() {
-    final label = _reasoningLabels[_reasoningLevel];
-    final fill = _reasoningFills[_reasoningLevel];
-    final levelColor = _reasoningLevelColors[_reasoningLevel];
-    final Widget leading;
-    if (_reasoningLevel == 0) {
-      leading = Icon(Icons.speed, size: 32, color: levelColor);
-    } else if (_reasoningLevel == 1) {
-      leading = Icon(Icons.lightbulb_outline, size: 32, color: levelColor);
-    } else if (_reasoningLevel == 2) {
-      leading = Icon(Icons.troubleshoot, size: 32, color: levelColor);
-    } else if (_reasoningLevel == 4) {
-      leading = Icon(Icons.biotech, size: 32, color: levelColor);
-    } else {
-      leading = Image.asset(
-        'assets/icons/brain_high.png',
-        width: 32,
-        height: 32,
-        fit: BoxFit.contain,
-      );
-    }
-    return Tooltip(
-      message: 'Уровень размышлений: $label',
-      child: InkWell(
-        borderRadius: BorderRadius.circular(_radius),
-        onTap: _streaming ? null : _cycleReasoning,
-        child: Container(
-          height: 36,
-          constraints: const BoxConstraints(minWidth: 112),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
-          decoration: BoxDecoration(
-            color: fill,
-            borderRadius: BorderRadius.circular(_radius),
-            border: Border.all(color: fill),
-            boxShadow: [
-              BoxShadow(
-                color: fill.withValues(alpha: 0.35),
-                blurRadius: 10,
-                offset: const Offset(0, 3),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              leading,
-              const SizedBox(width: 6),
-              Text(
-                label,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.2,
-                  fontWeight: FontWeight.w700,
-                  color: levelColor,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _searchCapsule(Palette p) {
-    final on = settings.webSearchEnabled;
-    return InkWell(
-      borderRadius: BorderRadius.circular(_radius),
-      onTap: _streaming
-          ? null
-          : () {
-              HapticFeedback.lightImpact();
-              setState(() => settings.setWebSearch(!on));
-            },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        curve: Curves.easeOut,
-        height: 36,
-        padding: const EdgeInsets.only(left: 12, right: 24),
-        alignment: Alignment.centerLeft,
-        decoration: BoxDecoration(
-          color: on ? _searchFill : Colors.transparent,
-          borderRadius: BorderRadius.circular(_radius),
-          border: Border.all(color: on ? _searchFill : p.border),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SvgPicture.asset(
-              'assets/icons/search.svg',
-              width: 20,
-              height: 20,
-              colorFilter: ColorFilter.mode(
-                on ? _searchTextOn : p.muted,
-                BlendMode.srcIn,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Text(
-              'Поиск',
-              maxLines: 1,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.2,
-                fontWeight: FontWeight.w700,
-                color: on ? _searchTextOn : p.muted,
-              ),
-            ),
-          ],
         ),
       ),
     );
