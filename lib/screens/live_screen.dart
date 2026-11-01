@@ -11,6 +11,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
+import '../app_state.dart';
+import '../theme.dart';
+
 /// Экран голосового Live-режима (Gemini Live API по WebSocket).
 class LiveScreen extends StatefulWidget {
   final String? apiKey;
@@ -29,11 +32,12 @@ class _LiveScreenState extends State<LiveScreen>
 
   static const String _liveModelId =
       'gemini-2.5-flash-native-audio-preview-12-2025';
-  static const String _keyFileName = 'gem.txt';
   static const String _inputAudioMime = 'audio/pcm;rate=16000';
   static const String _outputAudioMime = 'audio/pcm;rate=24000';
 
   late final AnimationController _pulseController;
+  late final Animation<double> _pulseAnim;
+  late final TextEditingController _keyController;
   final AudioRecorder _recorder = AudioRecorder();
   final AudioPlayer _player = AudioPlayer();
 
@@ -48,33 +52,38 @@ class _LiveScreenState extends State<LiveScreen>
   bool _muted = false;
   bool _closingManually = false;
   bool _running = false;
-  final TextEditingController _keyController = TextEditingController();
+  bool _obscureKey = true;
   String _status = 'Готов к запуску';
   String? _errorDetails;
 
   @override
   void initState() {
     super.initState();
+    final initialKey = (widget.apiKey != null && widget.apiKey!.trim().isNotEmpty)
+        ? widget.apiKey!.trim()
+        : effectiveConfig().apiKey.trim();
+    _keyController = TextEditingController(text: initialKey);
+
     _pulseController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1100),
+      duration: const Duration(milliseconds: 1400),
     )..repeat(reverse: true);
+    _pulseAnim = CurvedAnimation(
+      parent: _pulseController,
+      curve: Curves.easeInOutSine,
+    );
 
     _playerSub = _player.playerStateStream.listen((state) {
       if (!mounted) return;
-      if (state.processingState == ProcessingState.completed) {
-        if (_speaking) {
-          setState(() {
-            _speaking = false;
-            if (_connected) {
-              _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
-            }
-          });
-        }
+      if (state.processingState == ProcessingState.completed && _speaking) {
+        setState(() {
+          _speaking = false;
+          if (_connected) {
+            _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+          }
+        });
       }
     });
-
-    // Сессия запускается кнопкой «Запустить», не автоматически.
   }
 
   @override
@@ -89,12 +98,12 @@ class _LiveScreenState extends State<LiveScreen>
     super.dispose();
   }
 
-  /// Ключ для Live-режима временно захардкожен здесь
-  /// (раньше логика читала файл gem.txt в папке данных приложения).
   Future<String> _resolveApiKey() async {
-    final String apiKey = '';
     final typed = _keyController.text.trim();
-    return typed.isNotEmpty ? typed : apiKey;
+    if (typed.isNotEmpty) return typed;
+    final passed = widget.apiKey?.trim() ?? '';
+    if (passed.isNotEmpty) return passed;
+    return effectiveConfig().apiKey.trim();
   }
 
   String _formatReason(Object error, [String? closeReason, int? closeCode]) {
@@ -130,12 +139,9 @@ class _LiveScreenState extends State<LiveScreen>
     return 'Ошибка соединения с Gemini Live API';
   }
 
-  /// Единая точка вывода ошибок: статус на экране и SnackBar.
   void _reportError(String message, [Object? rawError, StackTrace? st]) {
     debugPrint('Gemini Live error: $message | raw: $rawError');
-    if (st != null) {
-      debugPrint(st.toString());
-    }
+    if (st != null) debugPrint(st.toString());
     if (!mounted) return;
     setState(() {
       _connected = false;
@@ -150,15 +156,17 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   Future<void> _startSession() async {
-    if (_keyController.text.trim().isEmpty) {
+    final key = await _resolveApiKey();
+    if (!mounted) return;
+    if (key.isEmpty) {
       ScaffoldMessenger.maybeOf(context)?.showSnackBar(
         const SnackBar(content: Text('Введите API-ключ')),
       );
       return;
     }
     _closingManually = false;
-    _running = true;
     setState(() {
+      _running = true;
       _status = 'Подключение...';
       _errorDetails = null;
       _connected = false;
@@ -173,15 +181,6 @@ class _LiveScreenState extends State<LiveScreen>
         return;
       }
 
-      final key = await _resolveApiKey();
-      if (!mounted) return;
-      if (key.isEmpty) {
-        _reportError(
-          'Ошибка: не найден ключ. Положите его в файл $_keyFileName в папке приложения',
-        );
-        return;
-      }
-
       final url = '$_wsBaseUrl?key=${Uri.encodeQueryComponent(key)}';
       final ws = await WebSocket.connect(url).timeout(
         const Duration(seconds: 20),
@@ -192,7 +191,6 @@ class _LiveScreenState extends State<LiveScreen>
       }
       _ws = ws;
 
-      // Setup: ответ сервера {"setupComplete": {}} запускает микрофон.
       ws.add(jsonEncode(<String, dynamic>{
         'setup': <String, dynamic>{
           'model': 'models/$_liveModelId',
@@ -207,22 +205,18 @@ class _LiveScreenState extends State<LiveScreen>
         _onWsMessage,
         onError: (Object err, StackTrace st) {
           if (_closingManually) return;
-          final msg = _formatReason(err, ws.closeReason, ws.closeCode);
-          _reportError(msg, err, st);
+          _reportError(_formatReason(err, ws.closeReason, ws.closeCode), err, st);
         },
         onDone: () {
           if (_closingManually || !mounted) return;
           final code = ws.closeCode;
           final reason = ws.closeReason;
-          debugPrint('Gemini Live: WebSocket закрыт (code=$code, reason=$reason)');
           if ((reason != null && reason.trim().isNotEmpty) ||
               (code != null && code != WebSocketStatus.normalClosure)) {
-            final msg = _formatReason(
-              reason ?? 'Код закрытия $code',
-              reason,
-              code,
+            _reportError(
+              _formatReason(reason ?? 'Код закрытия $code', reason, code),
+              'code=$code, reason=$reason',
             );
-            _reportError(msg, 'code=$code, reason=$reason');
           } else {
             setState(() {
               _connected = false;
@@ -241,8 +235,6 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  /// Вызывается при получении setupComplete: сессия готова,
-  /// статус «Слушаю...» и запуск записи с микрофона.
   Future<void> _onSetupComplete() async {
     if (_connected || !mounted) return;
     setState(() {
@@ -277,18 +269,17 @@ class _LiveScreenState extends State<LiveScreen>
       (chunk) {
         final ws = _ws;
         if (_muted || !_connected || chunk.isEmpty || ws == null) return;
-        final payload = <String, dynamic>{
-          'realtimeInput': <String, dynamic>{
-            'mediaChunks': <Map<String, dynamic>>[
-              <String, dynamic>{
-                'mimeType': _inputAudioMime,
-                'data': base64Encode(chunk),
-              },
-            ],
-          },
-        };
         try {
-          ws.add(jsonEncode(payload));
+          ws.add(jsonEncode(<String, dynamic>{
+            'realtimeInput': <String, dynamic>{
+              'mediaChunks': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'mimeType': _inputAudioMime,
+                  'data': base64Encode(chunk),
+                },
+              ],
+            },
+          }));
         } catch (e, st) {
           debugPrint('Gemini Live: ошибка отправки аудио: $e\n$st');
         }
@@ -301,7 +292,6 @@ class _LiveScreenState extends State<LiveScreen>
 
   void _onWsMessage(dynamic raw) {
     try {
-      // Байты декодируем в строку UTF-8 до разбора JSON.
       final String text;
       if (raw is String) {
         text = raw;
@@ -435,25 +425,17 @@ class _LiveScreenState extends State<LiveScreen>
       await _micSub?.cancel();
       _micSub = null;
       await _recorder.stop();
-    } catch (e) {
-      debugPrint('Gemini Live: ошибка остановки микрофона: $e');
-    }
+    } catch (_) {}
     try {
       await _wsSub?.cancel();
       _wsSub = null;
       final ws = _ws;
       _ws = null;
-      if (ws != null) {
-        await ws.close();
-      }
-    } catch (e) {
-      debugPrint('Gemini Live: ошибка закрытия WebSocket: $e');
-    }
+      if (ws != null) await ws.close();
+    } catch (_) {}
     try {
       await _player.stop();
-    } catch (e) {
-      debugPrint('Gemini Live: ошибка остановки плеера: $e');
-    }
+    } catch (_) {}
   }
 
   Future<void> _endCall() async {
@@ -464,195 +446,354 @@ class _LiveScreenState extends State<LiveScreen>
 
   @override
   Widget build(BuildContext context) {
-    const bg = Color(0xFF1B1A19);
+    const bgTop = Color(0xFF26221F);
+    const bgMid = Color(0xFF1B1A19);
+    const bgBottom = Color(0xFF141312);
+    const cardBg = Color(0xFF242321);
+    const borderCol = Color(0xFF3A3733);
     const accent = Color(0xFFD99A6C);
     const text = Color(0xFFF5F0EB);
     const muted = Color(0xFFA8A096);
 
     return Scaffold(
-      backgroundColor: bg,
+      backgroundColor: bgMid,
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: bg,
+        backgroundColor: Colors.transparent,
         foregroundColor: text,
-        title: const Text('Live-режим'),
-      ),
-      body: SafeArea(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        elevation: 0,
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const SizedBox(height: 24),
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: AnimatedBuilder(
-                  animation: _pulseController,
-                  builder: (context, _) {
-                    final t = _pulseController.value;
-                    final scale = _connected ? (1.0 + t * 0.22) : 1.0;
-                    final circleColor = _speaking
-                        ? accent
-                        : (_connected
-                            ? accent.withValues(alpha: 0.75)
-                            : muted.withValues(alpha: 0.35));
-                    return Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        SizedBox(
-                          width: 220,
-                          height: 220,
-                          child: Center(
-                            child: Transform.scale(
-                              scale: scale,
-                              child: Container(
-                                width: 150,
-                                height: 150,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: circleColor.withValues(alpha: 0.2),
-                                  border: Border.all(
-                                    color: circleColor,
-                                    width: 3,
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: circleColor.withValues(alpha: 0.35),
-                                      blurRadius: 32,
-                                      spreadRadius: 6,
-                                    ),
-                                  ],
-                                ),
-                                child: Icon(
-                                  _speaking
-                                      ? Icons.graphic_eq_rounded
-                                      : Icons.mic_rounded,
-                                  size: 56,
-                                  color: text,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 28),
-                        Text(
-                          _status,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 20,
-                            fontWeight: FontWeight.w600,
-                            color: text,
-                          ),
-                        ),
-                        if (_errorDetails != null &&
-                            _errorDetails!.trim().isNotEmpty) ...[
-                          const SizedBox(height: 10),
-                          Text(
-                            _errorDetails!,
-                            maxLines: 3,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              fontSize: 13,
-                              color: muted,
-                            ),
-                          ),
-                        ],
-                      ],
-                    );
-                  },
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: _keyController,
-                    obscureText: true,
-                    autocorrect: false,
-                    enableSuggestions: false,
-                    cursorColor: accent,
-                    style: const TextStyle(color: text),
-                    decoration: InputDecoration(
-                      labelText: 'API-ключ',
-                      labelStyle: const TextStyle(color: muted),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: const BorderSide(color: muted),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: BorderSide(
-                          color: muted.withValues(alpha: 0.5),
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(20),
-                        borderSide: const BorderSide(color: accent, width: 2),
-                      ),
-                    ),
-                  ),
-                  if (!_running) ...[
-                    const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: _startSession,
-                        icon: const Icon(Icons.play_arrow_rounded),
-                        label: const Text('Запустить'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: accent,
-                          foregroundColor: bg,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(bottom: 36),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  IconButton.filled(
-                    tooltip: _muted ? 'Включить микрофон' : 'Выключить микрофон',
-                    onPressed: () {
-                      setState(() {
-                        _muted = !_muted;
-                        if (_connected && !_speaking) {
-                          _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
-                        }
-                      });
-                    },
-                    style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFF2A2826),
-                      foregroundColor: text,
-                      minimumSize: const Size(60, 60),
-                    ),
-                    icon: Icon(_muted ? Icons.mic_off_rounded : Icons.mic_rounded),
-                  ),
-                  const SizedBox(width: 24),
-                  IconButton.filled(
-                    tooltip: 'Завершить',
-                    onPressed: _endCall,
-                    style: IconButton.styleFrom(
-                      backgroundColor: const Color(0xFFB3261E),
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size(64, 64),
-                    ),
-                    icon: const Icon(Icons.call_end_rounded, size: 28),
-                  ),
-                ],
+            const Icon(Icons.auto_awesome, size: 18, color: accent),
+            const SizedBox(width: 8),
+            Text(
+              'Live-режим',
+              style: fontStyle(
+                settings.bodyFont,
+                size: 19,
+                weight: FontWeight.w600,
+                color: text,
               ),
             ),
           ],
         ),
+      ),
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [bgTop, bgMid, bgBottom],
+          ),
+        ),
+        child: SafeArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const SizedBox(height: 12),
+                      _buildPulseSection(accent, text, muted),
+                      _buildKeyCard(cardBg, borderCol, accent, text, muted),
+                      _buildBottomControls(cardBg, borderCol, accent, text),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPulseSection(Color accent, Color text, Color muted) {
+    return AnimatedBuilder(
+      animation: _pulseAnim,
+      builder: (context, _) {
+        final t = _pulseAnim.value;
+        final active = _connected && !_muted;
+        final outerScale = active ? (1.0 + t * 0.28) : (1.0 + t * 0.06);
+        final innerScale = active ? (1.0 + t * 0.14) : (1.0 + t * 0.03);
+        final coreColor = _speaking
+            ? accent
+            : (_connected
+                ? (_muted ? muted.withValues(alpha: 0.45) : accent)
+                : accent.withValues(alpha: 0.65));
+
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 230,
+              height: 230,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  Transform.scale(
+                    scale: outerScale,
+                    child: Container(
+                      width: 176,
+                      height: 176,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: coreColor.withValues(alpha: active ? 0.09 : 0.04),
+                        border: Border.all(
+                          color: coreColor.withValues(alpha: active ? 0.25 : 0.12),
+                          width: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  Transform.scale(
+                    scale: innerScale,
+                    child: Container(
+                      width: 146,
+                      height: 146,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [
+                            coreColor.withValues(alpha: 0.34),
+                            coreColor.withValues(alpha: 0.12),
+                          ],
+                        ),
+                        border: Border.all(color: coreColor, width: 2.5),
+                        boxShadow: [
+                          BoxShadow(
+                            color: coreColor.withValues(alpha: active ? 0.42 : 0.2),
+                            blurRadius: active ? 36 : 20,
+                            spreadRadius: active ? 6 : 2,
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        _speaking
+                            ? Icons.graphic_eq_rounded
+                            : (_muted ? Icons.mic_off_rounded : Icons.mic_rounded),
+                        size: 54,
+                        color: text,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 20),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFF242321).withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFF3A3733)),
+              ),
+              child: Text(
+                _status,
+                textAlign: TextAlign.center,
+                style: fontStyle(
+                  settings.bodyFont,
+                  size: 18,
+                  weight: FontWeight.w600,
+                  color: text,
+                ),
+              ),
+            ),
+            if (_errorDetails != null && _errorDetails!.trim().isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                _errorDetails!,
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 13, color: Color(0xFFA8A096)),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildKeyCard(
+    Color cardBg,
+    Color borderCol,
+    Color accent,
+    Color text,
+    Color muted,
+  ) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: cardBg.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: borderCol),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.28),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(
+            controller: _keyController,
+            obscureText: _obscureKey,
+            autocorrect: false,
+            enableSuggestions: false,
+            cursorColor: accent,
+            style: const TextStyle(color: Color(0xFFF5F0EB), fontSize: 15),
+            decoration: InputDecoration(
+              labelText: 'API-ключ',
+              hintText: 'Введите или проверьте ключ Gemini',
+              labelStyle: TextStyle(color: muted),
+              hintStyle: TextStyle(color: muted.withValues(alpha: 0.6)),
+              prefixIcon: Icon(Icons.key_rounded, color: accent, size: 20),
+              suffixIcon: IconButton(
+                tooltip: _obscureKey ? 'Показать ключ' : 'Скрыть ключ',
+                icon: Icon(
+                  _obscureKey ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                  color: muted,
+                  size: 20,
+                ),
+                onPressed: () => setState(() => _obscureKey = !_obscureKey),
+              ),
+              filled: true,
+              fillColor: const Color(0xFF1B1A19),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide(color: borderCol),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide(color: borderCol),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(18),
+                borderSide: BorderSide(color: accent, width: 1.8),
+              ),
+            ),
+          ),
+          if (!_running) ...[
+            const SizedBox(height: 14),
+            DecoratedBox(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withValues(alpha: 0.32),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: ElevatedButton.icon(
+                onPressed: _startSession,
+                icon: const Icon(Icons.play_arrow_rounded, size: 22),
+                label: Text(
+                  'Запустить',
+                  style: fontStyle(
+                    settings.bodyFont,
+                    size: 16,
+                    weight: FontWeight.w600,
+                    color: const Color(0xFF1B1A19),
+                  ),
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accent,
+                  foregroundColor: const Color(0xFF1B1A19),
+                  elevation: 0,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBottomControls(
+    Color cardBg,
+    Color borderCol,
+    Color accent,
+    Color text,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24, top: 4),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.35),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: IconButton.filled(
+              tooltip: _muted ? 'Включить микрофон' : 'Выключить микрофон',
+              onPressed: () {
+                setState(() {
+                  _muted = !_muted;
+                  if (_connected && !_speaking) {
+                    _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+                  }
+                });
+              },
+              style: IconButton.styleFrom(
+                backgroundColor: _muted ? accent.withValues(alpha: 0.22) : cardBg,
+                foregroundColor: _muted ? accent : text,
+                side: BorderSide(color: _muted ? accent : borderCol, width: 1.5),
+                minimumSize: const Size(62, 62),
+              ),
+              icon: Icon(
+                _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                size: 26,
+              ),
+            ),
+          ),
+          const SizedBox(width: 28),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFB3261E).withValues(alpha: 0.45),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: IconButton.filled(
+              tooltip: 'Завершить',
+              onPressed: _endCall,
+              style: IconButton.styleFrom(
+                backgroundColor: const Color(0xFFB3261E),
+                foregroundColor: Colors.white,
+                minimumSize: const Size(66, 66),
+              ),
+              icon: const Icon(Icons.call_end_rounded, size: 28),
+            ),
+          ),
+        ],
       ),
     );
   }
