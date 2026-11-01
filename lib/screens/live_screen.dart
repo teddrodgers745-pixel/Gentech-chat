@@ -86,20 +86,11 @@ class _LiveScreenState extends State<LiveScreen>
     super.dispose();
   }
 
-  /// Ключ берётся из файла gem.txt в папке данных приложения;
-  /// если файла нет — из параметра экрана (если передан).
+  /// Ключ для Live-режима временно захардкожен здесь
+  /// (раньше логика читала файл gem.txt в папке данных приложения).
   Future<String> _resolveApiKey() async {
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final f = File('${dir.path}/$_keyFileName');
-      if (await f.exists()) {
-        final txt = (await f.readAsString()).trim();
-        if (txt.isNotEmpty) return txt;
-      }
-    } catch (e) {
-      debugPrint('Gemini Live: не удалось прочитать $_keyFileName: $e');
-    }
-    return widget.apiKey?.trim() ?? '';
+    final String apiKey = 'AIzaSyBE2MLBvqg9cj-Ouij9sChS4vxUdE23s38';
+    return apiKey;
   }
 
   String _formatReason(Object error, [String? closeReason, int? closeCode]) {
