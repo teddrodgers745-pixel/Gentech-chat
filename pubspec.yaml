@@ -35,7 +35,7 @@ dependencies:
   record: ^5.1.2
   just_audio: ^0.9.40
   # Live-режим: провайдер realtime-аудио и низкоуровневый аудиодвижок.
-  gemini_live: any
+  gemini_live: ^2026.10.5
   flutter_soloud: any
 
 dependency_overrides:
