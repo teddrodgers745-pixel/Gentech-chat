@@ -74,6 +74,9 @@ class _LiveScreenState extends State<LiveScreen>
   StreamSubscription<dynamic>? _wsSub;
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<PlayerState>? _playerSub;
+  Timer? _audioDebugTimer;
+  List<String> _debugLogs = [];
+  bool _audioSentInInterval = false;
 
   DateTime _lastVoiceTime = DateTime.now();
   String? _sessionHandle;
@@ -223,6 +226,7 @@ class _LiveScreenState extends State<LiveScreen>
         onDone: () {
           debugPrint('Gemini Live: поток микрофона завершён');
           _micActive = false;
+          _stopAudioDebugTimer();
         },
       );
       debugPrint('Gemini Live: микрофон запущен');
@@ -235,6 +239,7 @@ class _LiveScreenState extends State<LiveScreen>
 
   Future<void> _stopMic() async {
     _micBuffer.clear();
+    _stopAudioDebugTimer();
     final sub = _micSub;
     _micSub = null;
     try {
@@ -261,7 +266,7 @@ class _LiveScreenState extends State<LiveScreen>
     while (_micBuffer.length >= _micChunkBytes) {
       final piece = Uint8List.fromList(_micBuffer.sublist(0, _micChunkBytes));
       _micBuffer.removeRange(0, _micChunkBytes);
-      _sendJson(<String, dynamic>{
+      final sent = _sendJson(<String, dynamic>{
         'realtimeInput': <String, dynamic>{
           'mediaChunks': <Map<String, dynamic>>[
             <String, dynamic>{
@@ -271,6 +276,21 @@ class _LiveScreenState extends State<LiveScreen>
           ],
         },
       });
+      if (sent) {
+        _audioSentInInterval = true;
+        _audioDebugTimer ??= Timer.periodic(
+          const Duration(seconds: 2),
+          (_) {
+            if (!_micActive || !_connected || _muted) {
+              _audioSentInInterval = false;
+              return;
+            }
+            if (!_audioSentInInterval) return;
+            _audioSentInInterval = false;
+            _addDebugLog('Sending audio...');
+          },
+        );
+      }
     }
   }
 
@@ -299,14 +319,29 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  void _sendJson(Map<String, dynamic> payload) {
+  bool _sendJson(Map<String, dynamic> payload) {
     final ws = _ws;
-    if (ws == null) return;
+    if (ws == null) return false;
     try {
       ws.add(jsonEncode(payload));
+      return true;
     } catch (e, st) {
       debugPrint('Gemini Live: ошибка отправки: $e\n$st');
+      return false;
     }
+  }
+
+  void _stopAudioDebugTimer() {
+    _audioDebugTimer?.cancel();
+    _audioDebugTimer = null;
+    _audioSentInInterval = false;
+  }
+
+  void _addDebugLog(String message) {
+    if (!mounted) return;
+    final clipped =
+        message.length > 100 ? message.substring(0, 100) : message;
+    setState(() => _debugLogs.add(clipped));
   }
 
   Future<void> _startSession() async {
@@ -445,6 +480,7 @@ class _LiveScreenState extends State<LiveScreen>
   void _onWsMessage(dynamic raw) {
     // Печатаем каждое входящее сообщение целиком, чтобы видеть повторные ответы.
     debugPrint('Gemini Live <= $raw');
+    _addDebugLog('<= $raw');
     try {
       final String text;
       if (raw is String) {
@@ -676,6 +712,7 @@ class _LiveScreenState extends State<LiveScreen>
                     const SizedBox(height: 12),
                     _pulseSection(accent, text, muted, cardBg, border),
                     if (!_running) _startArea(cardBg, border, accent, muted),
+                    _debugPanel(cardBg, border, text, muted),
                     _bottomControls(cardBg, border, accent, text),
                   ],
                 ),
@@ -893,6 +930,49 @@ class _LiveScreenState extends State<LiveScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _debugPanel(
+    Color cardBg,
+    Color border,
+    Color text,
+    Color muted,
+  ) {
+    return Container(
+      width: double.infinity,
+      height: 130,
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        color: cardBg.withValues(alpha: 0.72),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        itemCount: _debugLogs.isEmpty ? 1 : _debugLogs.length,
+        itemBuilder: (context, index) {
+          if (_debugLogs.isEmpty) {
+            return Text(
+              'Журнал соединения',
+              style: TextStyle(fontSize: 11, color: muted),
+            );
+          }
+          final log = _debugLogs[_debugLogs.length - 1 - index];
+          return Text(
+            log,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 10,
+              color: text,
+              fontFamily: 'JetBrains Mono',
+              fontFamilyFallback: const ['monospace'],
+            ),
+          );
+        },
       ),
     );
   }
