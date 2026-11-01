@@ -34,12 +34,20 @@ class _PcmWavSource extends StreamAudioSource {
   final Uint8List wavBytes;
   _PcmWavSource(this.wavBytes);
 
+  /// Новая сигнатура just_audio (0.10.x): request([int? start, int? end]),
+  /// StreamAudioResponse требует contentLength и offset.
   @override
-  Future<StreamAudioResponse> request([Map<String, dynamic>? request]) async {
+  Future<StreamAudioResponse> request([int? start, int? end]) async {
+    final from = (start ?? 0).clamp(0, wavBytes.length);
+    var to = end ?? wavBytes.length;
+    if (to < from) to = from;
+    if (to > wavBytes.length) to = wavBytes.length;
     return StreamAudioResponse(
       sourceLength: wavBytes.length,
+      contentLength: to - from,
+      offset: from,
       contentType: 'audio/wav',
-      stream: Stream<List<int>>.value(wavBytes),
+      stream: Stream<List<int>>.value(wavBytes.sublist(from, to)),
     );
   }
 }
