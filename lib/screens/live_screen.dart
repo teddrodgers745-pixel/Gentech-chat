@@ -1,7 +1,5 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
-// just_audio помечает StreamAudioSource как экспериментальный; предупреждение
-// подавляем осознанно: PCM воспроизводится из памяти без записи на диск.
 // ignore_for_file: experimental_member_use
 
 import 'dart:async';
@@ -18,10 +16,6 @@ import 'package:record/record.dart';
 import '../app_state.dart';
 import '../theme.dart';
 
-/// Экран голосового Live-режима (Gemini Live API по WebSocket).
-/// Микрофон пишется непрерывно от «Запустить» до «Завершить».
-/// Ответы модели проигрываются по мере прихода; turnComplete возвращает
-/// статус к «Слушаю...», но микрофон не останавливается.
 class LiveScreen extends StatefulWidget {
   final String? apiKey;
 
@@ -31,17 +25,15 @@ class LiveScreen extends StatefulWidget {
   State<LiveScreen> createState() => _LiveScreenState();
 }
 
-/// Источник WAV из памяти: PCM ответа модели отдаётся плееру без записи на диск.
 class _PcmWavSource extends StreamAudioSource {
   final Uint8List wavBytes;
+
   _PcmWavSource(this.wavBytes);
 
   @override
   Future<StreamAudioResponse> request([int? start, int? end]) async {
     final from = (start ?? 0).clamp(0, wavBytes.length);
-    var to = end ?? wavBytes.length;
-    if (to < from) to = from;
-    if (to > wavBytes.length) to = wavBytes.length;
+    final to = (end ?? wavBytes.length).clamp(from, wavBytes.length);
     return StreamAudioResponse(
       sourceLength: wavBytes.length,
       contentLength: to - from,
@@ -57,48 +49,35 @@ class _LiveScreenState extends State<LiveScreen>
   static const String _wsBaseUrl =
       'wss://generativelanguage.googleapis.com/ws/'
       'google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
-
   static const String _liveModelId =
       'gemini-2.5-flash-native-audio-preview-12-2025';
   static const String _inputAudioMime = 'audio/pcm;rate=16000';
   static const String _outputAudioMime = 'audio/pcm;rate=24000';
-
-  /// 30 мс PCM 16-bit mono 16 кГц = 16000 * 2 * 0.03 = 960 байт.
   static const int _micChunkBytes = 960;
-
-  /// Порог тишины (RMS по шкале 16-bit) и пауза, после которой уходит audioStreamEnd.
   static const double _silenceRmsThreshold = 350;
   static const Duration _silenceDuration = Duration(milliseconds: 1500);
-
-  /// Минимальный объём PCM перед добавлением в плеер (24 кГц * 2 байта * 0.1 с).
   static const int _minPlaybackBytes = 4800;
 
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnim;
   late final TextEditingController _keyController;
+  late final Future<void> _playerReady;
+
   final AudioRecorder _recorder = AudioRecorder();
   final AudioPlayer _player = AudioPlayer();
+  final List<int> _micBuffer = <int>[];
+  final List<int> _incomingPcmBuffer = <int>[];
+  final ConcatenatingAudioSource _audioQueue =
+      ConcatenatingAudioSource(children: <AudioSource>[]);
 
   WebSocket? _ws;
   StreamSubscription<dynamic>? _wsSub;
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<PlayerState>? _playerSub;
 
-  /// Входящий PCM ответа модели (накапливается между base64-частями).
-  final List<int> _incomingPcmBuffer = <int>[];
-
-  /// Очередь воспроизведения: чанки ответа добавляются непрерывно,
-  /// очищается только при 'interrupted' или завершении.
-  final ConcatenatingAudioSource _audioQueue = ConcatenatingAudioSource(
-    children: <AudioSource>[],
-  );
-
-  /// Буфер микрофона: чанки record режем на порции по [_micChunkBytes].
-  final List<int> _micBuffer = <int>[];
-
   DateTime _lastVoiceTime = DateTime.now();
-  bool _streamEndSent = false;
   String? _sessionHandle;
+  bool _streamEndSent = false;
   bool _reconnecting = false;
   bool _connected = false;
   bool _speaking = false;
@@ -110,19 +89,15 @@ class _LiveScreenState extends State<LiveScreen>
   String _status = 'Готов к запуску';
   String? _errorDetails;
 
-  /// Ключ из настроек (или переданный извне). Если он есть, поле ввода скрыто.
   String get _savedKey {
     final passed = widget.apiKey?.trim() ?? '';
     return passed.isNotEmpty ? passed : effectiveConfig().apiKey.trim();
   }
 
-  bool get _hasSavedKey => _savedKey.isNotEmpty;
-
   @override
   void initState() {
     super.initState();
     _keyController = TextEditingController();
-
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
@@ -131,28 +106,16 @@ class _LiveScreenState extends State<LiveScreen>
       parent: _pulseController,
       curve: Curves.easeInOutSine,
     );
-
-    () async {
-      try {
-        await _player.setAudioSource(_audioQueue);
-      } catch (e) {
-        debugPrint('Gemini Live: не удалось инициализировать плеер: $e');
-      }
-    }();
-
-    // Конец очереди: возвращаем статус к слушанию, микрофон не трогаем.
+    _playerReady = _initializePlayer();
     _playerSub = _player.playerStateStream.listen((state) {
       if (!mounted) return;
       if (state.processingState == ProcessingState.completed && _speaking) {
         setState(() {
           _speaking = false;
-          if (_connected) {
-            _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
-          }
+          if (_connected) _status = 'Слушаю...';
         });
       }
     });
-
     _player.playbackEventStream.listen(
       (_) {},
       onError: (Object e, StackTrace st) {
@@ -161,10 +124,18 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 
+  Future<void> _initializePlayer() async {
+    try {
+      await _player.setAudioSource(_audioQueue);
+    } catch (e) {
+      debugPrint('Gemini Live: не удалось инициализировать плеер: $e');
+    }
+  }
+
   @override
   void dispose() {
     _closingManually = true;
-    _stopSession();
+    unawaited(_stopSession());
     _playerSub?.cancel();
     _pulseController.dispose();
     _keyController.dispose();
@@ -173,10 +144,8 @@ class _LiveScreenState extends State<LiveScreen>
     super.dispose();
   }
 
-  String _resolveApiKey() {
-    if (_hasSavedKey) return _savedKey;
-    return _keyController.text.trim();
-  }
+  String _resolveApiKey() =>
+      _savedKey.isNotEmpty ? _savedKey : _keyController.text.trim();
 
   String _formatReason(Object error, [String? closeReason, int? closeCode]) {
     final combined = '${error.toString()} ${closeReason ?? ''}'.toLowerCase();
@@ -205,15 +174,14 @@ class _LiveScreenState extends State<LiveScreen>
       return 'Ошибка: ${closeReason.trim()}';
     }
     final raw = error.toString().trim();
-    if (raw.isNotEmpty && raw != 'null') {
-      return 'Ошибка: $raw';
-    }
-    return 'Ошибка соединения с Gemini Live API';
+    return raw.isEmpty || raw == 'null'
+        ? 'Ошибка соединения с Live API'
+        : 'Ошибка: $raw';
   }
 
-  void _reportError(String message, [Object? rawError, StackTrace? st]) {
-    debugPrint('Gemini Live error: $message | raw: $rawError');
-    if (st != null) debugPrint(st.toString());
+  void _reportError(String message, [Object? error, StackTrace? stack]) {
+    debugPrint('Gemini Live error: $message | raw: $error');
+    if (stack != null) debugPrint(stack.toString());
     unawaited(_stopMic());
     if (!mounted) return;
     setState(() {
@@ -221,17 +189,13 @@ class _LiveScreenState extends State<LiveScreen>
       _speaking = false;
       _status = message;
       _running = false;
-      _errorDetails = rawError?.toString();
+      _errorDetails = error?.toString();
     });
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(content: Text(message)),
     );
   }
 
-  // ---------- микрофон (непрерывный поток) ----------
-
-  /// Запускает поток записи PCM 16 кГц. Работает до [_stopMic].
-  /// Возвращает false, если запись невозможна (ошибка уже показана).
   Future<bool> _startMic() async {
     if (_micActive) return true;
     try {
@@ -261,7 +225,7 @@ class _LiveScreenState extends State<LiveScreen>
           _micActive = false;
         },
       );
-      debugPrint('Gemini Live: микрофон запущен (PCM 16-bit, 16 кГц, mono)');
+      debugPrint('Gemini Live: микрофон запущен');
       return true;
     } catch (e, st) {
       _reportError('Ошибка: не удалось запустить микрофон', e, st);
@@ -285,11 +249,13 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   void _onMicChunk(Uint8List chunk) {
+    if (chunk.isEmpty) return;
     if (_muted) {
       _micBuffer.clear();
       return;
     }
-    if (!_connected || chunk.isEmpty) return;
+    if (!_connected) return;
+
     _analyzeMicLevel(chunk);
     _micBuffer.addAll(chunk);
     while (_micBuffer.length >= _micChunkBytes) {
@@ -308,9 +274,7 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  /// RMS-анализ: при тишине дольше [_silenceDuration] отправляем audioStreamEnd.
   void _analyzeMicLevel(Uint8List chunk) {
-    final now = DateTime.now();
     var sumSquares = 0.0;
     var count = 0;
     for (var i = 0; i + 1 < chunk.length; i += 2) {
@@ -319,6 +283,8 @@ class _LiveScreenState extends State<LiveScreen>
       count++;
     }
     if (count == 0) return;
+
+    final now = DateTime.now();
     final rms = math.sqrt(sumSquares / count);
     if (rms > _silenceRmsThreshold) {
       _lastVoiceTime = now;
@@ -329,11 +295,9 @@ class _LiveScreenState extends State<LiveScreen>
       _sendJson(<String, dynamic>{
         'realtimeInput': <String, dynamic>{'audioStreamEnd': true},
       });
-      debugPrint('Gemini Live => audioStreamEnd (пауза 1.5 с)');
+      debugPrint('Gemini Live => audioStreamEnd (тишина более 1,5 с)');
     }
   }
-
-  // ---------- WebSocket ----------
 
   void _sendJson(Map<String, dynamic> payload) {
     final ws = _ws;
@@ -353,58 +317,47 @@ class _LiveScreenState extends State<LiveScreen>
       );
       return;
     }
-    _closingManually = false;
-    setState(() {
-      _running = true;
-      _status = 'Подключение...';
-      _errorDetails = null;
-      _connected = false;
-      _speaking = false;
-    });
+    if (mounted) {
+      setState(() {
+        _running = true;
+        _status = 'Подключение...';
+        _errorDetails = null;
+        _connected = false;
+        _speaking = false;
+      });
+    }
 
     try {
-      final perm = await Permission.microphone.request();
+      final permission = await Permission.microphone.request();
       if (!mounted) return;
-      if (!perm.isGranted) {
+      if (!permission.isGranted) {
         _reportError('Ошибка: Нет доступа к микрофону');
         return;
       }
-      // Запись стартует сразу по «Запустить»; чанки уходят после setupComplete.
-      final micOk = await _startMic();
-      if (!mounted || !micOk) return;
 
-      final url = '$_wsBaseUrl?key=${Uri.encodeQueryComponent(key)}';
-      final ws = await WebSocket.connect(url).timeout(
-        const Duration(seconds: 20),
-      );
+      // Поток записи остаётся запущенным на протяжении всей сессии.
+      if (!await _startMic() || !mounted) return;
+      final ws = await WebSocket.connect(
+        '$_wsBaseUrl?key=${Uri.encodeQueryComponent(key)}',
+      ).timeout(const Duration(seconds: 20));
       if (!mounted || _closingManually) {
         await ws.close();
         return;
       }
       _ws = ws;
-      // Пинг каждые 15 секунд, чтобы соединение не рвалось по простою.
       ws.pingInterval = const Duration(seconds: 15);
 
-      final handle = _sessionHandle;
-      _sendJson(<String, dynamic>{
-        'setup': <String, dynamic>{
-          'model': 'models/$_liveModelId',
-          'generationConfig': <String, dynamic>{
-            'responseModalities': <String>['AUDIO'],
-          },
-          'sessionResumption': <String, dynamic>{
-            if (handle != null && handle.isNotEmpty) 'handle': handle,
-          },
-        },
-      });
-      debugPrint('Gemini Live => setup отправлен');
-      setState(() => _status = 'Настройка сессии...');
-
+      // Сначала подписываемся, чтобы не пропустить быстрый setupComplete.
       _wsSub = ws.listen(
         _onWsMessage,
-        onError: (Object err, StackTrace st) {
-          if (_closingManually) return;
-          _reportError(_formatReason(err, ws.closeReason, ws.closeCode), err, st);
+        onError: (Object error, StackTrace stack) {
+          if (!_closingManually) {
+            _reportError(
+              _formatReason(error, ws.closeReason, ws.closeCode),
+              error,
+              stack,
+            );
+          }
         },
         onDone: () {
           if (_closingManually || !mounted) return;
@@ -429,6 +382,21 @@ class _LiveScreenState extends State<LiveScreen>
         },
         cancelOnError: false,
       );
+
+      final handle = _sessionHandle;
+      _sendJson(<String, dynamic>{
+        'setup': <String, dynamic>{
+          'model': 'models/$_liveModelId',
+          'generationConfig': <String, dynamic>{
+            'responseModalities': <String>['AUDIO'],
+          },
+          'sessionResumption': <String, dynamic>{
+            if (handle != null && handle.isNotEmpty) 'handle': handle,
+          },
+        },
+      });
+      debugPrint('Gemini Live => setup отправлен');
+      if (mounted) setState(() => _status = 'Настройка сессии...');
     } on TimeoutException catch (e, st) {
       _reportError('Ошибка: Таймаут подключения к серверу', e, st);
     } catch (e, st) {
@@ -442,9 +410,9 @@ class _LiveScreenState extends State<LiveScreen>
     _streamEndSent = false;
     setState(() {
       _connected = true;
-      _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+      _status = 'Слушаю...';
     });
-    debugPrint('Gemini Live: setupComplete — отправляю микрофон');
+    debugPrint('Gemini Live: setupComplete — микрофон продолжает работу');
   }
 
   Future<void> _closeSocket() async {
@@ -471,11 +439,12 @@ class _LiveScreenState extends State<LiveScreen>
     });
     await _closeSocket();
     _reconnecting = false;
-    if (!mounted || _closingManually) return;
-    await _startSession();
+    if (mounted && !_closingManually) await _startSession();
   }
 
   void _onWsMessage(dynamic raw) {
+    // Печатаем каждое входящее сообщение целиком, чтобы видеть повторные ответы.
+    debugPrint('Gemini Live <= $raw');
     try {
       final String text;
       if (raw is String) {
@@ -487,15 +456,13 @@ class _LiveScreenState extends State<LiveScreen>
       }
       final decoded = jsonDecode(text);
       if (decoded is! Map) return;
-      debugPrint('Gemini Live <= ${decoded.keys.join(', ')}');
 
-      final errorObj = decoded['error'];
-      if (errorObj is Map) {
-        final errMsg = errorObj['message']?.toString() ?? errorObj.toString();
-        _reportError(_formatReason(errMsg), errMsg);
+      final error = decoded['error'];
+      if (error is Map) {
+        final message = error['message']?.toString() ?? error.toString();
+        _reportError(_formatReason(message), message);
         return;
       }
-
       if (decoded.containsKey('setupComplete')) {
         _onSetupComplete();
         return;
@@ -503,59 +470,60 @@ class _LiveScreenState extends State<LiveScreen>
 
       final resumption = decoded['sessionResumptionUpdate'];
       if (resumption is Map) {
-        final newHandle = resumption['newHandle'];
+        final handle = resumption['newHandle'];
         if (resumption['resumable'] == true &&
-            newHandle is String &&
-            newHandle.isNotEmpty) {
-          _sessionHandle = newHandle;
+            handle is String &&
+            handle.isNotEmpty) {
+          _sessionHandle = handle;
         }
       }
-
       if (decoded.containsKey('goAway')) {
-        debugPrint('Gemini Live: goAway — переподключаюсь');
-        _reconnect();
+        debugPrint('Gemini Live: goAway — переподключение');
+        unawaited(_reconnect());
         return;
       }
 
-      final serverContent = decoded['serverContent'];
-      if (serverContent is Map) {
-        if (serverContent['interrupted'] != null) {
-          debugPrint('Gemini Live <= interrupted: очищаю плеер');
-          _clearPlayback();
-        }
-        final modelTurn = serverContent['modelTurn'];
-        if (modelTurn is Map && modelTurn['parts'] is List) {
-          for (final part in (modelTurn['parts'] as List)) {
-            if (part is! Map) continue;
-            final inlineData = part['inlineData'];
-            if (inlineData is! Map) continue;
-            final mime = (inlineData['mimeType'] as String?) ?? _outputAudioMime;
-            final data = inlineData['data'];
-            if (data is String && data.isNotEmpty && mime.startsWith('audio/pcm')) {
-              _incomingPcmBuffer.addAll(base64Decode(data));
-              if (mounted && !_speaking) {
-                setState(() {
-                  _speaking = true;
-                  _status = 'Говорю...';
-                });
-              }
-            }
+      final content = decoded['serverContent'];
+      if (content is! Map) return;
+
+      if (content['interrupted'] == true) {
+        debugPrint('Gemini Live: interrupted — очищаю очередь плеера');
+        unawaited(_clearPlayback());
+      }
+
+      final turn = content['modelTurn'];
+      final parts = turn is Map ? turn['parts'] : null;
+      if (parts is List) {
+        for (final part in parts) {
+          if (part is! Map) continue;
+          final inlineData = part['inlineData'];
+          if (inlineData is! Map) continue;
+          final mime = inlineData['mimeType'] as String? ?? _outputAudioMime;
+          final data = inlineData['data'];
+          if (data is! String || data.isEmpty || !mime.startsWith('audio/pcm')) {
+            continue;
           }
-          _flushPcmToPlayer();
-        }
-        if (serverContent['turnComplete'] == true) {
-          // Конец реплики: дожимаем буфер, статус «Слушаю...»,
-          // микрофон продолжает писать.
-          _flushPcmToPlayer(force: true);
-          _lastVoiceTime = DateTime.now();
-          _streamEndSent = false;
-          debugPrint('Gemini Live <= turnComplete: жду следующую фразу');
+          _incomingPcmBuffer.addAll(base64Decode(data));
           if (mounted) {
             setState(() {
-              _speaking = false;
-              _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+              _speaking = true;
+              _status = 'Говорю...';
             });
           }
+        }
+        unawaited(_flushPcmToPlayer());
+      }
+
+      if (content['turnComplete'] == true) {
+        unawaited(_flushPcmToPlayer(force: true));
+        _lastVoiceTime = DateTime.now();
+        _streamEndSent = false;
+        debugPrint('Gemini Live: turnComplete — продолжаю слушать');
+        if (mounted) {
+          setState(() {
+            _speaking = false;
+            _status = 'Слушаю...';
+          });
         }
       }
     } catch (e, st) {
@@ -563,35 +531,32 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  // ---------- воспроизведение ----------
-
-  /// Передаёт накопленный PCM в очередь плеера (WAV из памяти).
   Future<void> _flushPcmToPlayer({bool force = false}) async {
-    if (_incomingPcmBuffer.isEmpty) return;
-    if (!force && _incomingPcmBuffer.length < _minPlaybackBytes) return;
+    if (_incomingPcmBuffer.isEmpty ||
+        (!force && _incomingPcmBuffer.length < _minPlaybackBytes)) {
+      return;
+    }
     final pcm = Uint8List.fromList(_incomingPcmBuffer);
     _incomingPcmBuffer.clear();
     try {
+      await _playerReady;
       if (_player.processingState == ProcessingState.completed) {
         await _audioQueue.clear();
         await _player.stop();
       }
-      final wav = _buildWav(pcm, sampleRate: 24000, channels: 1);
-      await _audioQueue.add(_PcmWavSource(wav));
-      if (!_player.playing) {
-        unawaited(_player.play());
+      await _audioQueue.add(_PcmWavSource(_buildWav(pcm)));
+      if (!_player.playing) unawaited(_player.play());
+      if (mounted) {
+        setState(() {
+          _speaking = true;
+          _status = 'Говорю...';
+        });
       }
-      if (!mounted) return;
-      setState(() {
-        _speaking = true;
-        _status = 'Говорю...';
-      });
     } catch (e, st) {
       debugPrint('Gemini Live: ошибка воспроизведения PCM: $e\n$st');
     }
   }
 
-  /// Полная очистка воспроизведения — при 'interrupted'.
   Future<void> _clearPlayback() async {
     _incomingPcmBuffer.clear();
     try {
@@ -600,22 +565,17 @@ class _LiveScreenState extends State<LiveScreen>
     } catch (e) {
       debugPrint('Gemini Live: ошибка очистки плеера: $e');
     }
-    if (!mounted) return;
-    setState(() {
-      _speaking = false;
-      if (_connected) {
-        _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
-      }
-    });
+    if (mounted) {
+      setState(() {
+        _speaking = false;
+        if (_connected) _status = 'Слушаю...';
+      });
+    }
   }
 
-  Uint8List _buildWav(
-    Uint8List pcm, {
-    required int sampleRate,
-    required int channels,
-  }) {
-    final byteRate = sampleRate * channels * 2;
-    final blockAlign = channels * 2;
+  Uint8List _buildWav(Uint8List pcm) {
+    const sampleRate = 24000;
+    const channels = 1;
     final dataSize = pcm.length;
     final header = ByteData(44);
     const riff = [0x52, 0x49, 0x46, 0x46];
@@ -633,18 +593,15 @@ class _LiveScreenState extends State<LiveScreen>
     header.setUint16(20, 1, Endian.little);
     header.setUint16(22, channels, Endian.little);
     header.setUint32(24, sampleRate, Endian.little);
-    header.setUint32(28, byteRate, Endian.little);
-    header.setUint16(32, blockAlign, Endian.little);
+    header.setUint32(28, sampleRate * channels * 2, Endian.little);
+    header.setUint16(32, channels * 2, Endian.little);
     header.setUint16(34, 16, Endian.little);
     header.setUint32(40, dataSize, Endian.little);
-
-    final out = BytesBuilder(copy: false)
-      ..add(header.buffer.asUint8List())
-      ..add(pcm);
-    return out.toBytes();
+    return (BytesBuilder(copy: false)
+          ..add(header.buffer.asUint8List())
+          ..add(pcm))
+        .toBytes();
   }
-
-  // ---------- завершение ----------
 
   Future<void> _stopSession() async {
     _running = false;
@@ -659,11 +616,8 @@ class _LiveScreenState extends State<LiveScreen>
 
   Future<void> _endCall() async {
     await _stopSession();
-    if (!mounted) return;
-    Navigator.of(context).pop();
+    if (mounted) Navigator.of(context).pop();
   }
-
-  // ---------- интерфейс ----------
 
   @override
   Widget build(BuildContext context) {
@@ -671,7 +625,7 @@ class _LiveScreenState extends State<LiveScreen>
     const bgMid = Color(0xFF1B1A19);
     const bgBottom = Color(0xFF141312);
     const cardBg = Color(0xFF242321);
-    const borderCol = Color(0xFF3A3733);
+    const border = Color(0xFF3A3733);
     const accent = Color(0xFFD99A6C);
     const text = Color(0xFFF5F0EB);
     const muted = Color(0xFFA8A096);
@@ -712,43 +666,40 @@ class _LiveScreenState extends State<LiveScreen>
         ),
         child: SafeArea(
           child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      const SizedBox(height: 12),
-                      _buildPulseSection(accent, text, muted),
-                      _buildStartArea(cardBg, borderCol, accent, muted),
-                      _buildBottomControls(cardBg, borderCol, accent, text),
-                    ],
-                  ),
+            builder: (context, constraints) => SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const SizedBox(height: 12),
+                    _pulseSection(accent, text, muted, cardBg, border),
+                    if (!_running) _startArea(cardBg, border, accent, muted),
+                    _bottomControls(cardBg, border, accent, text),
+                  ],
                 ),
-              );
-            },
+              ),
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildPulseSection(Color accent, Color text, Color muted) {
+  Widget _pulseSection(
+    Color accent,
+    Color text,
+    Color muted,
+    Color cardBg,
+    Color border,
+  ) {
     return AnimatedBuilder(
       animation: _pulseAnim,
       builder: (context, _) {
         final t = _pulseAnim.value;
         final active = _connected && !_muted;
-        final outerScale = active ? (1.0 + t * 0.28) : (1.0 + t * 0.06);
-        final innerScale = active ? (1.0 + t * 0.14) : (1.0 + t * 0.03);
-        final coreColor = _speaking
-            ? accent
-            : (_connected
-                ? (_muted ? muted.withValues(alpha: 0.45) : accent)
-                : accent.withValues(alpha: 0.65));
-
+        final color = _speaking ? accent : accent.withValues(alpha: 0.65);
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -759,22 +710,22 @@ class _LiveScreenState extends State<LiveScreen>
                 alignment: Alignment.center,
                 children: [
                   Transform.scale(
-                    scale: outerScale,
+                    scale: 1 + t * (active ? 0.28 : 0.06),
                     child: Container(
                       width: 176,
                       height: 176,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: coreColor.withValues(alpha: active ? 0.09 : 0.04),
+                        color: color.withValues(alpha: active ? 0.09 : 0.04),
                         border: Border.all(
-                          color: coreColor.withValues(alpha: active ? 0.25 : 0.12),
+                          color: color.withValues(alpha: active ? 0.25 : 0.12),
                           width: 1.5,
                         ),
                       ),
                     ),
                   ),
                   Transform.scale(
-                    scale: innerScale,
+                    scale: 1 + t * (active ? 0.14 : 0.03),
                     child: Container(
                       width: 146,
                       height: 146,
@@ -782,14 +733,14 @@ class _LiveScreenState extends State<LiveScreen>
                         shape: BoxShape.circle,
                         gradient: RadialGradient(
                           colors: [
-                            coreColor.withValues(alpha: 0.34),
-                            coreColor.withValues(alpha: 0.12),
+                            color.withValues(alpha: 0.34),
+                            color.withValues(alpha: 0.12),
                           ],
                         ),
-                        border: Border.all(color: coreColor, width: 2.5),
+                        border: Border.all(color: color, width: 2.5),
                         boxShadow: [
                           BoxShadow(
-                            color: coreColor.withValues(alpha: active ? 0.42 : 0.2),
+                            color: color.withValues(alpha: active ? 0.42 : 0.2),
                             blurRadius: active ? 36 : 20,
                             spreadRadius: active ? 6 : 2,
                           ),
@@ -798,7 +749,9 @@ class _LiveScreenState extends State<LiveScreen>
                       child: Icon(
                         _speaking
                             ? Icons.graphic_eq_rounded
-                            : (_muted ? Icons.mic_off_rounded : Icons.mic_rounded),
+                            : (_muted
+                                ? Icons.mic_off_rounded
+                                : Icons.mic_rounded),
                         size: 54,
                         color: text,
                       ),
@@ -811,9 +764,9 @@ class _LiveScreenState extends State<LiveScreen>
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFF242321).withValues(alpha: 0.85),
+                color: cardBg.withValues(alpha: 0.85),
                 borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: const Color(0xFF3A3733)),
+                border: Border.all(color: border),
               ),
               child: Text(
                 _status,
@@ -833,7 +786,7 @@ class _LiveScreenState extends State<LiveScreen>
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 13, color: Color(0xFFA8A096)),
+                style: TextStyle(fontSize: 13, color: muted),
               ),
             ],
           ],
@@ -842,123 +795,111 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 
-  /// Зона запуска: если ключ сохранён — только кнопка «Запустить».
-  /// Если ключа нет — поле ввода и кнопка.
-  Widget _buildStartArea(Color cardBg, Color borderCol, Color accent, Color muted) {
+  Widget _startArea(
+    Color cardBg,
+    Color border,
+    Color accent,
+    Color muted,
+  ) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 16),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          if (!_hasSavedKey) ...[
-            _buildKeyField(cardBg, borderCol, accent, muted),
-            if (!_running) const SizedBox(height: 14),
-          ],
-          if (!_running) _buildStartButton(accent),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildKeyField(Color cardBg, Color borderCol, Color accent, Color muted) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: cardBg.withValues(alpha: 0.92),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: borderCol),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.28),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: TextField(
-        controller: _keyController,
-        obscureText: _obscureKey,
-        autocorrect: false,
-        enableSuggestions: false,
-        cursorColor: accent,
-        style: const TextStyle(color: Color(0xFFF5F0EB), fontSize: 15),
-        decoration: InputDecoration(
-          labelText: 'API-ключ',
-          hintText: 'Введите ключ Gemini',
-          labelStyle: TextStyle(color: muted),
-          hintStyle: TextStyle(color: muted.withValues(alpha: 0.6)),
-          prefixIcon: Icon(Icons.key_rounded, color: accent, size: 20),
-          suffixIcon: IconButton(
-            tooltip: _obscureKey ? 'Показать ключ' : 'Скрыть ключ',
-            icon: Icon(
-              _obscureKey
-                  ? Icons.visibility_outlined
-                  : Icons.visibility_off_outlined,
-              color: muted,
-              size: 20,
+          if (_savedKey.isEmpty) ...[
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: cardBg.withValues(alpha: 0.92),
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(color: border),
+              ),
+              child: TextField(
+                controller: _keyController,
+                obscureText: _obscureKey,
+                autocorrect: false,
+                enableSuggestions: false,
+                cursorColor: accent,
+                style: const TextStyle(color: Color(0xFFF5F0EB), fontSize: 15),
+                decoration: InputDecoration(
+                  labelText: 'API-ключ',
+                  hintText: 'Введите ключ',
+                  labelStyle: TextStyle(color: muted),
+                  hintStyle: TextStyle(color: muted.withValues(alpha: 0.6)),
+                  prefixIcon: Icon(Icons.key_rounded, color: accent, size: 20),
+                  suffixIcon: IconButton(
+                    tooltip: _obscureKey ? 'Показать ключ' : 'Скрыть ключ',
+                    icon: Icon(
+                      _obscureKey
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                      color: muted,
+                      size: 20,
+                    ),
+                    onPressed: () =>
+                        setState(() => _obscureKey = !_obscureKey),
+                  ),
+                  filled: true,
+                  fillColor: const Color(0xFF1B1A19),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: BorderSide(color: border),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: BorderSide(color: border),
+                  ),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(18),
+                    borderSide: BorderSide(color: accent, width: 1.8),
+                  ),
+                ),
+              ),
             ),
-            onPressed: () => setState(() => _obscureKey = !_obscureKey),
-          ),
-          filled: true,
-          fillColor: const Color(0xFF1B1A19),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: BorderSide(color: borderCol),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: BorderSide(color: borderCol),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(18),
-            borderSide: BorderSide(color: accent, width: 1.8),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStartButton(Color accent) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(18),
-        boxShadow: [
-          BoxShadow(
-            color: accent.withValues(alpha: 0.32),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
+            const SizedBox(height: 14),
+          ],
+          DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [
+                BoxShadow(
+                  color: accent.withValues(alpha: 0.32),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: ElevatedButton.icon(
+              onPressed: _startSession,
+              icon: const Icon(Icons.play_arrow_rounded, size: 22),
+              label: Text(
+                'Запустить',
+                style: fontStyle(
+                  settings.bodyFont,
+                  size: 16,
+                  weight: FontWeight.w600,
+                  color: const Color(0xFF1B1A19),
+                ),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accent,
+                foregroundColor: const Color(0xFF1B1A19),
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+            ),
           ),
         ],
       ),
-      child: ElevatedButton.icon(
-        onPressed: _startSession,
-        icon: const Icon(Icons.play_arrow_rounded, size: 22),
-        label: Text(
-          'Запустить',
-          style: fontStyle(
-            settings.bodyFont,
-            size: 16,
-            weight: FontWeight.w600,
-            color: const Color(0xFF1B1A19),
-          ),
-        ),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: accent,
-          foregroundColor: const Color(0xFF1B1A19),
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(18),
-          ),
-        ),
-      ),
     );
   }
 
-  Widget _buildBottomControls(
+  Widget _bottomControls(
     Color cardBg,
-    Color borderCol,
+    Color border,
     Color accent,
     Color text,
   ) {
@@ -980,18 +921,20 @@ class _LiveScreenState extends State<LiveScreen>
             ),
             child: IconButton.filled(
               tooltip: _muted ? 'Включить микрофон' : 'Выключить микрофон',
-              onPressed: () {
-                setState(() {
-                  _muted = !_muted;
-                  if (_connected && !_speaking) {
-                    _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
-                  }
-                });
-              },
+              onPressed: _running
+                  ? () {
+                      setState(() {
+                        _muted = !_muted;
+                        if (_connected && !_speaking) {
+                          _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+                        }
+                      });
+                    }
+                  : null,
               style: IconButton.styleFrom(
                 backgroundColor: _muted ? accent.withValues(alpha: 0.22) : cardBg,
                 foregroundColor: _muted ? accent : text,
-                side: BorderSide(color: _muted ? accent : borderCol, width: 1.5),
+                side: BorderSide(color: _muted ? accent : border, width: 1.5),
                 minimumSize: const Size(62, 62),
               ),
               icon: Icon(
@@ -1014,7 +957,7 @@ class _LiveScreenState extends State<LiveScreen>
             ),
             child: IconButton.filled(
               tooltip: 'Завершить',
-              onPressed: _endCall,
+              onPressed: _running ? _endCall : null,
               style: IconButton.styleFrom(
                 backgroundColor: const Color(0xFFB3261E),
                 foregroundColor: Colors.white,
