@@ -11,8 +11,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
-import '../app_state.dart';
-
 /// Экран голосового Live-режима (Gemini Live API по WebSocket).
 class LiveScreen extends StatefulWidget {
   final String? apiKey;
@@ -29,10 +27,11 @@ class _LiveScreenState extends State<LiveScreen>
       'wss://generativelanguage.googleapis.com/ws/'
       'google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
 
-  static const String _defaultLiveModel = 'models/gemini-2.0-flash-exp';
+  static const String _liveModelId =
+      'gemini-2.5-flash-native-audio-preview-12-2025';
+  static const String _keyFileName = 'gem.txt';
   static const String _inputAudioMime = 'audio/pcm;rate=16000';
   static const String _outputAudioMime = 'audio/pcm;rate=24000';
-  static const String _fallbackGeminiApiKey = '';
 
   late final AnimationController _pulseController;
   final AudioRecorder _recorder = AudioRecorder();
@@ -87,35 +86,20 @@ class _LiveScreenState extends State<LiveScreen>
     super.dispose();
   }
 
+  /// Ключ берётся из файла gem.txt в папке данных приложения;
+  /// если файла нет — из параметра экрана (если передан).
   Future<String> _resolveApiKey() async {
-    final direct = widget.apiKey?.trim() ?? '';
-    if (direct.isNotEmpty) return direct;
-
     try {
-      final f = File('gemini_api.txt');
+      final dir = await getApplicationDocumentsDirectory();
+      final f = File('${dir.path}/$_keyFileName');
       if (await f.exists()) {
         final txt = (await f.readAsString()).trim();
         if (txt.isNotEmpty) return txt;
       }
     } catch (e) {
-      debugPrint('Gemini Live: не удалось прочитать gemini_api.txt: $e');
+      debugPrint('Gemini Live: не удалось прочитать $_keyFileName: $e');
     }
-
-    final cfgKey = effectiveConfig().apiKey.trim();
-    if (cfgKey.isNotEmpty) return cfgKey;
-
-    final settingsKey = settings.apiKey.trim();
-    if (settingsKey.isNotEmpty) return settingsKey;
-
-    return _fallbackGeminiApiKey;
-  }
-
-  String _resolveModel() {
-    final raw = effectiveConfig().model.trim();
-    if (raw.contains('gemini-2.0-flash-exp') || raw.contains('gemini-3.8-live')) {
-      return raw.startsWith('models/') ? raw : 'models/$raw';
-    }
-    return _defaultLiveModel;
+    return widget.apiKey?.trim() ?? '';
   }
 
   String _formatReason(Object error, [String? closeReason, int? closeCode]) {
@@ -133,13 +117,8 @@ class _LiveScreenState extends State<LiveScreen>
     if (combined.contains('not found') ||
         combined.contains('not_found') ||
         combined.contains('404') ||
-        combined.contains('model')) {
-      if (combined.contains('not found') ||
-          combined.contains('not_found') ||
-          combined.contains('404') ||
-          combined.contains('unsupported')) {
-        return 'Ошибка: Модель не найдена';
-      }
+        combined.contains('unsupported')) {
+      return 'Ошибка: Модель не найдена';
     }
     if (combined.contains('quota') ||
         combined.contains('resource_exhausted') ||
@@ -156,6 +135,7 @@ class _LiveScreenState extends State<LiveScreen>
     return 'Ошибка соединения с Gemini Live API';
   }
 
+  /// Единая точка вывода ошибок: статус на экране и SnackBar.
   void _reportError(String message, [Object? rawError, StackTrace? st]) {
     debugPrint('Gemini Live error: $message | raw: $rawError');
     if (st != null) {
@@ -184,38 +164,41 @@ class _LiveScreenState extends State<LiveScreen>
 
     try {
       final perm = await Permission.microphone.request();
+      if (!mounted) return;
       if (!perm.isGranted) {
         _reportError('Ошибка: Нет доступа к микрофону');
         return;
       }
 
       final key = await _resolveApiKey();
+      if (!mounted) return;
       if (key.isEmpty) {
-        _reportError('Ошибка: Неверный ключ (API-ключ не задан в настройках)');
+        _reportError(
+          'Ошибка: не найден ключ. Положите его в файл $_keyFileName в папке приложения',
+        );
         return;
       }
 
       final url = '$_wsBaseUrl?key=${Uri.encodeQueryComponent(key)}';
-      debugPrint('Gemini Live: подключение к $_wsBaseUrl');
-
       final ws = await WebSocket.connect(url).timeout(
         const Duration(seconds: 20),
       );
+      if (!mounted) {
+        await ws.close();
+        return;
+      }
       _ws = ws;
 
-      final modelName = _resolveModel();
-      final setupMsg = <String, dynamic>{
+      // Setup: ответ сервера {"setupComplete": {}} запускает микрофон.
+      ws.add(jsonEncode(<String, dynamic>{
         'setup': <String, dynamic>{
-          'model': modelName,
+          'model': 'models/$_liveModelId',
           'generationConfig': <String, dynamic>{
             'responseModalities': <String>['AUDIO'],
           },
         },
-      };
-      debugPrint(
-        'Gemini Live: отправка setup ($modelName, input=$_inputAudioMime, output=$_outputAudioMime)',
-      );
-      ws.add(jsonEncode(setupMsg));
+      }));
+      setState(() => _status = 'Настройка сессии...');
 
       _wsSub = ws.listen(
         _onWsMessage,
@@ -247,25 +230,37 @@ class _LiveScreenState extends State<LiveScreen>
         },
         cancelOnError: false,
       );
-
-      await _startMicStream();
-      if (!mounted) return;
-      setState(() {
-        _connected = true;
-        _status = 'Слушаю...';
-      });
     } on TimeoutException catch (e, st) {
       _reportError('Ошибка: Таймаут подключения к серверу', e, st);
     } catch (e, st) {
-      final msg = _formatReason(e);
-      _reportError(msg, e, st);
+      _reportError(_formatReason(e), e, st);
+    }
+  }
+
+  /// Вызывается при получении setupComplete: сессия готова,
+  /// статус «Слушаю...» и запуск записи с микрофона.
+  Future<void> _onSetupComplete() async {
+    if (_connected || !mounted) return;
+    setState(() {
+      _connected = true;
+      _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+    });
+    try {
+      await _startMicStream();
+    } catch (e, st) {
+      _reportError('Ошибка: не удалось запустить микрофон', e, st);
     }
   }
 
   Future<void> _startMicStream() async {
     await _micSub?.cancel();
+    _micSub = null;
     final hasPerm = await _recorder.hasPermission();
-    if (!hasPerm) return;
+    if (!mounted) return;
+    if (!hasPerm) {
+      _reportError('Ошибка: Нет доступа к микрофону');
+      return;
+    }
 
     final stream = await _recorder.startStream(
       const RecordConfig(
@@ -302,6 +297,7 @@ class _LiveScreenState extends State<LiveScreen>
 
   void _onWsMessage(dynamic raw) {
     try {
+      // Байты декодируем в строку UTF-8 до разбора JSON.
       final String text;
       if (raw is String) {
         text = raw;
@@ -316,8 +312,12 @@ class _LiveScreenState extends State<LiveScreen>
       final errorObj = decoded['error'];
       if (errorObj is Map) {
         final errMsg = errorObj['message']?.toString() ?? errorObj.toString();
-        final formatted = _formatReason(errMsg);
-        _reportError(formatted, errMsg);
+        _reportError(_formatReason(errMsg), errMsg);
+        return;
+      }
+
+      if (decoded.containsKey('setupComplete')) {
+        _onSetupComplete();
         return;
       }
 
@@ -329,7 +329,8 @@ class _LiveScreenState extends State<LiveScreen>
             if (part is! Map) continue;
             final inlineData = part['inlineData'];
             if (inlineData is Map) {
-              final mime = (inlineData['mimeType'] as String?) ?? _outputAudioMime;
+              final mime =
+                  (inlineData['mimeType'] as String?) ?? _outputAudioMime;
               final data = inlineData['data'];
               if (data is String &&
                   data.isNotEmpty &&
