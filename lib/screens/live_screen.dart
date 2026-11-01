@@ -1,21 +1,20 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
-// ignore_for_file: experimental_member_use
-
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
+import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
 import '../app_state.dart';
+import '../services/live/gemini_live_provider.dart';
 import '../theme.dart';
 
+/// Полноэкранный голосовой Live-режим.
+/// Микрофон (record, PCM 16 кГц) -> [GeminiLiveProvider],
+/// входящее аудио модели -> SoLoud-поток (flutter_soloud).
 class LiveScreen extends StatefulWidget {
   final String? apiKey;
 
@@ -25,69 +24,36 @@ class LiveScreen extends StatefulWidget {
   State<LiveScreen> createState() => _LiveScreenState();
 }
 
-class _PcmWavSource extends StreamAudioSource {
-  final Uint8List wavBytes;
-
-  _PcmWavSource(this.wavBytes);
-
-  @override
-  Future<StreamAudioResponse> request([int? start, int? end]) async {
-    final from = (start ?? 0).clamp(0, wavBytes.length);
-    final to = (end ?? wavBytes.length).clamp(from, wavBytes.length);
-    return StreamAudioResponse(
-      sourceLength: wavBytes.length,
-      contentLength: to - from,
-      offset: from,
-      contentType: 'audio/wav',
-      stream: Stream<List<int>>.value(wavBytes.sublist(from, to)),
-    );
-  }
-}
-
 class _LiveScreenState extends State<LiveScreen>
     with SingleTickerProviderStateMixin {
-  static const String _wsBaseUrl =
-      'wss://generativelanguage.googleapis.com/ws/'
-      'google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
-  static const String _liveModelId =
-      'gemini-2.5-flash-native-audio-preview-12-2025';
-  static const String _inputAudioMime = 'audio/pcm;rate=16000';
-  static const String _outputAudioMime = 'audio/pcm;rate=24000';
-  static const int _micChunkBytes = 960;
-  static const double _silenceRmsThreshold = 350;
-  static const Duration _silenceDuration = Duration(milliseconds: 1500);
-  static const int _minPlaybackBytes = 4800;
+  /// Выход модели: PCM 16-bit mono 24 кГц.
+  static const int _outputSampleRate = 24000;
+  static const int _maxBufferBytes = 1024 * 1024 * 4;
+
+  /// Через столько времени после последнего аудио-фрагмента
+  /// возвращаем статус «Слушаю...».
+  static const Duration _speechQuietGap = Duration(milliseconds: 900);
 
   late final AnimationController _pulseController;
   late final Animation<double> _pulseAnim;
   late final TextEditingController _keyController;
-  late final Future<void> _playerReady;
 
+  final GeminiLiveProvider _provider = GeminiLiveProvider();
   final AudioRecorder _recorder = AudioRecorder();
-  final AudioPlayer _player = AudioPlayer();
-  final List<int> _micBuffer = <int>[];
-  final List<int> _incomingPcmBuffer = <int>[];
-  final ConcatenatingAudioSource _audioQueue =
-      ConcatenatingAudioSource(children: <AudioSource>[]);
 
-  WebSocket? _ws;
-  StreamSubscription<dynamic>? _wsSub;
   StreamSubscription<Uint8List>? _micSub;
-  StreamSubscription<PlayerState>? _playerSub;
-  Timer? _audioDebugTimer;
-  List<String> _debugLogs = [];
-  bool _audioSentInInterval = false;
+  StreamSubscription<List<int>>? _audioSub;
+  Timer? _speechTimer;
 
-  DateTime _lastVoiceTime = DateTime.now();
-  String? _sessionHandle;
-  bool _streamEndSent = false;
-  bool _reconnecting = false;
-  bool _connected = false;
-  bool _speaking = false;
-  bool _muted = false;
-  bool _closingManually = false;
-  bool _running = false;
+  SoLoud? _soloud;
+  AudioStream? _soloudStream;
+  SoundHandle? _playHandle;
+  bool _soloudReady = false;
+
   bool _micActive = false;
+  bool _muted = false;
+  bool _running = false;
+  bool _speaking = false;
   bool _obscureKey = true;
   String _status = 'Готов к запуску';
   String? _errorDetails;
@@ -109,57 +75,29 @@ class _LiveScreenState extends State<LiveScreen>
       parent: _pulseController,
       curve: Curves.easeInOutSine,
     );
-    _playerReady = _initializePlayer();
-    _playerSub = _player.playerStateStream.listen((state) {
-      if (!mounted) return;
-      if (state.processingState == ProcessingState.completed && _speaking) {
-        setState(() {
-          _speaking = false;
-          if (_connected) _status = 'Слушаю...';
-        });
-      }
-    });
-    _player.playbackEventStream.listen(
-      (_) {},
-      onError: (Object e, StackTrace st) {
-        debugPrint('Gemini Live: ошибка плеера: $e\n$st');
-      },
-    );
-  }
-
-  Future<void> _initializePlayer() async {
-    try {
-      await _player.setAudioSource(_audioQueue);
-    } catch (e) {
-      debugPrint('Gemini Live: не удалось инициализировать плеер: $e');
-    }
   }
 
   @override
   void dispose() {
-    _closingManually = true;
     unawaited(_stopSession());
-    _playerSub?.cancel();
     _pulseController.dispose();
     _keyController.dispose();
     _recorder.dispose();
-    _player.dispose();
     super.dispose();
   }
 
   String _resolveApiKey() =>
       _savedKey.isNotEmpty ? _savedKey : _keyController.text.trim();
 
-  String _formatReason(Object error, [String? closeReason, int? closeCode]) {
-    final combined = '${error.toString()} ${closeReason ?? ''}'.toLowerCase();
+  String _formatReason(Object error) {
+    final combined = error.toString().toLowerCase();
     if (combined.contains('api_key_invalid') ||
         combined.contains('api key not valid') ||
         combined.contains('invalid api key') ||
         combined.contains('unauthenticated') ||
         combined.contains('permission_denied') ||
         combined.contains('401') ||
-        combined.contains('403') ||
-        closeCode == 1008) {
+        combined.contains('403')) {
       return 'Ошибка: Неверный ключ';
     }
     if (combined.contains('not found') ||
@@ -173,31 +111,27 @@ class _LiveScreenState extends State<LiveScreen>
         combined.contains('429')) {
       return 'Ошибка: Превышен лимит запросов (429)';
     }
-    if (closeReason != null && closeReason.trim().isNotEmpty) {
-      return 'Ошибка: ${closeReason.trim()}';
-    }
     final raw = error.toString().trim();
     return raw.isEmpty || raw == 'null'
         ? 'Ошибка соединения с Live API'
         : 'Ошибка: $raw';
   }
 
-  void _reportError(String message, [Object? error, StackTrace? stack]) {
-    debugPrint('Gemini Live error: $message | raw: $error');
-    if (stack != null) debugPrint(stack.toString());
+  void _reportError(String message, [Object? error]) {
     unawaited(_stopMic());
     if (!mounted) return;
     setState(() {
-      _connected = false;
+      _running = false;
       _speaking = false;
       _status = message;
-      _running = false;
       _errorDetails = error?.toString();
     });
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(content: Text(message)),
     );
   }
+
+  // ---------- микрофон ----------
 
   Future<bool> _startMic() async {
     if (_micActive) return true;
@@ -214,32 +148,24 @@ class _LiveScreenState extends State<LiveScreen>
         ),
       );
       _micActive = true;
-      _micBuffer.clear();
-      _lastVoiceTime = DateTime.now();
-      _streamEndSent = false;
       await _micSub?.cancel();
       _micSub = stream.listen(
         _onMicChunk,
-        onError: (Object e, StackTrace st) {
-          debugPrint('Gemini Live: ошибка потока микрофона: $e\n$st');
+        onError: (Object e) {
+          _micActive = false;
         },
         onDone: () {
-          debugPrint('Gemini Live: поток микрофона завершён');
           _micActive = false;
-          _stopAudioDebugTimer();
         },
       );
-      debugPrint('Gemini Live: микрофон запущен');
       return true;
-    } catch (e, st) {
-      _reportError('Ошибка: не удалось запустить микрофон', e, st);
+    } catch (e) {
+      _reportError('Ошибка: не удалось запустить микрофон', e);
       return false;
     }
   }
 
   Future<void> _stopMic() async {
-    _micBuffer.clear();
-    _stopAudioDebugTimer();
     final sub = _micSub;
     _micSub = null;
     try {
@@ -254,95 +180,63 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   void _onMicChunk(Uint8List chunk) {
-    if (chunk.isEmpty) return;
-    if (_muted) {
-      _micBuffer.clear();
+    if (chunk.isEmpty || _muted || !_running) return;
+    unawaited(_provider.sendAudio(chunk));
+  }
+
+  // ---------- воспроизведение (SoLoud) ----------
+
+  /// Инициализация движка и буферизованного потока под PCM 24 кГц.
+  /// Ошибки не роняют сессию: чат продолжается, но без звука.
+  Future<void> _initSoLoud() async {
+    if (_soloudReady) return;
+    try {
+      final sol = SoLoud.instance;
+      final ok = await sol.init();
+      if (!ok) return;
+      final stream = await sol.setBufferStream(
+        maxBufferSizeBytes: _maxBufferBytes,
+        bufferingType: BufferingType.released,
+        sampleRate: _outputSampleRate,
+        channels: Channels.mono,
+        format: BufferType.s16le,
+      );
+      _soloud = sol;
+      _soloudStream = stream;
+      _playHandle = sol.play(stream);
+      _soloudReady = true;
+    } catch (_) {
+      _soloudReady = false;
+      _soloudStream = null;
+      _playHandle = null;
+    }
+  }
+
+  void _feedAudio(List<int> bytes) {
+    final stream = _soloudStream;
+    if (stream == null || !_soloudReady || bytes.isEmpty) return;
+    try {
+      stream.addData(bytes);
+    } catch (_) {
       return;
     }
-    if (!_connected) return;
-
-    _analyzeMicLevel(chunk);
-    _micBuffer.addAll(chunk);
-    while (_micBuffer.length >= _micChunkBytes) {
-      final piece = Uint8List.fromList(_micBuffer.sublist(0, _micChunkBytes));
-      _micBuffer.removeRange(0, _micChunkBytes);
-      final sent = _sendJson(<String, dynamic>{
-        'realtimeInput': <String, dynamic>{
-          'mediaChunks': <Map<String, dynamic>>[
-            <String, dynamic>{
-              'mimeType': _inputAudioMime,
-              'data': base64Encode(piece),
-            },
-          ],
-        },
+    if (!_speaking && mounted) {
+      setState(() {
+        _speaking = true;
+        _status = 'Говорю...';
       });
-      if (sent) {
-        _audioSentInInterval = true;
-        _audioDebugTimer ??= Timer.periodic(
-          const Duration(seconds: 2),
-          (_) {
-            if (!_micActive || !_connected || _muted) {
-              _audioSentInInterval = false;
-              return;
-            }
-            if (!_audioSentInInterval) return;
-            _audioSentInInterval = false;
-            _addDebugLog('Sending audio...');
-          },
-        );
-      }
     }
-  }
-
-  void _analyzeMicLevel(Uint8List chunk) {
-    var sumSquares = 0.0;
-    var count = 0;
-    for (var i = 0; i + 1 < chunk.length; i += 2) {
-      final sample = (chunk[i] | (chunk[i + 1] << 8)).toSigned(16);
-      sumSquares += sample * sample;
-      count++;
-    }
-    if (count == 0) return;
-
-    final now = DateTime.now();
-    final rms = math.sqrt(sumSquares / count);
-    if (rms > _silenceRmsThreshold) {
-      _lastVoiceTime = now;
-      _streamEndSent = false;
-    } else if (!_streamEndSent &&
-        now.difference(_lastVoiceTime) >= _silenceDuration) {
-      _streamEndSent = true;
-      _sendJson(<String, dynamic>{
-        'realtimeInput': <String, dynamic>{'audioStreamEnd': true},
+    _speechTimer?.cancel();
+    _speechTimer = Timer(_speechQuietGap, () {
+      if (!mounted || !_speaking) return;
+      setState(() {
+        _speaking = false;
+        if (_running && !_muted) _status = 'Слушаю...';
       });
-      debugPrint('Gemini Live => audioStreamEnd (тишина более 1,5 с)');
-    }
+    });
   }
 
-  bool _sendJson(Map<String, dynamic> payload) {
-    final ws = _ws;
-    if (ws == null) return false;
-    try {
-      ws.add(jsonEncode(payload));
-      return true;
-    } catch (e, st) {
-      debugPrint('Gemini Live: ошибка отправки: $e\n$st');
-      return false;
-    }
-  }
-
-  void _stopAudioDebugTimer() {
-    _audioDebugTimer?.cancel();
-    _audioDebugTimer = null;
-    _audioSentInInterval = false;
-  }
-
-  void _addDebugLog(String message) {
-    if (!mounted) return;
-    final clipped =
-        message.length > 400 ? message.substring(0, 400) : message;
-    setState(() => _debugLogs.add(clipped));
-  }
+  // ---------- сессия ----------
 
   Future<void> _startSession() async {
     final key = _resolveApiKey();
@@ -352,15 +246,12 @@ class _LiveScreenState extends State<LiveScreen>
       );
       return;
     }
-    if (mounted) {
-      setState(() {
-        _running = true;
-        _status = 'Подключение...';
-        _errorDetails = null;
-        _connected = false;
-        _speaking = false;
-      });
-    }
+    setState(() {
+      _running = true;
+      _status = 'Подключение...';
+      _errorDetails = null;
+      _speaking = false;
+    });
 
     try {
       final permission = await Permission.microphone.request();
@@ -370,306 +261,91 @@ class _LiveScreenState extends State<LiveScreen>
         return;
       }
 
-      // Поток записи остаётся запущенным на протяжении всей сессии.
-      if (!await _startMic() || !mounted) return;
-      final ws = await WebSocket.connect(
-        '$_wsBaseUrl?key=${Uri.encodeQueryComponent(key)}',
-      ).timeout(const Duration(seconds: 20));
-      if (!mounted || _closingManually) {
-        await ws.close();
-        return;
-      }
-      _ws = ws;
-      ws.pingInterval = const Duration(seconds: 15);
+      await _initSoLoud();
+      if (!mounted) return;
 
-      // Сначала подписываемся, чтобы не пропустить быстрый setupComplete.
-      _wsSub = ws.listen(
-        _onWsMessage,
-        onError: (Object error, StackTrace stack) {
-          if (!_closingManually) {
-            _reportError(
-              _formatReason(error, ws.closeReason, ws.closeCode),
-              error,
-              stack,
-            );
-          }
-        },
-        onDone: () {
-          if (_closingManually || !mounted) return;
-          final code = ws.closeCode;
-          final reason = ws.closeReason;
-          debugPrint('Gemini Live: соединение закрыто (code=$code)');
-          if ((reason != null && reason.trim().isNotEmpty) ||
-              (code != null && code != WebSocketStatus.normalClosure)) {
-            _reportError(
-              _formatReason(reason ?? 'Код закрытия $code', reason, code),
-              'code=$code, reason=$reason',
-            );
-          } else {
-            setState(() {
-              _connected = false;
-              _speaking = false;
-              _status = 'Соединение завершено';
-              _running = false;
-            });
-            unawaited(_stopMic());
-          }
+      // Подписываемся до connect, чтобы не потерять первые фрагменты аудио.
+      await _audioSub?.cancel();
+      _audioSub = _provider.audioStream.listen(
+        _feedAudio,
+        onError: (Object e) {
+          _reportError('Ошибка: поток аудио прерван', e);
         },
         cancelOnError: false,
       );
 
-      final handle = _sessionHandle;
-      _sendJson(<String, dynamic>{
-        'setup': <String, dynamic>{
-          'model': 'models/$_liveModelId',
-          'generationConfig': <String, dynamic>{
-            'responseModalities': <String>['AUDIO'],
-          },
-          'sessionResumption': <String, dynamic>{
-            if (handle != null && handle.isNotEmpty) 'handle': handle,
-          },
-        },
-      });
-      debugPrint('Gemini Live => setup отправлен');
-      if (mounted) setState(() => _status = 'Настройка сессии...');
-    } on TimeoutException catch (e, st) {
-      _reportError('Ошибка: Таймаут подключения к серверу', e, st);
-    } catch (e, st) {
-      _reportError(_formatReason(e), e, st);
-    }
-  }
+      await _provider.connect(key);
+      if (!mounted) {
+        unawaited(_stopSession());
+        return;
+      }
 
-  void _onSetupComplete() {
-    if (_connected || !mounted) return;
-    _lastVoiceTime = DateTime.now();
-    _streamEndSent = false;
-    setState(() {
-      _connected = true;
-      _status = 'Слушаю...';
-    });
-    debugPrint('Gemini Live: setupComplete — микрофон продолжает работу');
-  }
+      if (!await _startMic() || !mounted) {
+        unawaited(_stopSession());
+        return;
+      }
 
-  Future<void> _closeSocket() async {
-    try {
-      await _wsSub?.cancel();
-    } catch (_) {}
-    _wsSub = null;
-    final old = _ws;
-    _ws = null;
-    if (old != null) {
-      try {
-        await old.close().timeout(const Duration(seconds: 2));
-      } catch (_) {}
-    }
-  }
-
-  Future<void> _reconnect() async {
-    if (_reconnecting || _closingManually || !mounted) return;
-    _reconnecting = true;
-    setState(() {
-      _connected = false;
-      _speaking = false;
-      _status = 'Переподключение...';
-    });
-    await _closeSocket();
-    _reconnecting = false;
-    if (mounted && !_closingManually) await _startSession();
-  }
-
-  /// Приводит входящий кадр WebSocket к строке. Бинарные кадры (байты)
-  /// декодируются через utf8; при неизвестном типе возвращает null.
-  String? _frameToText(dynamic raw) {
-    try {
-      if (raw is String) return raw;
-      if (raw is List<int>) return utf8.decode(raw, allowMalformed: true);
+      setState(() => _status = 'Слушаю...');
+    } on TimeoutException {
+      _reportError('Ошибка: Таймаут подключения к серверу');
     } catch (e) {
-      debugPrint('Gemini Live: не удалось декодировать кадр: $e');
+      _reportError(_formatReason(e), e);
     }
-    debugPrint('Gemini Live: неизвестный тип кадра ${raw.runtimeType}');
-    return null;
-  }
-
-  void _onWsMessage(dynamic raw) {
-    final text = _frameToText(raw);
-    if (text == null) return;
-    // Логируем уже декодированный текст, а не байты-числа.
-    debugPrint('Gemini Live <= $text');
-    _addDebugLog('<= ${text.length > 300 ? text.substring(0, 300) : text}');
-    try {
-      final decoded = jsonDecode(text);
-      if (decoded is! Map) return;
-      _addDebugLog('Keys: ${decoded.keys.toList()}');
-
-      final error = decoded['error'];
-      if (error != null) {
-        final full = error.toString();
-        debugPrint('Gemini Live: ошибка сервера полностью: $full');
-        _addDebugLog('Server error: $full');
-        final message = error is Map
-            ? (error['message']?.toString() ?? full)
-            : full;
-        _reportError(_formatReason(message), full);
-        return;
-      }
-      if (decoded.containsKey('setupComplete')) {
-        _onSetupComplete();
-        return;
-      }
-
-      final resumption = decoded['sessionResumptionUpdate'];
-      if (resumption is Map) {
-        final handle = resumption['newHandle'];
-        if (resumption['resumable'] == true &&
-            handle is String &&
-            handle.isNotEmpty) {
-          _sessionHandle = handle;
-        }
-      }
-      if (decoded.containsKey('goAway')) {
-        debugPrint('Gemini Live: goAway — переподключение');
-        unawaited(_reconnect());
-        return;
-      }
-
-      final content = decoded['serverContent'];
-      if (content is! Map) return;
-
-      if (content['interrupted'] == true) {
-        debugPrint('Gemini Live: interrupted — очищаю очередь плеера');
-        unawaited(_clearPlayback());
-      }
-
-      final turn = content['modelTurn'];
-      final parts = turn is Map ? turn['parts'] : null;
-      if (parts is List) {
-        for (final part in parts) {
-          if (part is! Map) continue;
-          final inlineData = part['inlineData'];
-          if (inlineData is! Map) continue;
-          final mime = inlineData['mimeType'] as String? ?? _outputAudioMime;
-          final data = inlineData['data'];
-          if (data is! String || data.isEmpty || !mime.startsWith('audio/pcm')) {
-            continue;
-          }
-          final bytes = base64Decode(data);
-          _addDebugLog('Audio chunk received: ${bytes.length} bytes');
-          _incomingPcmBuffer.addAll(bytes);
-          if (mounted) {
-            setState(() {
-              _speaking = true;
-              _status = 'Говорю...';
-            });
-          }
-        }
-        unawaited(_flushPcmToPlayer());
-      }
-
-      if (content['turnComplete'] == true) {
-        unawaited(_flushPcmToPlayer(force: true));
-        _lastVoiceTime = DateTime.now();
-        _streamEndSent = false;
-        _addDebugLog('TurnComplete received');
-        debugPrint('Gemini Live: turnComplete — продолжаю слушать');
-        if (mounted) {
-          setState(() {
-            _speaking = false;
-            _status = 'Слушаю...';
-          });
-        }
-      }
-    } catch (e, st) {
-      debugPrint('Gemini Live: ошибка разбора сообщения: $e\n$st');
-    }
-  }
-
-  Future<void> _flushPcmToPlayer({bool force = false}) async {
-    if (_incomingPcmBuffer.isEmpty ||
-        (!force && _incomingPcmBuffer.length < _minPlaybackBytes)) {
-      return;
-    }
-    final pcm = Uint8List.fromList(_incomingPcmBuffer);
-    _incomingPcmBuffer.clear();
-    try {
-      await _playerReady;
-      if (_player.processingState == ProcessingState.completed) {
-        await _audioQueue.clear();
-        await _player.stop();
-      }
-      await _audioQueue.add(_PcmWavSource(_buildWav(pcm)));
-      if (!_player.playing) unawaited(_player.play());
-      if (mounted) {
-        setState(() {
-          _speaking = true;
-          _status = 'Говорю...';
-        });
-      }
-    } catch (e, st) {
-      debugPrint('Gemini Live: ошибка воспроизведения PCM: $e\n$st');
-    }
-  }
-
-  Future<void> _clearPlayback() async {
-    _incomingPcmBuffer.clear();
-    try {
-      await _audioQueue.clear();
-      await _player.stop();
-    } catch (e) {
-      debugPrint('Gemini Live: ошибка очистки плеера: $e');
-    }
-    if (mounted) {
-      setState(() {
-        _speaking = false;
-        if (_connected) _status = 'Слушаю...';
-      });
-    }
-  }
-
-  Uint8List _buildWav(Uint8List pcm) {
-    const sampleRate = 24000;
-    const channels = 1;
-    final dataSize = pcm.length;
-    final header = ByteData(44);
-    const riff = [0x52, 0x49, 0x46, 0x46];
-    const wave = [0x57, 0x41, 0x56, 0x45];
-    const fmt = [0x66, 0x6D, 0x74, 0x20];
-    const data = [0x64, 0x61, 0x74, 0x61];
-    for (var i = 0; i < 4; i++) {
-      header.setUint8(i, riff[i]);
-      header.setUint8(8 + i, wave[i]);
-      header.setUint8(12 + i, fmt[i]);
-      header.setUint8(36 + i, data[i]);
-    }
-    header.setUint32(4, 36 + dataSize, Endian.little);
-    header.setUint32(16, 16, Endian.little);
-    header.setUint16(20, 1, Endian.little);
-    header.setUint16(22, channels, Endian.little);
-    header.setUint32(24, sampleRate, Endian.little);
-    header.setUint32(28, sampleRate * channels * 2, Endian.little);
-    header.setUint16(32, channels * 2, Endian.little);
-    header.setUint16(34, 16, Endian.little);
-    header.setUint32(40, dataSize, Endian.little);
-    return (BytesBuilder(copy: false)
-          ..add(header.buffer.asUint8List())
-          ..add(pcm))
-        .toBytes();
   }
 
   Future<void> _stopSession() async {
-    _running = false;
-    _connected = false;
-    _closingManually = true;
+    _speechTimer?.cancel();
+    _speechTimer = null;
     await _stopMic();
-    await _closeSocket();
+
+    final sub = _audioSub;
+    _audioSub = null;
     try {
-      await _player.stop();
+      await sub?.cancel();
     } catch (_) {}
+
+    try {
+      await _provider.disconnect();
+    } catch (_) {}
+
+    final sol = _soloud;
+    final handle = _playHandle;
+    _playHandle = null;
+    if (sol != null && handle != null && _soloudReady) {
+      try {
+        sol.stop(handle);
+      } catch (_) {}
+    }
+    final stream = _soloudStream;
+    _soloudStream = null;
+    if (stream != null) {
+      try {
+        stream.dispose();
+      } catch (_) {}
+    }
+    if (_soloudReady) {
+      _soloudReady = false;
+      _soloud = null;
+      try {
+        sol?.deinit();
+      } catch (_) {}
+    }
+
+    if (mounted && _running) {
+      setState(() {
+        _running = false;
+        _speaking = false;
+        _status = 'Готов к запуску';
+      });
+    }
   }
 
   Future<void> _endCall() async {
     await _stopSession();
     if (mounted) Navigator.of(context).pop();
   }
+
+  // ---------- интерфейс ----------
 
   @override
   Widget build(BuildContext context) {
@@ -728,7 +404,6 @@ class _LiveScreenState extends State<LiveScreen>
                     const SizedBox(height: 12),
                     _pulseSection(accent, text, muted, cardBg, border),
                     if (!_running) _startArea(cardBg, border, accent, muted),
-                    _debugPanel(cardBg, border, text, muted),
                     _bottomControls(cardBg, border, accent, text),
                   ],
                 ),
@@ -751,7 +426,7 @@ class _LiveScreenState extends State<LiveScreen>
       animation: _pulseAnim,
       builder: (context, _) {
         final t = _pulseAnim.value;
-        final active = _connected && !_muted;
+        final active = _running && !_muted;
         final color = _speaking ? accent : accent.withValues(alpha: 0.65);
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -950,49 +625,6 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 
-  Widget _debugPanel(
-    Color cardBg,
-    Color border,
-    Color text,
-    Color muted,
-  ) {
-    return Container(
-      width: double.infinity,
-      height: 130,
-      margin: const EdgeInsets.only(bottom: 8),
-      decoration: BoxDecoration(
-        color: cardBg.withValues(alpha: 0.72),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: border),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: ListView.builder(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-        itemCount: _debugLogs.isEmpty ? 1 : _debugLogs.length,
-        itemBuilder: (context, index) {
-          if (_debugLogs.isEmpty) {
-            return Text(
-              'Журнал соединения',
-              style: TextStyle(fontSize: 11, color: muted),
-            );
-          }
-          final log = _debugLogs[_debugLogs.length - 1 - index];
-          return Text(
-            log,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 10,
-              color: text,
-              fontFamily: 'JetBrains Mono',
-              fontFamilyFallback: const ['monospace'],
-            ),
-          );
-        },
-      ),
-    );
-  }
-
   Widget _bottomControls(
     Color cardBg,
     Color border,
@@ -1021,14 +653,16 @@ class _LiveScreenState extends State<LiveScreen>
                   ? () {
                       setState(() {
                         _muted = !_muted;
-                        if (_connected && !_speaking) {
-                          _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+                        if (_running && !_speaking) {
+                          _status =
+                              _muted ? 'Микрофон выключен' : 'Слушаю...';
                         }
                       });
                     }
                   : null,
               style: IconButton.styleFrom(
-                backgroundColor: _muted ? accent.withValues(alpha: 0.22) : cardBg,
+                backgroundColor:
+                    _muted ? accent.withValues(alpha: 0.22) : cardBg,
                 foregroundColor: _muted ? accent : text,
                 side: BorderSide(color: _muted ? accent : border, width: 1.5),
                 minimumSize: const Size(62, 62),
@@ -1067,3 +701,4 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 }
+
