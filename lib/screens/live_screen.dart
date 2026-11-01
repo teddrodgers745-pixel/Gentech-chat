@@ -3,6 +3,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -52,6 +53,27 @@ class _LiveScreenState extends State<LiveScreen>
 
   final List<int> _incomingPcmBuffer = <int>[];
 
+  /// Очередь аудио: чанки ответа модели добавляются в плеер непрерывно,
+  /// без ожидания конца реплики. Очищается только при 'interrupted'.
+  final ConcatenatingAudioSource _audioQueue = ConcatenatingAudioSource(
+    children: <AudioSource>[],
+  );
+
+  /// Порог тишины (RMS по шкале 16-bit) и длительность паузы, после которой
+  /// в WebSocket уходит audioStreamEnd (конец фразы пользователя).
+  static const double _silenceRmsThreshold = 350;
+  static const Duration _silenceDuration = Duration(milliseconds: 1500);
+
+  /// Время последнего «звукового» чанка микрофона и признак того,
+  /// что маркер конца фразы уже отправлен (не дублируем).
+  DateTime _lastVoiceTime = DateTime.now();
+  bool _streamEndSent = false;
+
+  /// Минимальный объём PCM (байт) перед добавлением в плеер:
+  /// 24000 Гц * 2 байта * 0.1 с = 4800 байт — низкая задержка.
+  static const int _minPlaybackBytes = 4800;
+  int _fileSeq = 0;
+
   /// Буфер микрофона: накапливаем чанки и отправляем в WebSocket
   /// порциями 20-40 мс (640-1280 байт PCM 16-bit 16 кГц).
   final List<int> _micBuffer = <int>[];
@@ -86,6 +108,16 @@ class _LiveScreenState extends State<LiveScreen>
       parent: _pulseController,
       curve: Curves.easeInOutSine,
     );
+
+    // Непрерывное воспроизведение: плеер сразу играет очередь чанков
+    // ответа модели. Ошибка инициализации не блокирует интерфейс.
+    () async {
+      try {
+        await _player.setAudioSource(_audioQueue);
+      } catch (e) {
+        debugPrint('Gemini Live: не удалось инициализировать плеер: $e');
+      }
+    }();
 
     _playerSub = _player.playerStateStream.listen((state) {
       if (!mounted) return;
@@ -264,6 +296,8 @@ class _LiveScreenState extends State<LiveScreen>
 
   Future<void> _onSetupComplete() async {
     if (_connected || !mounted) return;
+    _lastVoiceTime = DateTime.now();
+    _streamEndSent = false;
     setState(() {
       _connected = true;
       _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
@@ -295,6 +329,9 @@ class _LiveScreenState extends State<LiveScreen>
     _micSub = stream.listen(
       (chunk) {
         if (_muted || !_connected || chunk.isEmpty) return;
+        // Конец фразы: RMS-анализ уровня, при паузе 1.5 с отправляем
+        // audioStreamEnd в WebSocket.
+        _analyzeMicLevel(chunk);
         // Накапливаем и режем на порции 20-40 мс (640-1280 байт):
         // record отдаёт чанки произвольного размера.
         _micBuffer.addAll(chunk);
@@ -330,6 +367,46 @@ class _LiveScreenState extends State<LiveScreen>
       }));
     } catch (e, st) {
       debugPrint('Gemini Live: ошибка отправки аудио: $e\n$st');
+    }
+  }
+
+  /// RMS-анализ чанка микрофона. Если уровень ниже порога дольше
+  /// [_silenceDuration], отправляем {'realtimeInput': {'audioStreamEnd': true}}
+  /// — сигнал модели, что фраза пользователя закончена. Когда голос снова
+  /// становится громче порога, маркер сбрасывается до следующей паузы.
+  void _analyzeMicLevel(Uint8List chunk) {
+    final now = DateTime.now();
+    var sumSquares = 0;
+    var count = 0;
+    for (var i = 0; i + 1 < chunk.length; i += 2) {
+      final sample = (chunk[i] | (chunk[i + 1] << 8)).toSigned(16);
+      sumSquares += sample * sample;
+      count++;
+    }
+    if (count == 0) return;
+    final rms = math.sqrt(sumSquares / count);
+    if (rms > _silenceRmsThreshold) {
+      _lastVoiceTime = now;
+      _streamEndSent = false;
+    } else if (!_streamEndSent &&
+        now.difference(_lastVoiceTime) >= _silenceDuration) {
+      _streamEndSent = true;
+      _sendAudioStreamEnd();
+    }
+  }
+
+  /// Отправка маркера конца фразы пользователя. Поток микрофона при этом
+  /// НЕ останавливается: чанки продолжают уходить, пока сессия активна.
+  void _sendAudioStreamEnd() {
+    final ws = _ws;
+    if (ws == null) return;
+    try {
+      ws.add(jsonEncode(<String, dynamic>{
+        'realtimeInput': <String, dynamic>{'audioStreamEnd': true},
+      }));
+      debugPrint('Gemini Live: отправлен audioStreamEnd (пауза пользователя)');
+    } catch (e, st) {
+      debugPrint('Gemini Live: ошибка отправки audioStreamEnd: $e\n$st');
     }
   }
 
@@ -398,6 +475,11 @@ class _LiveScreenState extends State<LiveScreen>
 
       final serverContent = decoded['serverContent'];
       if (serverContent is Map) {
+        // Прерывание (модель перебила пользователя): единственный случай,
+        // когда буфер и очередь плеера полностью очищаются.
+        if (serverContent['interrupted'] == true) {
+          _clearPlayback();
+        }
         final modelTurn = serverContent['modelTurn'];
         if (modelTurn is Map && modelTurn['parts'] is List) {
           for (final part in (modelTurn['parts'] as List)) {
@@ -410,6 +492,7 @@ class _LiveScreenState extends State<LiveScreen>
               if (data is String &&
                   data.isNotEmpty &&
                   mime.startsWith('audio/pcm')) {
+                // base64 -> PCM-байты, далее непрерывно в плеер.
                 _incomingPcmBuffer.addAll(base64Decode(data));
                 if (mounted && !_speaking) {
                   setState(() {
@@ -420,12 +503,14 @@ class _LiveScreenState extends State<LiveScreen>
               }
             }
           }
+          // Отдаём накопленное в плеер сразу, не дожидаясь конца реплики.
+          _flushPcmToPlayer();
         }
-        if (serverContent['turnComplete'] == true &&
-            _incomingPcmBuffer.isNotEmpty) {
-          final bytes = Uint8List.fromList(_incomingPcmBuffer);
-          _incomingPcmBuffer.clear();
-          _playPcmBytes(bytes);
+        if (serverContent['turnComplete'] == true) {
+          // Конец реплики: дожимаем остаток буфера. Микрофон и отправка
+          // аудио НЕ останавливаются — статус вернётся в «Слушаю...»
+          // после завершения воспроизведения.
+          _flushPcmToPlayer(force: true);
         }
       }
     } catch (e, st) {
@@ -433,29 +518,56 @@ class _LiveScreenState extends State<LiveScreen>
     }
   }
 
-  Future<void> _playPcmBytes(Uint8List pcmBytes) async {
+  /// Передаёт накопленный PCM в очередь плеера непрерывно: каждый фрагмент
+  /// оборачивается в WAV (24 кГц, mono, 16-bit) и добавляется в
+  /// ConcatenatingAudioSource. Буфер очищается только при 'interrupted'
+  /// (см. [_clearPlayback]); между фрагментами воспроизведение не прерывается.
+  Future<void> _flushPcmToPlayer({bool force = false}) async {
+    if (_incomingPcmBuffer.isEmpty) return;
+    if (!force && _incomingPcmBuffer.length < _minPlaybackBytes) return;
+    final bytes = Uint8List.fromList(_incomingPcmBuffer);
+    _incomingPcmBuffer.clear();
     try {
       final dir = await getTemporaryDirectory();
+      _fileSeq++;
       final file = File(
-        '${dir.path}/live_${DateTime.now().millisecondsSinceEpoch}.wav',
+        '${dir.path}/live_${DateTime.now().millisecondsSinceEpoch}'
+        '_$_fileSeq.wav',
       );
-      final wav = _buildWav(pcmBytes, sampleRate: 24000, channels: 1);
+      final wav = _buildWav(bytes, sampleRate: 24000, channels: 1);
       await file.writeAsBytes(wav, flush: true);
+      await _audioQueue.add(AudioSource.file(file.path));
+      if (!_player.playing) {
+        await _player.play();
+      }
       if (!mounted) return;
       setState(() {
         _speaking = true;
         _status = 'Говорю...';
       });
-      await _player.setFilePath(file.path);
-      await _player.play();
     } catch (e, st) {
       debugPrint('Gemini Live: ошибка воспроизведения PCM: $e\n$st');
-      if (!mounted) return;
-      setState(() {
-        _speaking = false;
-        if (_connected) _status = 'Слушаю...';
-      });
     }
+  }
+
+  /// Полная очистка воспроизведения — только при получении 'interrupted':
+  /// буфер PCM, очередь плеера и его состояние сбрасываются, статус
+  /// возвращается к прослушиванию микрофона.
+  Future<void> _clearPlayback() async {
+    _incomingPcmBuffer.clear();
+    try {
+      await _audioQueue.clear();
+      await _player.stop();
+    } catch (e) {
+      debugPrint('Gemini Live: ошибка очистки плеера: $e');
+    }
+    if (!mounted) return;
+    setState(() {
+      _speaking = false;
+      if (_connected) {
+        _status = _muted ? 'Микрофон выключен' : 'Слушаю...';
+      }
+    });
   }
 
   Uint8List _buildWav(
