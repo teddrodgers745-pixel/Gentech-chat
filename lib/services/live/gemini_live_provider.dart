@@ -18,6 +18,16 @@ import 'live_provider.dart';
 ///    после 1.5 с тишины (RMS ниже порога) отправляем audioStreamEnd;
 ///  - приём: serverContent.modelTurn.parts[].inlineData.data (PCM16 24 кГц)
 ///    уходит в [audioStream]; turnComplete -> 'listening'. Микрофон не трогаем.
+/// Ошибка Live-сессии с точным текстом от сервера: интерфейс показывает
+/// его как есть, без обёрток вроде «Bad state».
+class GeminiLiveException implements Exception {
+  final String message;
+  const GeminiLiveException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 class GeminiLiveProvider extends LiveProvider {
   static const String _endpoint =
       'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
@@ -96,8 +106,24 @@ class GeminiLiveProvider extends LiveProvider {
       rethrow;
     } catch (e) {
       await disconnect();
-      throw StateError(_sanitize(e));
+      throw GeminiLiveException(_describe(e));
     }
+  }
+
+  /// Разворачивает обёртки (WebSocketChannelException и т.п.), оставляя
+  /// точный текст ошибки от сервера, и убирает API-ключ из текста.
+  String _describe(Object error) {
+    final text = error.toString();
+    if (error is GeminiLiveException) return _sanitize(text);
+    var msg = text;
+    final idx = msg.indexOf('WebSocketChannelException');
+    if (idx >= 0) {
+      final colon = msg.indexOf(':', idx);
+      if (colon >= 0 && colon + 1 < msg.length) {
+        msg = msg.substring(colon + 1).trim();
+      }
+    }
+    return _sanitize(msg);
   }
 
   /// Имя модели для setup: пустая строка из настроек заменяется дефолтом,
@@ -109,15 +135,29 @@ class GeminiLiveProvider extends LiveProvider {
     return 'models/$m';
   }
 
-  Map<String, dynamic> _setupMessage() => <String, dynamic>{
-        'setup': <String, dynamic>{
-          'model': _modelName,
-          'generationConfig': <String, dynamic>{
-            'responseModalities': <String>['AUDIO'],
-          },
-          'outputAudioTranscription': const <String, dynamic>{},
-        },
+  /// Setup-сообщение собирается динамически в зависимости от модели:
+  ///  - имя содержит 'extended-thinking' -> generationConfig дополняется
+  ///    полем thinkingConfig {thinkingLevel: HIGH}, лишние поля
+  ///    (proactive_audio и т.п.) не добавляются;
+  ///  - имя содержит '3.8-live' (без extended) -> в generationConfig
+  ///    остаётся ТОЛЬКО responseModalities: [AUDIO], никаких полей thinking.
+  Map<String, dynamic> _setupMessage() {
+    final generationConfig = <String, dynamic>{
+      'responseModalities': <String>['AUDIO'],
+    };
+    if (_modelName.contains('extended-thinking')) {
+      generationConfig['thinkingConfig'] = <String, String>{
+        'thinkingLevel': 'HIGH',
       };
+    }
+    return <String, dynamic>{
+      'setup': <String, dynamic>{
+        'model': _modelName,
+        'generationConfig': generationConfig,
+        'outputAudioTranscription': const <String, dynamic>{},
+      },
+    };
+  }
 
   @override
   Future<void> sendAudio(List<int> pcmBytes) async {
@@ -219,11 +259,11 @@ class GeminiLiveProvider extends LiveProvider {
     }
 
     if (msg['error'] != null) {
-      lastError = _sanitize(msg['error']);
+      lastError = _sanitize(_serverErrorText(msg['error']));
       final c = _setupCompleter;
       _setupCompleter = null;
       if (c != null && !c.isCompleted) {
-        c.completeError(StateError(lastError));
+        c.completeError(GeminiLiveException(lastError));
         return;
       }
       onState?.call('error');
@@ -263,7 +303,7 @@ class GeminiLiveProvider extends LiveProvider {
   }
 
   void _onSocketError(Object error) {
-    lastError = _sanitize(error);
+    lastError = _describe(error);
     _failOrState('error');
   }
 
@@ -278,7 +318,7 @@ class GeminiLiveProvider extends LiveProvider {
     final c = _setupCompleter;
     _setupCompleter = null;
     if (c != null && !c.isCompleted) {
-      c.completeError(StateError(lastError));
+      c.completeError(GeminiLiveException(lastError));
       return;
     }
     if (_connected) {
@@ -288,6 +328,17 @@ class GeminiLiveProvider extends LiveProvider {
   }
 
   // ---------- утилиты ----------
+
+  /// Точный текст ошибки сервера: из объекта ошибки берём поле message,
+  /// если оно есть (формат {"error": {"code": ..., "message": ...}}).
+  String _serverErrorText(Object error) {
+    if (error is Map) {
+      final m = error['message'];
+      if (m is String && m.trim().isNotEmpty) return m;
+      return error.toString();
+    }
+    return error.toString();
+  }
 
   /// Убирает API-ключ из текстов ошибок, чтобы он не попадал в интерфейс.
   String _sanitize(Object error) {
