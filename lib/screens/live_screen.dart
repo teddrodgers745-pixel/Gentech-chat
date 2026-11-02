@@ -201,7 +201,7 @@ class _LiveScreenState extends State<LiveScreen>
         channels: Channels.mono,
         format: BufferType.s16le,
       );
-      final SoundHandle handle = await sol.play(stream);
+      final SoundHandle handle = sol.play(stream);
       _soloud = sol;
       _soloudStream = stream;
       _playHandle = handle;
@@ -225,9 +225,7 @@ class _LiveScreenState extends State<LiveScreen>
 
       final SoundHandle? handle = _playHandle;
       if (handle == null || !sol.getIsValidVoiceHandle(handle)) {
-        unawaited(sol.play(stream).then((SoundHandle h) {
-          _playHandle = h;
-        }));
+        _playHandle = sol.play(stream);
       } else if (sol.getPause(handle)) {
         sol.setPause(handle, false);
       }
