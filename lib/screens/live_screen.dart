@@ -135,9 +135,14 @@ class _LiveScreenState extends State<LiveScreen>
     if (!mounted || !_running) return;
     switch (state) {
       case 'listening':
-        if (!_speaking && !_muted) {
-          setState(() => _status = 'Слушаю...');
-        }
+        // turnComplete от провайдера: модель закончила ход — прекращаем
+        // считать её «говорящей» и возобновляем отправку микрофона.
+        _speechTimer?.cancel();
+        _speechTimer = null;
+        setState(() {
+          _speaking = false;
+          if (!_muted) _status = 'Слушаю...';
+        });
       case 'error':
       case 'closed':
         final detail = _provider.lastError;
@@ -205,6 +210,10 @@ class _LiveScreenState extends State<LiveScreen>
 
   void _onMicChunk(Uint8List chunk) {
     if (chunk.isEmpty || _muted || !_running) return;
+    // Анти-эхо: пока модель воспроизводит звук (статус «Говорю...»),
+    // микрофонные чанки не отправляются в WebSocket — иначе запись
+    // собственного вывода через динамик создаёт эхо.
+    if (_speaking || _status == 'Говорю...') return;
     unawaited(_provider.sendAudio(chunk));
   }
 
