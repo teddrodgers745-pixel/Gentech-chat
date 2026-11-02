@@ -103,7 +103,11 @@ class GeminiLiveProvider extends LiveProvider {
         onDone: _onSocketDone,
         cancelOnError: false,
       );
-      channel.sink.add(jsonEncode(_setupMessage()));
+      // Диагностика: полный JSON setup-сообщения в лог. Ключ в setup
+      // не входит (передаётся только в URL), поэтому печатаем как есть.
+      final setupJson = jsonEncode(_setupMessage());
+      debugPrint('GeminiLiveProvider: setup -> $setupJson');
+      channel.sink.add(setupJson);
       await setup.future.timeout(_connectTimeout);
       debugPrint('GeminiLiveProvider: сессия открыта');
     } on TimeoutException {
@@ -155,11 +159,15 @@ class GeminiLiveProvider extends LiveProvider {
         'thinkingLevel': 'HIGH',
       };
     }
+    // Модели 3.8 не понимают outputAudioTranscription — не отправляем
+    // это поле, чтобы сервер не отвечал ошибкой INVALID_ARGUMENT.
+    final supportsTranscription = !_modelName.contains('3.8');
     return <String, dynamic>{
       'setup': <String, dynamic>{
         'model': _modelName,
         'generationConfig': generationConfig,
-        'outputAudioTranscription': const <String, dynamic>{},
+        if (supportsTranscription)
+          'outputAudioTranscription': const <String, dynamic>{},
       },
     };
   }
@@ -280,6 +288,7 @@ class GeminiLiveProvider extends LiveProvider {
 
     if (msg['error'] != null) {
       lastError = _sanitize(_serverErrorText(msg['error']));
+      debugPrint('GeminiLiveProvider: ошибка сервера: $lastError');
       final c = _setupCompleter;
       _setupCompleter = null;
       if (c != null && !c.isCompleted) {
@@ -328,14 +337,30 @@ class GeminiLiveProvider extends LiveProvider {
   }
 
   void _onSocketError(Object error) {
+    // Полный текст ошибки от сервера (без ключа) — в лог и в UI
+    // (через lastError + onState, которые читает LiveScreen).
     lastError = _describe(error);
+    debugPrint('GeminiLiveProvider: ошибка WebSocket: $lastError');
     _failOrState('error');
   }
 
   void _onSocketDone() {
-    final code = _channel?.closeCode;
-    lastError =
-        'Сервер закрыл соединение${code == null ? '' : ' (код $code)'}';
+    final channel = _channel;
+    final code = channel?.closeCode;
+    final reason = (channel?.closeReason ?? '').trim();
+    // Полный текст, который прислал сервер при закрытии, показываем в UI.
+    final details = StringBuffer('Сервер закрыл соединение');
+    if (code != null) details.write(' (код $code');
+    if (reason.isNotEmpty) {
+      if (code != null) {
+        details.write(', причина: $reason');
+      } else {
+        details.write(' (причина: $reason');
+      }
+    }
+    if (code != null || reason.isNotEmpty) details.write(')');
+    lastError = _sanitize(details.toString());
+    debugPrint('GeminiLiveProvider: соединение закрыто: $lastError');
     _failOrState('closed');
   }
 

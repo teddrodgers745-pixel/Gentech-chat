@@ -42,6 +42,7 @@ class _LiveScreenState extends State<LiveScreen>
   StreamSubscription<List<int>>? _audioSub;
   StreamSubscription<void>? _interruptSub;
   Timer? _speechTimer;
+  Timer? _unmuteTimer;
 
   SoLoud? _soloud;
   AudioSource? _soloudStream;
@@ -50,6 +51,10 @@ class _LiveScreenState extends State<LiveScreen>
 
   bool _micActive = false;
   bool _muted = false;
+
+  /// Анти-эхо: true, пока модель говорит (аудио идёт в плеер) и ещё
+  /// 400 мс после turnComplete, чтобы звук в динамике затих.
+  bool _isMicMuted = false;
   bool _running = false;
   bool _speaking = false;
   bool _obscureKey = true;
@@ -81,6 +86,7 @@ class _LiveScreenState extends State<LiveScreen>
   void dispose() {
     _provider.statusNotifier.removeListener(_onProviderStatus);
     _provider.onState = null;
+    _unmuteTimer?.cancel();
     unawaited(_stopSession());
     _pulseController.dispose();
     _keyController.dispose();
@@ -145,6 +151,14 @@ class _LiveScreenState extends State<LiveScreen>
         setState(() {
           _speaking = false;
           if (!_muted) _status = 'Слушаю...';
+        });
+        // Микрофон включается не сразу: ждём 400 мс, пока звук
+        // в динамике затихнет, иначе запись собственного вывода
+        // создаёт эхо.
+        _unmuteTimer?.cancel();
+        _unmuteTimer = Timer(const Duration(milliseconds: 400), () {
+          if (!mounted) return;
+          _isMicMuted = false;
         });
       case 'error':
       case 'closed':
@@ -231,6 +245,9 @@ class _LiveScreenState extends State<LiveScreen>
 
   void _onMicChunk(Uint8List chunk) {
     if (chunk.isEmpty || _muted || !_running) return;
+    // Анти-эхо: пока звучит ответ модели (и 400 мс после turnComplete),
+    // микрофонные чанки не отправляются в соединение.
+    if (_isMicMuted) return;
     // Анти-эхо: пока модель воспроизводит звук (статус «Говорю...»),
     // микрофонные чанки не отправляются в WebSocket — иначе запись
     // собственного вывода через динамик создаёт эхо.
@@ -274,6 +291,9 @@ class _LiveScreenState extends State<LiveScreen>
     if (sol == null || stream == null || !_soloudReady || bytes.isEmpty) {
       return;
     }
+    // Анти-эхо: как только аудио модели пошло в плеер, глушим микрофон
+    // до turnComplete (+400 мс), чтобы вывод динамика не записывался.
+    _isMicMuted = true;
     try {
       final Uint8List pcm =
           bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
@@ -365,6 +385,7 @@ class _LiveScreenState extends State<LiveScreen>
       _status = 'Подключение...';
       _errorDetails = null;
       _speaking = false;
+      _isMicMuted = false;
     });
 
     try {
@@ -420,6 +441,9 @@ class _LiveScreenState extends State<LiveScreen>
   Future<void> _stopSession() async {
     _speechTimer?.cancel();
     _speechTimer = null;
+    _unmuteTimer?.cancel();
+    _unmuteTimer = null;
+    _isMicMuted = false;
     await _stopMic();
 
     final sub = _audioSub;
