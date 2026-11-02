@@ -18,7 +18,9 @@ abstract class LiveProvider {
 
   /// Открывает сессию с провайдером по переданному API-ключу.
   /// Ключ вводится пользователем; метод не сохраняет и не логирует его.
-  Future<void> connect(String apiKey);
+  /// [modelName] — идентификатор модели из настроек пользователя;
+  /// пустое/отсутствующее значение означает модель по умолчанию провайдера.
+  Future<void> connect(String apiKey, {String? modelName});
 
   /// Отправляет фрагмент захваченного с микрофона аудио (PCM-байты).
   Future<void> sendAudio(List<int> pcmBytes);

@@ -22,12 +22,24 @@ class GeminiLiveProvider extends LiveProvider {
   static const String _endpoint =
       'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent';
 
-  static const String modelName =
-      'models/gemini-2.5-flash-native-audio-preview-12-2025';
+  /// Модель по умолчанию, если из настроек пользователя передана пустая строка.
+  static const String defaultModelName =
+      'gemini-2.5-flash-native-audio-preview-12-2025';
 
   static const Duration _connectTimeout = Duration(seconds: 20);
   static const Duration _silenceForStreamEnd = Duration(milliseconds: 1500);
   static const double _silenceRms = 0.01;
+
+  /// Модель для setup-сообщения: задаётся в [connect] из настроек пользователя.
+  String _modelName = defaultModelName;
+
+  /// Сигналы прерывания (serverContent.interrupted): UI должен немедленно
+  /// остановить воспроизведение, пока модель ещё «говорит».
+  final StreamController<void> _interruptController =
+      StreamController<void>.broadcast();
+
+  /// Поток прерываний хода модели (бардж-ин пользователя).
+  Stream<void> get interruptedStream => _interruptController.stream;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _wsSub;
@@ -52,13 +64,14 @@ class GeminiLiveProvider extends LiveProvider {
   Stream<List<int>> get audioStream => _audioController.stream;
 
   @override
-  Future<void> connect(String apiKey) async {
+  Future<void> connect(String apiKey, {String? modelName}) async {
     await disconnect();
     final key = apiKey.trim();
     if (key.isEmpty) {
       throw StateError('API-ключ не задан');
     }
     _apiKey = key;
+    _modelName = _resolveModelName(modelName);
     _streamEndSent = true;
     _lastVoiceAt = DateTime.now();
     lastError = '';
@@ -87,9 +100,18 @@ class GeminiLiveProvider extends LiveProvider {
     }
   }
 
-  static Map<String, dynamic> _setupMessage() => <String, dynamic>{
+  /// Имя модели для setup: пустая строка из настроек заменяется дефолтом,
+  /// префикс 'models/' добавляется, если пользователь его не указал.
+  static String _resolveModelName(String? raw) {
+    var m = (raw ?? '').trim();
+    if (m.isEmpty) m = defaultModelName;
+    m = m.replaceFirst(RegExp(r'^models/', caseSensitive: false), '');
+    return 'models/$m';
+  }
+
+  Map<String, dynamic> _setupMessage() => <String, dynamic>{
         'setup': <String, dynamic>{
-          'model': modelName,
+          'model': _modelName,
           'generationConfig': <String, dynamic>{
             'responseModalities': <String>['AUDIO'],
           },
@@ -210,6 +232,13 @@ class GeminiLiveProvider extends LiveProvider {
 
     final sc = msg['serverContent'];
     if (sc is! Map) return;
+    if (sc['interrupted'] == true) {
+      // Модель прервана (пользователь заговорил): сигнал в UI,
+      // чтобы плеер немедленно остановился и не звучал поверх речи.
+      if (!_interruptController.isClosed) {
+        _interruptController.add(null);
+      }
+    }
     final turn = sc['modelTurn'];
     if (turn is Map && turn['parts'] is List) {
       for (final part in (turn['parts'] as List)) {

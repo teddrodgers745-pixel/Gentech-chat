@@ -40,6 +40,7 @@ class _LiveScreenState extends State<LiveScreen>
 
   StreamSubscription<Uint8List>? _micSub;
   StreamSubscription<List<int>>? _audioSub;
+  StreamSubscription<void>? _interruptSub;
   Timer? _speechTimer;
 
   SoLoud? _soloud;
@@ -284,6 +285,28 @@ class _LiveScreenState extends State<LiveScreen>
     });
   }
 
+  /// Сигнал от провайдера (serverContent.interrupted): модель прервана.
+  /// Немедленно останавливаем текущий голос плеера (сбрасываем handle,
+  /// следующий чанк начнёт воспроизведение заново) и возвращаемся
+  /// к состоянию «Слушаю...».
+  void _onInterrupted() {
+    if (!mounted || !_running) return;
+    _speechTimer?.cancel();
+    _speechTimer = null;
+    final sol = _soloud;
+    final handle = _playHandle;
+    if (sol != null && handle != null && _soloudReady) {
+      try {
+        sol.stop(handle);
+      } catch (_) {}
+    }
+    _playHandle = null;
+    setState(() {
+      _speaking = false;
+      if (!_muted) _status = 'Слушаю...';
+    });
+  }
+
   // ---------- сессия ----------
 
   Future<void> _startSession() async {
@@ -321,7 +344,16 @@ class _LiveScreenState extends State<LiveScreen>
         cancelOnError: false,
       );
 
-      await _provider.connect(key);
+      // Сигналы прерывания от провайдера: немедленная остановка плеера.
+      await _interruptSub?.cancel();
+      _interruptSub = _provider.interruptedStream.listen((_) {
+        _onInterrupted();
+      });
+
+      // Активная модель из настроек (пресет либо глобальные настройки);
+      // пустая строка означает модель по умолчанию провайдера.
+      final modelName = effectiveConfig().model.trim();
+      await _provider.connect(key, modelName: modelName);
       if (!mounted) {
         unawaited(_stopSession());
         return;
@@ -351,6 +383,12 @@ class _LiveScreenState extends State<LiveScreen>
     _audioSub = null;
     try {
       await sub?.cancel();
+    } catch (_) {}
+
+    final isub = _interruptSub;
+    _interruptSub = null;
+    try {
+      await isub?.cancel();
     } catch (_) {}
 
     try {
