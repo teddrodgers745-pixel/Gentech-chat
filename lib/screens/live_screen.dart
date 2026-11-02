@@ -819,7 +819,7 @@ class _LiveScreenState extends State<LiveScreen>
                 style: IconButton.styleFrom(
                   backgroundColor: cardBg,
                   foregroundColor: accent,
-                  side: const BorderSide(color: accent, width: 1.5),
+                  side: BorderSide(color: accent, width: 1.5),
                   minimumSize: const Size(62, 62),
                 ),
                 icon: const Icon(Icons.front_hand, size: 24),
