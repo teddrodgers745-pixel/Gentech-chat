@@ -76,7 +76,14 @@ class GeminiLiveProvider extends LiveProvider {
     _controller = controller;
 
     try {
-      await controller.connect(model);
+      await controller.connect(
+        LiveConnectParameters(
+          model: model,
+          config: GenerationConfig(
+            responseModalities: [Modality.AUDIO],
+          ),
+        ),
+      );
       debugPrint('GeminiLiveProvider: сессия открыта (модель $model)');
     } catch (e) {
       await disconnect();
