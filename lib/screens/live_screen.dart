@@ -52,9 +52,15 @@ class _LiveScreenState extends State<LiveScreen>
   bool _micActive = false;
   bool _muted = false;
 
-  /// Анти-эхо: true, пока модель говорит (аудио идёт в плеер) и ещё
-  /// 400 мс после turnComplete, чтобы звук в динамике затих.
-  bool _isMicMuted = false;
+  /// Анти-эхо (Аргон): true с первого аудио-чанка модели и до возврата
+  /// микрофона (плеер доиграл ход + 350 мс тишины). Пока флаг поднят,
+  /// в WebSocket вместо реального микрофона уходят нули («цифровая тишина»).
+  bool _isBotSpeaking = false;
+
+  /// Оценка непроигранного буфера плеера (байты PCM16, 24 кГц, mono)
+  /// и момент последнего пришедшего от сервера аудио-фрагмента.
+  int _pendingBytes = 0;
+  DateTime _lastFeedAt = DateTime.now();
   bool _running = false;
   bool _speaking = false;
   bool _obscureKey = true;
@@ -152,14 +158,10 @@ class _LiveScreenState extends State<LiveScreen>
           _speaking = false;
           if (!_muted) _status = 'Слушаю...';
         });
-        // Микрофон включается не сразу: ждём 400 мс, пока звук
-        // в динамике затихнет, иначе запись собственного вывода
-        // создаёт эхо.
-        _unmuteTimer?.cancel();
-        _unmuteTimer = Timer(const Duration(milliseconds: 400), () {
-          if (!mounted) return;
-          _isMicMuted = false;
-        });
+        // Умный возврат микрофона: не включаем его сразу после
+        // turnComplete — сначала ждём, пока плеер доиграет буфер хода,
+        // затем 350 мс тишины (иначе записываем собственный вывод).
+        if (_isBotSpeaking) _scheduleMicReturn();
       case 'error':
       case 'closed':
         final detail = _provider.lastError;
@@ -188,7 +190,47 @@ class _LiveScreenState extends State<LiveScreen>
         _speaking = false;
         if (!_muted) _status = 'Слушаю...';
       });
+      // turnComplete: запускаем умный возврат микрофона, если модель говорила.
+      if (_isBotSpeaking) _scheduleMicReturn();
     }
+  }
+
+  /// Умный возврат микрофона (Аргон): после turnComplete ждём, пока плеер
+  /// SoLoud доиграет остаток хода модели (оценка непроигранного буфера по
+  /// времени + состояние голосового handle), затем 350 мс тишины — и только
+  /// потом снова отправляем реальный микрофон. Всё время ожидания в эфир
+  /// уходит «цифровая тишина» (нули).
+  void _scheduleMicReturn() {
+    _unmuteTimer?.cancel();
+    _unmuteTimer = Timer.periodic(const Duration(milliseconds: 100), (t) {
+      if (!mounted || !_running || !_isBotSpeaking) {
+        t.cancel();
+        return;
+      }
+      // Пока приходят новые фрагменты — модель ещё говорит, ждём.
+      if (DateTime.now().difference(_lastFeedAt) <
+          const Duration(milliseconds: 300)) {
+        return;
+      }
+      // Оценка остатка буфера: 48 000 байт в секунду (24 кГц, 16 бит, mono).
+      _pendingBytes -= 4800;
+      if (_pendingBytes < 0) _pendingBytes = 0;
+      final sol = _soloud;
+      final handle = _playHandle;
+      final voiceActive = sol != null &&
+          handle != null &&
+          _soloudReady &&
+          sol.getIsValidVoiceHandle(handle);
+      // Готово: буфер сыгран либо голосовой handle уже завершён.
+      // Предохранитель — максимум ~10 секунд ожидания (t.tick >= 100).
+      if (_pendingBytes <= 0 || !voiceActive || t.tick >= 100) {
+        t.cancel();
+        _unmuteTimer = Timer(const Duration(milliseconds: 350), () {
+          if (!mounted) return;
+          _isBotSpeaking = false;
+        });
+      }
+    });
   }
 
   // ---------- микрофон ----------
@@ -208,6 +250,11 @@ class _LiveScreenState extends State<LiveScreen>
           echoCancel: true,
           noiseSuppress: true,
           autoGain: true,
+          // Режим коммуникации: система сама включает аппаратное/системное
+          // эхоподавление и шумоподавление для VoIP-сценария.
+          androidConfig: AndroidRecordConfig(
+            audioSource: AndroidAudioSource.voiceCommunication,
+          ),
         ),
       );
       _micActive = true;
@@ -245,13 +292,14 @@ class _LiveScreenState extends State<LiveScreen>
 
   void _onMicChunk(Uint8List chunk) {
     if (chunk.isEmpty || _muted || !_running) return;
-    // Анти-эхо: пока звучит ответ модели (и 400 мс после turnComplete),
-    // микрофонные чанки не отправляются в соединение.
-    if (_isMicMuted) return;
-    // Анти-эхо: пока модель воспроизводит звук (статус «Говорю...»),
-    // микрофонные чанки не отправляются в WebSocket — иначе запись
-    // собственного вывода через динамик создаёт эхо.
-    if (_speaking || _status == 'Говорю...') return;
+    // Анти-эхо (цифровая тишина): пока модель говорит и микрофон ещё не
+    // возвращён, реальные байты не покидают устройство — вместо них уходит
+    // массив нулей той же длины. Сервер не слышит собственный голос из
+    // динамика, а соединение остаётся «живым».
+    if (_isBotSpeaking) {
+      unawaited(_provider.sendAudio(Uint8List(chunk.length)));
+      return;
+    }
     unawaited(_provider.sendAudio(chunk));
   }
 
@@ -291,9 +339,14 @@ class _LiveScreenState extends State<LiveScreen>
     if (sol == null || stream == null || !_soloudReady || bytes.isEmpty) {
       return;
     }
-    // Анти-эхо: как только аудио модели пошло в плеер, глушим микрофон
-    // до turnComplete (+400 мс), чтобы вывод динамика не записывался.
-    _isMicMuted = true;
+    // Анти-эхо: первый аудио-чанк модели — включаем «цифровую тишину»
+    // и отменяем запланированный возврат микрофона (возможно, начался
+    // новый ход модели).
+    _isBotSpeaking = true;
+    _unmuteTimer?.cancel();
+    _unmuteTimer = null;
+    _pendingBytes += bytes.length;
+    _lastFeedAt = DateTime.now();
     try {
       final Uint8List pcm =
           bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
@@ -345,6 +398,8 @@ class _LiveScreenState extends State<LiveScreen>
       _speaking = false;
       if (!_muted) _status = 'Слушаю...';
     });
+    // Возврат микрофона по общей схеме: короткая пауза на затихание звука.
+    _scheduleMicReturn();
   }
 
   /// Кнопка «Перебить»: мгновенно останавливаем воспроизведение (SoLoud),
@@ -368,6 +423,7 @@ class _LiveScreenState extends State<LiveScreen>
       _speaking = false;
       if (!_muted) _status = 'Слушаю...';
     });
+    _scheduleMicReturn();
   }
 
   // ---------- сессия ----------
@@ -385,7 +441,8 @@ class _LiveScreenState extends State<LiveScreen>
       _status = 'Подключение...';
       _errorDetails = null;
       _speaking = false;
-      _isMicMuted = false;
+      _isBotSpeaking = false;
+      _pendingBytes = 0;
     });
 
     try {
@@ -443,7 +500,8 @@ class _LiveScreenState extends State<LiveScreen>
     _speechTimer = null;
     _unmuteTimer?.cancel();
     _unmuteTimer = null;
-    _isMicMuted = false;
+    _isBotSpeaking = false;
+    _pendingBytes = 0;
     await _stopMic();
 
     final sub = _audioSub;
