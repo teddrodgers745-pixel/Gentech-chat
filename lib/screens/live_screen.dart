@@ -132,6 +132,11 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   void _reportError(String message, [Object? error]) {
+    // Принудительный сброс анти-эхо: при любой ошибке или закрытии
+    // соединения микрофон не должен залипать в режиме «цифровой тишины».
+    _unmuteTimer?.cancel();
+    _unmuteTimer = null;
+    _isBotSpeaking = false;
     unawaited(_stopMic());
     if (!mounted) return;
     setState(() {
@@ -165,9 +170,12 @@ class _LiveScreenState extends State<LiveScreen>
       case 'error':
       case 'closed':
         final detail = _provider.lastError;
+        // 1006 при extended-thinking: провайдер отдаёт понятный текст
+        // о долгом размышлении — показываем его вместо общего сообщения.
+        final longThink = detail.contains('долго думает');
         _reportError(
           state == 'closed'
-              ? 'Соединение закрыто сервером'
+              ? (longThink ? detail : 'Соединение закрыто сервером')
               : 'Ошибка соединения с Live API',
           detail.isEmpty ? null : detail,
         );

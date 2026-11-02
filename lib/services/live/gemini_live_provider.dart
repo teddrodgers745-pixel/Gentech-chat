@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
+import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'live_provider.dart';
@@ -93,8 +94,12 @@ class GeminiLiveProvider extends LiveProvider {
     final setup = Completer<void>();
     _setupCompleter = setup;
     try {
-      final channel =
-          WebSocketChannel.connect(Uri.parse('$_endpoint?key=$key'));
+      // pingInterval держит соединение живым во время долгого размышления
+      // моделей extended-thinking (иначе сервер рвёт его по таймауту, 1006).
+      final channel = IOWebSocketChannel.connect(
+        Uri.parse('$_endpoint?key=$key'),
+        pingInterval: const Duration(seconds: 15),
+      );
       _channel = channel;
       await channel.ready;
       _wsSub = channel.stream.listen(
@@ -377,6 +382,15 @@ class GeminiLiveProvider extends LiveProvider {
   void _onSocketDone() {
     final channel = _channel;
     final code = channel?.closeCode;
+    // 1006 (обрыв по таймауту) для extended-thinking: модель долго думала,
+    // и соединение было закрыто — отдаём понятный текст в UI.
+    if (code == 1006 && _modelName.contains('extended-thinking')) {
+      lastError =
+          'Модель долго думает, соединение прервано. Попробуйте еще раз';
+      debugPrint('GeminiLiveProvider: соединение закрыто: $lastError');
+      _failOrState('closed');
+      return;
+    }
     final reason = (channel?.closeReason ?? '').trim();
     // Полный текст, который прислал сервер при закрытии, показываем в UI.
     final details = StringBuffer('Сервер закрыл соединение');
