@@ -13,8 +13,9 @@ import '../services/live/gemini_live_provider.dart';
 import '../theme.dart';
 
 /// Полноэкранный голосовой Live-режим.
-/// Микрофон (record, PCM16 16 кГц, mono) -> [GeminiLiveProvider],
+/// Микрофон (record, PCM16 16 кГц, mono) -> [GeminiLiveProvider];
 /// входящее аудио модели (PCM16 24 кГц, mono) -> SoLoud-поток (flutter_soloud).
+/// Запись не останавливается при получении ответа модели.
 class LiveScreen extends StatefulWidget {
   final String? apiKey;
 
@@ -71,10 +72,12 @@ class _LiveScreenState extends State<LiveScreen>
       parent: _pulseController,
       curve: Curves.easeInOutSine,
     );
+    _provider.onState = _onProviderState;
   }
 
   @override
   void dispose() {
+    _provider.onState = null;
     unawaited(_stopSession());
     _pulseController.dispose();
     _keyController.dispose();
@@ -125,6 +128,27 @@ class _LiveScreenState extends State<LiveScreen>
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(content: Text(message)),
     );
+  }
+
+  /// Состояния от провайдера: готовность / конец хода модели / обрыв связи.
+  void _onProviderState(String state) {
+    if (!mounted || !_running) return;
+    switch (state) {
+      case 'listening':
+        if (!_speaking && !_muted) {
+          setState(() => _status = 'Слушаю...');
+        }
+      case 'error':
+      case 'closed':
+        final detail = _provider.lastError;
+        _reportError(
+          state == 'closed'
+              ? 'Соединение закрыто сервером'
+              : 'Ошибка соединения с Live API',
+          detail.isEmpty ? null : detail,
+        );
+        unawaited(_stopSession());
+    }
   }
 
   // ---------- микрофон ----------
@@ -217,7 +241,9 @@ class _LiveScreenState extends State<LiveScreen>
   void _feedAudio(List<int> bytes) {
     final sol = _soloud;
     final stream = _soloudStream;
-    if (sol == null || stream == null || !_soloudReady || bytes.isEmpty) return;
+    if (sol == null || stream == null || !_soloudReady || bytes.isEmpty) {
+      return;
+    }
     try {
       final Uint8List pcm =
           bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
@@ -300,8 +326,10 @@ class _LiveScreenState extends State<LiveScreen>
       setState(() => _status = 'Слушаю...');
     } on TimeoutException {
       _reportError('Ошибка: Таймаут подключения к серверу');
+      unawaited(_stopSession());
     } catch (e) {
       _reportError(_formatReason(e), e);
+      unawaited(_stopSession());
     }
   }
 
@@ -350,6 +378,18 @@ class _LiveScreenState extends State<LiveScreen>
   Future<void> _endCall() async {
     await _stopSession();
     if (mounted) Navigator.of(context).pop();
+  }
+
+  void _toggleMute() {
+    if (!_running) return;
+    final next = !_muted;
+    setState(() {
+      _muted = next;
+      if (!_speaking) {
+        _status = next ? 'Микрофон выключен' : 'Слушаю...';
+      }
+    });
+    if (next) unawaited(_provider.sendAudioStreamEnd());
   }
 
   // ---------- интерфейс ----------
@@ -656,17 +696,7 @@ class _LiveScreenState extends State<LiveScreen>
             ),
             child: IconButton.filled(
               tooltip: _muted ? 'Включить микрофон' : 'Выключить микрофон',
-              onPressed: _running
-                  ? () {
-                      setState(() {
-                        _muted = !_muted;
-                        if (_running && !_speaking) {
-                          _status =
-                              _muted ? 'Микрофон выключен' : 'Слушаю...';
-                        }
-                      });
-                    }
-                  : null,
+              onPressed: _running ? _toggleMute : null,
               style: IconButton.styleFrom(
                 backgroundColor:
                     _muted ? accent.withValues(alpha: 0.22) : cardBg,
