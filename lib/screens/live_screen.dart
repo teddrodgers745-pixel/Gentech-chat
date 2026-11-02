@@ -74,10 +74,12 @@ class _LiveScreenState extends State<LiveScreen>
       curve: Curves.easeInOutSine,
     );
     _provider.onState = _onProviderState;
+    _provider.statusNotifier.addListener(_onProviderStatus);
   }
 
   @override
   void dispose() {
+    _provider.statusNotifier.removeListener(_onProviderStatus);
     _provider.onState = null;
     unawaited(_stopSession());
     _pulseController.dispose();
@@ -154,6 +156,24 @@ class _LiveScreenState extends State<LiveScreen>
           detail.isEmpty ? null : detail,
         );
         unawaited(_stopSession());
+    }
+  }
+
+  /// Статусы от провайдера ('speaking'/'listening'): подписка на
+  /// statusNotifier. Синхронизирует _speaking и строку статуса.
+  void _onProviderStatus() {
+    if (!mounted || !_running) return;
+    final s = _provider.statusNotifier.value;
+    if (s == 'speaking') {
+      setState(() {
+        _speaking = true;
+        if (!_muted) _status = 'Говорю...';
+      });
+    } else if (s == 'listening') {
+      setState(() {
+        _speaking = false;
+        if (!_muted) _status = 'Слушаю...';
+      });
     }
   }
 
@@ -301,6 +321,29 @@ class _LiveScreenState extends State<LiveScreen>
       } catch (_) {}
     }
     _playHandle = null;
+    setState(() {
+      _speaking = false;
+      if (!_muted) _status = 'Слушаю...';
+    });
+  }
+
+  /// Кнопка «Перебить»: мгновенно останавливаем воспроизведение (SoLoud),
+  /// сообщаем серверу о перебивании (interrupt) и возвращаемся в «Слушаю...»,
+  /// чтобы микрофон снова заработал.
+  Future<void> _interruptModel() async {
+    if (!_running || !_speaking) return;
+    _speechTimer?.cancel();
+    _speechTimer = null;
+    final sol = _soloud;
+    final handle = _playHandle;
+    if (sol != null && handle != null && _soloudReady) {
+      try {
+        sol.stop(handle);
+      } catch (_) {}
+    }
+    _playHandle = null;
+    await _provider.interrupt();
+    if (!mounted) return;
     setState(() {
       _speaking = false;
       if (!_muted) _status = 'Слушаю...';
@@ -758,6 +801,32 @@ class _LiveScreenState extends State<LiveScreen>
             ),
           ),
           const SizedBox(width: 28),
+          if (_speaking) ...[
+            DecoratedBox(
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: accent.withValues(alpha: 0.35),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: IconButton.filled(
+                tooltip: 'Перебить',
+                onPressed: _interruptModel,
+                style: IconButton.styleFrom(
+                  backgroundColor: cardBg,
+                  foregroundColor: accent,
+                  side: const BorderSide(color: accent, width: 1.5),
+                  minimumSize: const Size(62, 62),
+                ),
+                icon: const Icon(Icons.front_hand, size: 24),
+              ),
+            ),
+            const SizedBox(width: 28),
+          ],
           DecoratedBox(
             decoration: BoxDecoration(
               shape: BoxShape.circle,

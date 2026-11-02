@@ -51,6 +51,11 @@ class GeminiLiveProvider extends LiveProvider {
   /// Поток прерываний хода модели (бардж-ин пользователя).
   Stream<void> get interruptedStream => _interruptController.stream;
 
+  /// Поток статусов хода для UI: 'speaking' — пришёл первый аудио-фрагмент
+  /// хода модели, 'listening' — turnComplete (модель закончила говорить).
+  final ValueNotifier<String> statusNotifier =
+      ValueNotifier<String>('listening');
+
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _wsSub;
   Completer<void>? _setupCompleter;
@@ -206,6 +211,20 @@ class GeminiLiveProvider extends LiveProvider {
     }
   }
 
+  /// Пользователь перебил модель: сообщаем серверу о завершении текущего
+  /// хода (clientContent.turnComplete), чтобы модель остановила генерацию.
+  Future<void> interrupt() async {
+    final channel = _channel;
+    if (channel == null || !_connected) return;
+    try {
+      channel.sink.add(jsonEncode(<String, dynamic>{
+        'clientContent': <String, dynamic>{'turnComplete': true},
+      }));
+    } catch (e) {
+      debugPrint('GeminiLiveProvider: ошибка отправки interrupt: $e');
+    }
+  }
+
   @override
   Future<void> disconnect() async {
     _connected = false;
@@ -255,6 +274,7 @@ class GeminiLiveProvider extends LiveProvider {
       _setupCompleter = null;
       if (c != null && !c.isCompleted) c.complete();
       onState?.call('listening');
+      statusNotifier.value = 'listening';
       return;
     }
 
@@ -287,6 +307,10 @@ class GeminiLiveProvider extends LiveProvider {
         if (inline is! Map) continue;
         final data = inline['data'];
         if (data is! String || data.isEmpty) continue;
+        // Первый аудио-фрагмент хода: сообщаем UI, что модель говорит.
+        if (statusNotifier.value != 'speaking') {
+          statusNotifier.value = 'speaking';
+        }
         try {
           final pcm = base64Decode(data);
           if (pcm.isNotEmpty && !_audioController.isClosed) {
@@ -299,6 +323,7 @@ class GeminiLiveProvider extends LiveProvider {
     }
     if (sc['turnComplete'] == true) {
       onState?.call('listening');
+      statusNotifier.value = 'listening';
     }
   }
 
