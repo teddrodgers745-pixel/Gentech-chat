@@ -162,12 +162,27 @@ class GeminiLiveProvider extends LiveProvider {
     // Модели 3.8 не понимают outputAudioTranscription — не отправляем
     // это поле, чтобы сервер не отвечал ошибкой INVALID_ARGUMENT.
     final supportsTranscription = !_modelName.contains('3.8');
+    // Модели 3.8-live (без extended-thinking): включаем серверную
+    // авто-детекцию активности речи с пониженной чувствительностью на
+    // границах речи. Никаких полей thinking для таких моделей не добавляем.
+    final isLive38 =
+        _modelName.contains('gemini-3.8-live') &&
+        !_modelName.contains('extended');
     return <String, dynamic>{
       'setup': <String, dynamic>{
         'model': _modelName,
         'generationConfig': generationConfig,
         if (supportsTranscription)
           'outputAudioTranscription': const <String, dynamic>{},
+        if (isLive38)
+          'realtimeInputConfig': const <String, dynamic>{
+            'automaticActivityDetection': <String, dynamic>{
+              'startOfSpeechSensitivity': 'START_SENSITIVITY_LOW',
+              'endOfSpeechSensitivity': 'END_SENSITIVITY_LOW',
+              'prefixPaddingMs': 100,
+              'silenceDurationMs': 500,
+            },
+          },
       },
     };
   }
@@ -184,16 +199,31 @@ class GeminiLiveProvider extends LiveProvider {
       _streamEndSent = false;
     }
     try {
-      channel.sink.add(jsonEncode(<String, dynamic>{
-        'realtimeInput': <String, dynamic>{
-          'mediaChunks': <Map<String, String>>[
-            <String, String>{
+      // Модели 3.8 принимают аудио через realtimeInput.audio, модели 2.5 —
+      // через прежний формат realtimeInput.mediaChunks.
+      final String payload;
+      if (_modelName.contains('3.8')) {
+        payload = jsonEncode(<String, dynamic>{
+          'realtimeInput': <String, dynamic>{
+            'audio': <String, String>{
               'mimeType': 'audio/pcm;rate=16000',
               'data': base64Encode(bytes),
             },
-          ],
-        },
-      }));
+          },
+        });
+      } else {
+        payload = jsonEncode(<String, dynamic>{
+          'realtimeInput': <String, dynamic>{
+            'mediaChunks': <Map<String, String>>[
+              <String, String>{
+                'mimeType': 'audio/pcm;rate=16000',
+                'data': base64Encode(bytes),
+              },
+            ],
+          },
+        });
+      }
+      channel.sink.add(payload);
     } catch (e) {
       debugPrint('GeminiLiveProvider: ошибка отправки аудио: $e');
       return;
