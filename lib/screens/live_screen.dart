@@ -13,8 +13,8 @@ import '../services/live/gemini_live_provider.dart';
 import '../theme.dart';
 
 /// Полноэкранный голосовой Live-режим.
-/// Микрофон (record, PCM 16 кГц) -> [GeminiLiveProvider],
-/// входящее аудио модели -> SoLoud-поток (flutter_soloud).
+/// Микрофон (record, PCM16 16 кГц, mono) -> [GeminiLiveProvider],
+/// входящее аудио модели (PCM16 24 кГц, mono) -> SoLoud-поток (flutter_soloud).
 class LiveScreen extends StatefulWidget {
   final String? apiKey;
 
@@ -26,12 +26,8 @@ class LiveScreen extends StatefulWidget {
 
 class _LiveScreenState extends State<LiveScreen>
     with SingleTickerProviderStateMixin {
-  /// Выход модели: PCM 16-bit mono 24 кГц.
   static const int _outputSampleRate = 24000;
   static const int _maxBufferBytes = 1024 * 1024 * 4;
-
-  /// Через столько времени после последнего аудио-фрагмента
-  /// возвращаем статус «Слушаю...».
   static const Duration _speechQuietGap = Duration(milliseconds: 900);
 
   late final AnimationController _pulseController;
@@ -46,12 +42,7 @@ class _LiveScreenState extends State<LiveScreen>
   Timer? _speechTimer;
 
   SoLoud? _soloud;
-
-  /// Поток SoLoud: тип результата setBufferStream в разных версиях
-  /// flutter_soloud не экспортируется под стабильным именем класса,
-  /// поэтому значение хранится без явного типа (создаётся только
-  /// в _initSoLoud через setBufferStream).
-  dynamic _soloudStream;
+  AudioSource? _soloudStream;
   SoundHandle? _playHandle;
   bool _soloudReady = false;
 
@@ -87,7 +78,7 @@ class _LiveScreenState extends State<LiveScreen>
     unawaited(_stopSession());
     _pulseController.dispose();
     _keyController.dispose();
-    _recorder.dispose();
+    unawaited(_recorder.dispose());
     super.dispose();
   }
 
@@ -150,6 +141,9 @@ class _LiveScreenState extends State<LiveScreen>
           encoder: AudioEncoder.pcm16bits,
           sampleRate: 16000,
           numChannels: 1,
+          echoCancel: true,
+          noiseSuppress: true,
+          autoGain: true,
         ),
       );
       _micActive = true;
@@ -157,6 +151,7 @@ class _LiveScreenState extends State<LiveScreen>
       _micSub = stream.listen(
         _onMicChunk,
         onError: (Object e) {
+          debugPrint('LiveScreen: ошибка потока микрофона: $e');
           _micActive = false;
         },
         onDone: () {
@@ -191,29 +186,28 @@ class _LiveScreenState extends State<LiveScreen>
 
   // ---------- воспроизведение (SoLoud) ----------
 
-  /// Инициализация движка и буферизованного потока под PCM 24 кГц.
-  /// Ошибки не роняют сессию: чат продолжается, но без звука.
   Future<void> _initSoLoud() async {
-    if (_soloudReady) return;
+    if (_soloudReady && _soloudStream != null) return;
     try {
       final sol = SoLoud.instance;
-      // init() в разных версиях flutter_soloud возвращает Future<bool>,
-      // Future<void> либо выполняется синхронно — обрабатываем все
-      // варианты без привязки к конкретному типу результата.
-      final dynamic initResult = sol.init();
-      if (initResult is Future) await initResult;
-      final dynamic stream = await sol.setBufferStream(
+      if (!sol.isInitialized) {
+        await sol.init();
+      }
+      final AudioSource stream = sol.setBufferStream(
         maxBufferSizeBytes: _maxBufferBytes,
         bufferingType: BufferingType.released,
+        bufferingTimeNeeds: 0.05,
         sampleRate: _outputSampleRate,
         channels: Channels.mono,
         format: BufferType.s16le,
       );
+      final SoundHandle handle = await sol.play(stream);
       _soloud = sol;
       _soloudStream = stream;
-      _playHandle = sol.play(stream);
+      _playHandle = handle;
       _soloudReady = true;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('LiveScreen: ошибка инициализации SoLoud: $e');
       _soloudReady = false;
       _soloudStream = null;
       _playHandle = null;
@@ -221,11 +215,24 @@ class _LiveScreenState extends State<LiveScreen>
   }
 
   void _feedAudio(List<int> bytes) {
+    final sol = _soloud;
     final stream = _soloudStream;
-    if (stream == null || !_soloudReady || bytes.isEmpty) return;
+    if (sol == null || stream == null || !_soloudReady || bytes.isEmpty) return;
     try {
-      stream.addData(Uint8List.fromList(bytes));
-    } catch (_) {
+      final Uint8List pcm =
+          bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+      sol.addAudioDataStream(stream, pcm);
+
+      final SoundHandle? handle = _playHandle;
+      if (handle == null || !sol.getIsValidVoiceHandle(handle)) {
+        unawaited(sol.play(stream).then((SoundHandle h) {
+          _playHandle = h;
+        }));
+      } else if (sol.getPause(handle)) {
+        sol.setPause(handle, false);
+      }
+    } catch (e) {
+      debugPrint('LiveScreen: ошибка добавления аудио в поток: $e');
       return;
     }
     if (!_speaking && mounted) {
@@ -272,7 +279,6 @@ class _LiveScreenState extends State<LiveScreen>
       await _initSoLoud();
       if (!mounted) return;
 
-      // Подписываемся до connect, чтобы не потерять первые фрагменты аудио.
       await _audioSub?.cancel();
       _audioSub = _provider.audioStream.listen(
         _feedAudio,
@@ -321,23 +327,18 @@ class _LiveScreenState extends State<LiveScreen>
     _playHandle = null;
     if (sol != null && handle != null && _soloudReady) {
       try {
-        sol.stop(handle);
+        await sol.stop(handle);
       } catch (_) {}
     }
     final stream = _soloudStream;
     _soloudStream = null;
-    if (stream != null) {
+    if (sol != null && stream != null && _soloudReady) {
       try {
-        stream.dispose();
+        await sol.disposeSource(stream);
       } catch (_) {}
     }
-    if (_soloudReady) {
-      _soloudReady = false;
-      _soloud = null;
-      try {
-        sol?.deinit();
-      } catch (_) {}
-    }
+    _soloudReady = false;
+    _soloud = null;
 
     if (mounted && _running) {
       setState(() {
@@ -709,4 +710,3 @@ class _LiveScreenState extends State<LiveScreen>
     );
   }
 }
-
