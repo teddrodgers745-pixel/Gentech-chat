@@ -12,7 +12,9 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 
 import '../app_state.dart';
+import '../core/models/gen_error_mapper.dart';
 import '../core/models/message_part.dart';
+import '../features/chat/widgets/error_bubble.dart';
 import '../models.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
@@ -47,6 +49,18 @@ class MessageView extends StatelessWidget {
 
         if (message.isToolCall) {
           return ToolCallCard(message: message);
+        }
+
+        // Сообщение-ошибка генерации: рендерится через ErrorBubble.
+        if (message.role != 'user' && message.errorCode.trim().isNotEmpty) {
+          final err = GenErrorMapper.fromCode(
+            message.errorCode.trim(),
+            details: message.errorText,
+          );
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: ErrorBubble(error: err, onRetry: onRegenerate),
+          );
         }
 
         if (message.role == 'user') {
@@ -163,6 +177,8 @@ class MessageView extends StatelessWidget {
           out.add(_PartImage(part: part, p: p));
         case VideoPart():
           out.add(_PartVideo(part: part, p: p));
+        case ErrorPart():
+          out.add(ErrorBubble(error: part.error, onRetry: onRegenerate));
         case TextPart():
         case PendingPart():
           break;
