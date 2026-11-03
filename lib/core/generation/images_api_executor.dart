@@ -99,7 +99,7 @@ class ImagesApiExecutor extends GenerationExecutor {
         );
         return;
       }
-      final display = await _toDisplayUri(sources.first);
+      final display = await _toDisplayUri(sources.first, request);
       if (_cancelled) return;
       yield GenerationDelta(content: '![изображение]($display)');
     } on DioException catch (e) {
@@ -284,21 +284,40 @@ class ImagesApiExecutor extends GenerationExecutor {
   /// Источник из ответа -> URI для markdown. URL и data URL сохраняются
   /// локально (ссылки провайдеров часто временные); при неудаче остаётся
   /// исходная ссылка — картинка всё равно отображается в чате.
-  static Future<String> _toDisplayUri(String source) async {
+  static Future<String> _toDisplayUri(
+    String source,
+    GenerationRequest request,
+  ) async {
     final s = source.trim();
+    final prompt = _promptFrom(request);
+    final modelId = request.model;
+    final cost = request.estimatedUsd;
     if (s.startsWith('data:')) {
-      final local = await ArtifactMaterializer.materializeDataUrl(s);
+      final local = await ArtifactMaterializer.materializeDataUrl(
+        s,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      );
       if (local != null) return 'file://$local';
       return s;
     }
     if (s.startsWith('http://') || s.startsWith('https://')) {
-      final local = await ArtifactMaterializer.materialize(s);
+      final local = await ArtifactMaterializer.materialize(
+        s,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      );
       if (local != null) return 'file://$local';
       return s;
     }
     // Сырой base64 без префикса: считаем PNG.
     final local = await ArtifactMaterializer.materializeDataUrl(
       'data:image/png;base64,$s',
+      prompt: prompt,
+      modelId: modelId,
+      cost: cost,
     );
     if (local != null) return 'file://$local';
     return s;

@@ -125,6 +125,9 @@ class AsyncJobExecutor extends GenerationExecutor {
         final local = await ArtifactMaterializer.materializeVideo(
           created.directUrl,
           client: client,
+          prompt: prompt,
+          modelId: request.model,
+          cost: request.estimatedUsd,
         );
         if (_cancelled) {
           yield const GenerationFailure(
@@ -234,6 +237,8 @@ class AsyncJobExecutor extends GenerationExecutor {
         final local = await ArtifactMaterializer.materializeVideo(
           res.videoUrl,
           client: client,
+          prompt: record.prompt,
+          modelId: record.model,
         );
         if (_cancelled) {
           await ActiveJobsStore.instance.remove(record.jobId);

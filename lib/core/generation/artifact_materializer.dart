@@ -22,9 +22,22 @@ abstract final class ArtifactMaterializer {
   /// Возвращает абсолютный путь файла либо null: сеть недоступна, ответ
   /// не похож на изображение, ошибка записи. Вызывающий код в случае
   /// null продолжает работать с исходной ссылкой.
-  static Future<String?> materialize(String url, {http.Client? client}) async {
+  static Future<String?> materialize(
+    String url, {
+    http.Client? client,
+    String prompt = '',
+    String modelId = '',
+    double? cost,
+  }) async {
     final trimmed = url.trim();
-    if (trimmed.startsWith('data:')) return materializeDataUrl(trimmed);
+    if (trimmed.startsWith('data:')) {
+      return materializeDataUrl(
+        trimmed,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      );
+    }
     final u = Uri.tryParse(trimmed);
     if (u == null || (u.scheme != 'http' && u.scheme != 'https')) return null;
     final own = client == null;
@@ -43,6 +56,12 @@ abstract final class ArtifactMaterializer {
         '${_extFrom(resp)}',
       );
       await file.writeAsBytes(bytes, flush: true);
+      await registerImage(
+        file.path,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      );
       return file.path;
     } catch (_) {
       return null;
@@ -55,7 +74,12 @@ abstract final class ArtifactMaterializer {
   /// Documents/GenTech/images. Возвращает путь файла либо null, если
   /// строка не является data URL изображения, декодирование не удалось
   /// или содержимое не похоже на картинку.
-  static Future<String?> materializeDataUrl(String dataUrl) async {
+  static Future<String?> materializeDataUrl(
+    String dataUrl, {
+    String prompt = '',
+    String modelId = '',
+    double? cost,
+  }) async {
     final m = RegExp(
       r'^data:image/([a-zA-Z0-9.+-]+);base64,(.+)$',
       dotAll: true,
@@ -76,10 +100,56 @@ abstract final class ArtifactMaterializer {
         '${_extFromMime(mime)}',
       );
       await file.writeAsBytes(bytes, flush: true);
+      await registerImage(
+        file.path,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      );
       return file.path;
     } catch (_) {
       return null;
     }
+  }
+
+  /// Регистрирует сохранённое изображение в [ArtifactRepository]:
+  /// артефакт попадает в JSON-индекс галереи. Ошибка регистрации
+  /// не влияет на результат материализации.
+  static Future<void> registerImage(
+    String path, {
+    String prompt = '',
+    String modelId = '',
+    double? cost,
+  }) async {
+    try {
+      await ArtifactRepository.instance.register(Artifact(
+        id: newId(),
+        kind: Artifact.kindImage,
+        localPath: path,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      ));
+    } catch (_) {}
+  }
+
+  /// Регистрирует сохранённое видео в [ArtifactRepository].
+  static Future<void> registerVideo(
+    String path, {
+    String prompt = '',
+    String modelId = '',
+    double? cost,
+  }) async {
+    try {
+      await ArtifactRepository.instance.register(Artifact(
+        id: newId(),
+        kind: Artifact.kindVideo,
+        localPath: path,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      ));
+    } catch (_) {}
   }
 
   /// Расширение файла по mime-типу из data URL; по умолчанию .png.
@@ -132,9 +202,19 @@ abstract final class ArtifactMaterializer {
   static Future<String?> materializeVideo(
     String url, {
     http.Client? client,
+    String prompt = '',
+    String modelId = '',
+    double? cost,
   }) async {
     final trimmed = url.trim();
-    if (trimmed.startsWith('data:')) return _materializeVideoDataUrl(trimmed);
+    if (trimmed.startsWith('data:')) {
+      return _materializeVideoDataUrl(
+        trimmed,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      );
+    }
     final u = Uri.tryParse(trimmed);
     if (u == null || (u.scheme != 'http' && u.scheme != 'https')) return null;
     final own = client == null;
@@ -153,6 +233,12 @@ abstract final class ArtifactMaterializer {
         '${_videoExt(resp, trimmed)}',
       );
       await file.writeAsBytes(bytes, flush: true);
+      await registerVideo(
+        file.path,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      );
       return file.path;
     } catch (_) {
       return null;
@@ -162,7 +248,12 @@ abstract final class ArtifactMaterializer {
   }
 
   /// Сохраняет data URL вида data:video/mp4;base64,... в локальный файл.
-  static Future<String?> _materializeVideoDataUrl(String dataUrl) async {
+  static Future<String?> _materializeVideoDataUrl(
+    String dataUrl, {
+    String prompt = '',
+    String modelId = '',
+    double? cost,
+  }) async {
     final m = RegExp(
       r'^data:video/([a-zA-Z0-9.+-]+);base64,(.+)$',
       dotAll: true,
@@ -187,6 +278,12 @@ abstract final class ArtifactMaterializer {
         '${_videoExtFromMime(mime)}',
       );
       await file.writeAsBytes(bytes, flush: true);
+      await registerVideo(
+        file.path,
+        prompt: prompt,
+        modelId: modelId,
+        cost: cost,
+      );
       return file.path;
     } catch (_) {
       return null;
