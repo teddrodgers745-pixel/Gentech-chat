@@ -25,7 +25,7 @@ class PolzaCatalogAdapter extends ModelCatalogAdapter {
     final out = <ModelInfo>[];
     final seen = <String>{};
     for (final e in data) {
-      final map = asMap(e);
+      final map = ModelCatalogAdapter.asMap(e);
       if (map == null) continue;
       final info = parseModelEntry(map);
       if (info != null && seen.add(info.id)) out.add(info);
@@ -58,11 +58,12 @@ class PolzaCatalogAdapter extends ModelCatalogAdapter {
   /// Модальности каталог Polza в общем случае не сообщает, поэтому
   /// эвристические значения остаются (они консервативны и безопасны).
   ModelInfo _enrich(ModelInfo base, Map<String, dynamic> entry) {
-    final ctx = asInt(entry['context_length']) ??
-        asInt(entry['contextLength']) ??
-        asInt(entry['context_window']);
+    final ctx = ModelCatalogAdapter.asInt(entry['context_length']) ??
+        ModelCatalogAdapter.asInt(entry['contextLength']) ??
+        ModelCatalogAdapter.asInt(entry['context_window']);
     return base.copyWith(
-      pricing: parsePricing(entry) ?? base.pricing,
+      pricing:
+          ModelCatalogAdapter.parsePricing(entry) ?? base.pricing,
       contextLength: ctx ?? base.contextLength,
       source: CapabilitySource.providerCatalog,
     );

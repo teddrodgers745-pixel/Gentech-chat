@@ -30,7 +30,7 @@ class OpenRouterCatalogAdapter extends ModelCatalogAdapter {
     final out = <ModelInfo>[];
     final seen = <String>{};
     for (final e in data) {
-      final map = asMap(e);
+      final map = ModelCatalogAdapter.asMap(e);
       if (map == null) continue;
       final info = parseModelEntry(map);
       if (info != null && seen.add(info.id)) out.add(info);
@@ -43,9 +43,10 @@ class OpenRouterCatalogAdapter extends ModelCatalogAdapter {
     final id = ((entry['id'] as String?) ?? '').trim();
     if (id.isEmpty) return null;
 
-    final arch = asMap(entry['architecture']);
-    var input = parseModalities(arch?['input_modalities']);
-    var output = parseModalities(arch?['output_modalities']);
+    final arch = ModelCatalogAdapter.asMap(entry['architecture']);
+    var input = ModelCatalogAdapter.parseModalities(arch?['input_modalities']);
+    var output =
+        ModelCatalogAdapter.parseModalities(arch?['output_modalities']);
 
     // Если каталог не перечислил модальности списком — разбираем
     // устаревшее поле modality вида "text->image".
@@ -61,7 +62,7 @@ class OpenRouterCatalogAdapter extends ModelCatalogAdapter {
     if (input.isEmpty) input.add(Modality.text);
     if (output.isEmpty) output.add(Modality.text);
 
-    final params = asStringList(entry['supported_parameters']);
+    final params = ModelCatalogAdapter.asStringList(entry['supported_parameters']);
     final name = ((entry['name'] as String?) ?? '').trim();
 
     return ModelInfo(
@@ -74,8 +75,8 @@ class OpenRouterCatalogAdapter extends ModelCatalogAdapter {
       supportsStreaming: true,
       supportsTools: params.contains('tools'),
       supportsReasoning: params.contains('reasoning'),
-      contextLength: asInt(entry['context_length']),
-      pricing: parsePricing(entry),
+      contextLength: ModelCatalogAdapter.asInt(entry['context_length']),
+      pricing: ModelCatalogAdapter.parsePricing(entry),
       source: CapabilitySource.providerCatalog,
     );
   }
