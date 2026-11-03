@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'gen_error.dart';
+
 /// Часть составного сообщения: то, из чего состоит пользовательский запрос
 /// или ответ модели. Базовый sealed-тип гарантирует, что switch по частям
 /// будет исчерпывающим без default — новые типы добавляются явно.
@@ -135,4 +137,29 @@ class PendingPart extends MessagePart {
 
   @override
   int get hashCode => Object.hash(name, localPath);
+}
+
+/// Часть-ошибка: генерация ответа завершилась ошибкой [GenError].
+/// Хранит исходный промпт пользователя и параметры для повторной
+/// попытки; отображается через ErrorBubble.
+class ErrorPart extends MessagePart {
+  final GenError error;
+
+  /// Промпт, на который не удалось получить ответ (для «Повторить»).
+  final String originalPrompt;
+
+  /// Параметры повторной попытки (модель, температура и т.п.).
+  final Map<String, dynamic> retryParams;
+
+  const ErrorPart({
+    required this.error,
+    this.originalPrompt = '',
+    this.retryParams = const <String, dynamic>{},
+  });
+
+  @override
+  String get label => 'ошибка: ${error.code}';
+
+  @override
+  String toString() => 'ErrorPart(${error.code})';
 }

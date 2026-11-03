@@ -149,3 +149,34 @@ class UnknownGenError extends GenError {
       ? 'Неизвестная ошибка генерации.'
       : 'Неизвестная ошибка генерации. $details';
 }
+
+/// Запрос отклонён фильтром безопасности/модерации провайдера
+/// (400/422 с признаками content filtering).
+class ContentFiltered extends GenError {
+  const ContentFiltered({this.details = ''});
+
+  final String details;
+
+  @override
+  String get code => 'content_filtered';
+
+  @override
+  String get message => details.trim().isEmpty
+      ? 'Запрос отклонён фильтром безопасности провайдера.'
+      : 'Запрос отклонён фильтром безопасности. $details';
+}
+
+/// Истекло время ожидания ответа модели (таймаут соединения/чтения).
+class JobTimeout extends GenError {
+  const JobTimeout({this.details = ''});
+
+  final String details;
+
+  @override
+  String get code => 'timeout';
+
+  @override
+  String get message => details.trim().isEmpty
+      ? 'Модель не ответила вовремя. Повторите попытку.'
+      : 'Модель не ответила вовремя. $details';
+}

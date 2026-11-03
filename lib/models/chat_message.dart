@@ -20,6 +20,12 @@ class ChatMessage {
   String toolResult;
   String toolStatus;
 
+  /// Ошибка генерации для отображения через ErrorPart/ErrorBubble:
+  /// код [GenError.code] и сырые детали провайдера ('' — ошибки нет).
+  /// Сообщение с ошибкой имеет пустой content и не отправляется модели.
+  String errorCode;
+  String errorText;
+
   final DateTime createdAt;
 
   ChatMessage({
@@ -31,6 +37,8 @@ class ChatMessage {
     this.toolArgs = '',
     this.toolResult = '',
     this.toolStatus = toolStatusDone,
+    this.errorCode = '',
+    this.errorText = '',
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -45,6 +53,8 @@ class ChatMessage {
         'toolArgs': toolArgs,
         'toolResult': toolResult,
         'toolStatus': toolStatus,
+        'errorCode': errorCode,
+        'errorText': errorText,
         'createdAt': createdAt.toIso8601String(),
       };
 
@@ -57,6 +67,8 @@ class ChatMessage {
         toolArgs: (j['toolArgs'] as String?) ?? '',
         toolResult: (j['toolResult'] as String?) ?? '',
         toolStatus: (j['toolStatus'] as String?) ?? toolStatusDone,
+        errorCode: (j['errorCode'] as String?) ?? '',
+        errorText: (j['errorText'] as String?) ?? '',
         createdAt:
             DateTime.tryParse((j['createdAt'] as String?) ?? '') ??
                 DateTime.now(),
