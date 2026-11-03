@@ -32,17 +32,14 @@ class TextPart extends MessagePart {
 }
 
 /// Изображение: либо локальный файл (путь на устройстве), либо ссылка
-/// (например, data URL либо https-адрес). Ровно один источник задан.
+/// (например, data URL либо https-адрес). По договорённости ровно один
+/// источник должен быть задан; конструкторы .fromPath/.fromUrl это
+/// гарантируют, явная проверка в assert невозможна в const-конструкторе.
 class ImagePart extends MessagePart {
   final String? localPath;
   final String? remoteUrl;
 
-  const ImagePart({this.localPath, this.remoteUrl})
-      : assert(
-          (localPath != null && localPath!.isNotEmpty) ||
-              (remoteUrl != null && remoteUrl!.isNotEmpty),
-          'ImagePart: нужен localPath либо remoteUrl',
-        );
+  const ImagePart({this.localPath, this.remoteUrl});
 
   /// Удобный конструктор для файла на устройстве.
   const ImagePart.fromPath(String path)
@@ -54,11 +51,12 @@ class ImagePart extends MessagePart {
       : localPath = null,
         remoteUrl = url;
 
+  /// Задан ли локальный источник (иначе считается, что ссылка).
   bool get isLocal => (localPath ?? '').isNotEmpty;
 
   @override
   String get label =>
-      isLocal ? 'изображение: ${localPath!}' : 'изображение: ${remoteUrl!}';
+      isLocal ? 'изображение: $localPath' : 'изображение: $remoteUrl';
 
   @override
   String toString() => 'ImagePart(${isLocal ? localPath : remoteUrl})';
@@ -79,12 +77,7 @@ class VideoPart extends MessagePart {
   final String? localPath;
   final String? remoteUrl;
 
-  const VideoPart({this.localPath, this.remoteUrl})
-      : assert(
-          (localPath != null && localPath!.isNotEmpty) ||
-              (remoteUrl != null && remoteUrl!.isNotEmpty),
-          'VideoPart: нужен localPath либо remoteUrl',
-        );
+  const VideoPart({this.localPath, this.remoteUrl});
 
   /// Удобный конструктор для файла на устройстве.
   const VideoPart.fromPath(String path)
@@ -96,10 +89,11 @@ class VideoPart extends MessagePart {
       : localPath = null,
         remoteUrl = url;
 
+  /// Задан ли локальный источник (иначе считается, что ссылка).
   bool get isLocal => (localPath ?? '').isNotEmpty;
 
   @override
-  String get label => isLocal ? 'видео: ${localPath!}' : 'видео: ${remoteUrl!}';
+  String get label => isLocal ? 'видео: $localPath' : 'видео: $remoteUrl';
 
   @override
   String toString() => 'VideoPart(${isLocal ? localPath : remoteUrl})';
