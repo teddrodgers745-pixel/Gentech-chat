@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../app_state.dart';
 import '../../theme.dart';
 import 'composer_controller.dart';
+import 'widgets/model_params_bar.dart';
 import 'composer_mode.dart';
 import 'widgets/cost_estimate_badge.dart';
 
@@ -109,6 +110,7 @@ class _ComposerShellState extends State<ComposerShell> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                ModelParamsBar(modelId: effectiveConfig().model.trim()),
                 TextField(
                   controller: _ctl.text,
                   focusNode: _focus,
