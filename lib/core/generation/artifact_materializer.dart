@@ -6,6 +6,9 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
+import '../models/artifact.dart';
+import 'artifact_repository.dart';
+
 /// Материализация артефактов: скачивание изображения по URL из ответа
 /// провайдера в локальный файл (Documents/GenTech/images).
 ///
@@ -123,7 +126,7 @@ abstract final class ArtifactMaterializer {
   }) async {
     try {
       await ArtifactRepository.instance.register(Artifact(
-        id: newId(),
+        id: _newId(),
         kind: Artifact.kindImage,
         localPath: path,
         prompt: prompt,
@@ -142,7 +145,7 @@ abstract final class ArtifactMaterializer {
   }) async {
     try {
       await ArtifactRepository.instance.register(Artifact(
-        id: newId(),
+        id: _newId(),
         kind: Artifact.kindVideo,
         localPath: path,
         prompt: prompt,
@@ -150,6 +153,15 @@ abstract final class ArtifactMaterializer {
         cost: cost,
       ));
     } catch (_) {}
+  }
+
+  /// Локальный генератор идентификаторов артефактов: микросекундная
+  /// метка времени плюс счётчик — без внешних зависимостей.
+  static int _idSeq = 0;
+  static String _newId() {
+    _idSeq++;
+    return 'art_${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+        '_$_idSeq';
   }
 
   /// Расширение файла по mime-типу из data URL; по умолчанию .png.
