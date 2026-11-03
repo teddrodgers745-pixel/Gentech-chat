@@ -34,8 +34,9 @@ abstract final class CuratedParameterCatalog {
         for (final e in decoded) {
           if (e is! Map) continue;
           try {
-            final p = _parseEntry(Map<String, dynamic>.from(e));
-            if (p != null && p.key.isNotEmpty) map[p.key] = p.value;
+            final p =
+                _parseEntry(Map<String, dynamic>.from(e));
+            if (p != null) map[p.key] = p.value;
           } catch (_) {
             // Битая запись пропускается.
           }
@@ -62,7 +63,9 @@ abstract final class CuratedParameterCatalog {
 
   /// Разбор одной записи каталога в пару (id, ModelParameters).
   /// null — запись без идентификатора.
-  static (String, ModelParameters)? _parseEntry(Map<String, dynamic> e) {
+  static MapEntry<String, ModelParameters>? _parseEntry(
+    Map<String, dynamic> e,
+  ) {
     final id = ((e['id'] as String?) ?? '').trim();
     if (id.isEmpty) return null;
 
@@ -99,7 +102,7 @@ abstract final class CuratedParameterCatalog {
       }
     }
 
-    return (
+    return MapEntry(
       id,
       ModelParameters(
         aspectRatios: strings(e['aspect_ratios']),
