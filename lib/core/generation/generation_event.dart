@@ -47,7 +47,11 @@ class ToolCallFinished extends GenerationEvent {
 class GenerationFailure extends GenerationEvent {
   final GenError error;
 
-  const GenerationFailure(this.error);
+  /// Идентификатор асинхронной задачи, к которой относится ошибка
+  /// ('' — ошибка не привязана к конкретной задаче).
+  final String jobId;
+
+  const GenerationFailure(this.error, {this.jobId = ''});
 
   @override
   String toString() => 'GenerationFailure(${error.code})';

@@ -415,6 +415,12 @@ class _ChatScreenState extends State<ChatScreen> {
       await _sendImage(txt);
       return;
     }
+    // Модель видео (kling, veo, sora, wan ...): асинхронная задача
+    // через GenerationService (маршрут GenerationRoute.asyncJob).
+    if (_isVideoModel(effectiveConfig().model.toLowerCase())) {
+      await _sendVideo(txt);
+      return;
+    }
     final picked = <PickedFileRef>[
       for (final f in _pending)
         if (f.path != null && f.path!.isNotEmpty)
@@ -514,6 +520,122 @@ class _ChatScreenState extends State<ChatScreen> {
     await store.save();
   }
 
+  /// Генерация видео (маршрут asyncJob): у провайдера создаётся
+  /// асинхронная задача; в чате появляется PendingPart с прогрессом и
+  /// кнопкой отмены, при успехе она заменяется на VideoPart (локальный
+  /// файл либо ссылка провайдера).
+  Future<void> _sendVideo(String txt) async {
+    if (txt.isEmpty) {
+      _snack('Опишите видео');
+      return;
+    }
+    final chat = store.current ?? store.createChat();
+    final reply = ChatMessage(
+      id: newId(),
+      role: 'assistant',
+      parts: <MessagePart>[
+        const PendingPart(name: 'Генерация видео'),
+      ],
+    );
+    chat.messages.add(ChatMessage(id: newId(), role: 'user', content: txt));
+    chat.messages.add(reply);
+    if (chat.title == 'Новый чат') {
+      chat.title = txt.length > 40 ? '${txt.substring(0, 40)}…' : txt;
+    }
+    _input.clear();
+    setState(() => _streaming = true);
+    store.touch(chat);
+    _toEnd();
+
+    final cfg = effectiveConfig();
+    final request = GenerationRequest(
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey,
+      model: cfg.model,
+      messages: <Map<String, dynamic>>[
+        <String, dynamic>{'role': 'user', 'content': txt},
+      ],
+      stream: false,
+      estimatedUsd: CostEstimator.estimate(
+        modelId: cfg.model,
+        prompt: txt,
+      ).estimatedUsd,
+    );
+    GenError? genError;
+    var cancelled = false;
+    try {
+      await for (final ev in _genService.generate(request)) {
+        if (ev is GenProgress) {
+          _updateVideoPending(reply, jobId: ev.jobId, progress: ev.percent);
+        } else if (ev is GenCompleted) {
+          final path = ev.localPath.trim();
+          reply.parts
+            ..clear()
+            ..add(
+              path.isNotEmpty
+                  ? VideoPart.fromPath(path)
+                  : VideoPart.fromUrl(ev.remoteUrl),
+            );
+        } else if (ev is GenerationFailure) {
+          if (ev.error.message.contains('отменена')) {
+            cancelled = true;
+          } else {
+            genError = ev.error;
+          }
+        }
+        _scheduleUi();
+      }
+    } catch (e) {
+      genError = GenErrorMapper.fromException(e);
+    }
+
+    _uiTimer?.cancel();
+    _uiTimer = null;
+    if (cancelled || genError != null) {
+      reply.parts.clear();
+    }
+    if (genError != null) {
+      reply
+        ..errorCode = genError.code
+        ..errorText = GenErrorMapper.detailsOf(genError);
+    }
+    if (reply.parts.isEmpty &&
+        reply.content.isEmpty &&
+        reply.errorCode.isEmpty &&
+        chat.messages.isNotEmpty &&
+        identical(chat.messages.last, reply)) {
+      chat.messages.removeLast();
+    }
+    if (!mounted) {
+      await store.save();
+      return;
+    }
+    setState(() => _streaming = false);
+    store.touch(chat);
+    await store.save();
+  }
+
+  /// Обновляет ожидающую часть видео-задачи в сообщении [reply]:
+  /// прогресс и идентификатор задачи (после создания у провайдера).
+  void _updateVideoPending(
+    ChatMessage reply, {
+    required String jobId,
+    required double progress,
+  }) {
+    for (int i = 0; i < reply.parts.length; i++) {
+      final part = reply.parts[i];
+      if (part is PendingPart) {
+        reply.parts[i] = PendingPart(
+          name: part.name,
+          localPath: part.localPath,
+          jobId: jobId.isNotEmpty ? jobId : part.jobId,
+          progress: progress,
+        );
+        return;
+      }
+    }
+  }
+
   Future<void> _regenerate() async {
     final chat = store.current;
     if (chat == null || chat.messages.isEmpty || _streaming) return;
@@ -530,6 +652,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _stop() {
     _imageExecutor?.cancel();
     _chatService.cancel();
+    _genService.cancel();
   }
 
   Future<List<Tool>> _activeTools() async {

@@ -96,6 +96,13 @@ class AsyncJobExecutor extends GenerationExecutor {
   }
 
   @override
+  void cancel() {
+    // Отмена текущего экземпляра: цикл опроса завершится с ошибкой
+    // «Задача отменена» на ближайшей проверке флага.
+    _cancelled = true;
+  }
+
+  @override
   Stream<GenerationEvent> run(GenerationRequest request) async* {
     _cancelled = false;
     final prompt = _promptFrom(request);
@@ -147,7 +154,7 @@ class AsyncJobExecutor extends GenerationExecutor {
       _active[_jobId] = this;
       await ActiveJobsStore.instance.save(record);
       // Первый прогресс сразу после создания: интерфейс узнаёт jobId.
-      yield const GenProgress(jobId: '', percent: 0).copy(record.jobId);
+      yield GenProgress(jobId: record.jobId, percent: 0);
       yield* _watch(client, base, record);
     } on GenError catch (g) {
       if (_cancelled) {

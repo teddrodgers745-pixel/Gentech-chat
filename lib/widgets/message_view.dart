@@ -10,8 +10,10 @@ import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/github.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:video_player/video_player.dart';
 
 import '../app_state.dart';
+import '../core/generation/async_job_executor.dart';
 import '../core/models/gen_error_mapper.dart';
 import '../core/models/message_part.dart';
 import '../features/chat/widgets/error_bubble.dart';
@@ -165,22 +167,24 @@ class MessageView extends StatelessWidget {
     return out.isEmpty ? <Widget>[RichMarkdown(content)] : out;
   }
 
-  /// Части сообщения: изображение (локальный файл либо ссылка) и видео.
-  /// Текстовые и ожидающие части здесь не рендерятся: текст уже входит
-  /// в основной контент, ожидающие части живут в панели ввода.
+  /// Части сообщения: изображение, видео (с воспроизведением),
+  /// ожидающая асинхронная задача (прогресс + отмена) и ошибка.
+  /// Текстовая часть не рендерится отдельно: текст уже входит в контент.
   List<Widget> _partsWidgets(Palette p) {
-    if (parts.isEmpty) return const <Widget>[];
+    final list = parts.isEmpty ? message.parts : parts;
+    if (list.isEmpty) return const <Widget>[];
     final out = <Widget>[];
-    for (final part in parts) {
+    for (final part in list) {
       switch (part) {
         case ImagePart():
           out.add(_PartImage(part: part, p: p));
         case VideoPart():
           out.add(_PartVideo(part: part, p: p));
+        case PendingPart():
+          out.add(_PartPending(part: part, p: p));
         case ErrorPart():
           out.add(ErrorBubble(error: part.error, onRetry: onRegenerate));
         case TextPart():
-        case PendingPart():
           break;
       }
     }
@@ -590,15 +594,97 @@ class _PartImage extends StatelessWidget {
       );
 }
 
-/// Видео из части сообщения: карточка в стиле FileCard с иконкой,
-/// именем файла и пометкой «Видео».
-class _PartVideo extends StatelessWidget {
+/// Видео из части сообщения: карточка с воспроизведением (video_player).
+/// Локальный файл либо https-ссылка; при неудаче инициализации —
+/// статичная карточка с иконкой, как раньше.
+class _PartVideo extends StatefulWidget {
   final VideoPart part;
   final Palette p;
 
-  const _PartVideo({required this.part, required this.p});
+  const _PartVideo({super.key, required this.part, required this.p});
+
+  @override
+  State<_PartVideo> createState() => _PartVideoState();
+}
+
+class _PartVideoState extends State<_PartVideo> {
+  VideoPlayerController? _controller;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  @override
+  void dispose() {
+    final c = _controller;
+    _controller = null;
+    c?.removeListener(_onTick);
+    c?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _init() async {
+    VideoPlayerController? c;
+    final part = widget.part;
+    if (part.isLocal) {
+      final path = (part.localPath ?? '').trim();
+      if (path.isEmpty) {
+        _fail();
+        return;
+      }
+      c = VideoPlayerController.file(File(path));
+    } else {
+      final url = (part.remoteUrl ?? '').trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        _fail();
+        return;
+      }
+      c = VideoPlayerController.networkUrl(Uri.parse(url));
+    }
+    try {
+      await c.initialize();
+    } catch (_) {
+      try {
+        await c.dispose();
+      } catch (_) {}
+      _fail();
+      return;
+    }
+    if (!mounted) {
+      try {
+        await c.dispose();
+      } catch (_) {}
+      return;
+    }
+    c.addListener(_onTick);
+    setState(() => _controller = c);
+  }
+
+  void _fail() {
+    if (mounted) setState(() => _failed = true);
+  }
+
+  void _onTick() {
+    if (mounted) setState(() {});
+  }
+
+  void _togglePlay() {
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) return;
+    setState(() {
+      if (c.value.isPlaying) {
+        c.pause();
+      } else {
+        c.play();
+      }
+    });
+  }
 
   String get _name {
+    final part = widget.part;
     final src = part.isLocal ? (part.localPath ?? '') : (part.remoteUrl ?? '');
     final clean = src.replaceFirst(RegExp(r'^file://'), '');
     final idx = clean.lastIndexOf('/');
@@ -608,6 +694,71 @@ class _PartVideo extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = _controller;
+    if (_failed || c == null || !c.value.isInitialized) return _staticCard();
+    final ar = c.value.aspectRatio;
+    final ratio = (ar.isFinite && ar > 0) ? ar : 16 / 9;
+    final p = widget.p;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: p.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          GestureDetector(
+            onTap: _togglePlay,
+            child: AspectRatio(
+              aspectRatio: ratio,
+              child: VideoPlayer(c),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+            child: Row(
+              children: [
+                Icon(Icons.movie_outlined, size: 18, color: p.accent),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: fontStyle(
+                      settings.codeFont,
+                      size: 13,
+                      weight: FontWeight.w600,
+                      color: p.text,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: c.value.isPlaying ? 'Пауза' : 'Воспроизвести',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 24,
+                  icon: Icon(
+                    c.value.isPlaying
+                        ? Icons.pause_rounded
+                        : Icons.play_arrow_rounded,
+                    color: p.accent,
+                  ),
+                  onPressed: _togglePlay,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _staticCard() {
+    final p = widget.p;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -652,6 +803,85 @@ class _PartVideo extends StatelessWidget {
               ],
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Ожидающая часть: круговой прогресс асинхронной задачи (генерация
+/// видео) и кнопка отмены по jobId. Стиль карточки — как у VideoPart.
+class _PartPending extends StatelessWidget {
+  final PendingPart part;
+  final Palette p;
+
+  const _PartPending({super.key, required this.part, required this.p});
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = part.progress.clamp(0.0, 100.0);
+    final p = this.p;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: p.border),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 42,
+            height: 42,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                SizedBox(
+                  width: 42,
+                  height: 42,
+                  child: CircularProgressIndicator(
+                    value: pct <= 0 ? null : pct / 100,
+                    strokeWidth: 3,
+                    color: p.accent,
+                  ),
+                ),
+                Icon(Icons.movie_outlined, size: 18, color: p.accent),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  part.name.trim().isEmpty ? 'Генерация видео' : part.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: p.text,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '${pct.toStringAsFixed(0)}%',
+                  style: TextStyle(fontSize: 12, color: p.muted),
+                ),
+              ],
+            ),
+          ),
+          if (part.jobId.trim().isNotEmpty)
+            IconButton(
+              tooltip: 'Отменить',
+              visualDensity: VisualDensity.compact,
+              iconSize: 20,
+              icon: Icon(Icons.close_rounded, size: 20, color: p.muted),
+              onPressed: () => AsyncJobExecutor.cancelJob(part.jobId),
+            ),
         ],
       ),
     );
