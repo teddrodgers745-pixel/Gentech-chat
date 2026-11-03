@@ -15,8 +15,10 @@ import '../core/generation/generation_event.dart';
 import '../core/models/gen_error.dart';
 import '../core/models/gen_error_mapper.dart';
 import '../core/generation/generation_request.dart';
+import '../core/generation/generation_service.dart';
 import '../core/generation/images_api_executor.dart';
 import '../core/models/cost_estimate.dart';
+import '../core/models/message_part.dart';
 import '../core/models/model_info.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../features/composer/modes/image_gen_mode.dart';
@@ -62,6 +64,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Активный исполнитель генерации изображений (для кнопки «стоп»).
   ImagesApiExecutor? _imageExecutor;
 
+  /// Фасад генерации: видео-модели идут через него (асинхронные задачи).
+  final GenerationService _genService = GenerationService();
+
+  /// Подписка на восстановленные задачи (после перезапуска приложения).
+  StreamSubscription<GenerationEvent>? _restoreSub;
+
   /// Вложения, ожидающие отправки (файлы и картинки).
   final List<PlatformFile> _pending = [];
 
@@ -90,15 +98,87 @@ class _ChatScreenState extends State<ChatScreen> {
       HeuristicRules.inferRoute(HeuristicRules.normalize(modelId)) ==
       GenerationRoute.imageGeneration;
 
+  /// Модель видео (kling, veo, sora, wan ...): асинхронная задача.
+  static bool _isVideoModel(String modelId) =>
+      HeuristicRules.inferRoute(HeuristicRules.normalize(modelId)) ==
+      GenerationRoute.asyncJob;
+
+  @override
+  void initState() {
+    super.initState();
+    // Восстановление незавершённых видео-задач после перезапуска приложения.
+    _restoreSub = _genService.restorePendingJobs().listen(_onRestoredEvent);
+  }
+
   @override
   void dispose() {
+    _restoreSub?.cancel();
     _uiTimer?.cancel();
     _imageExecutor?.cancel();
     _chatService.cancel();
+    _genService.cancel();
     ttsService.stop();
     _input.dispose();
     _scroll.dispose();
     super.dispose();
+  }
+
+  // ---------- восстановление видео-задач ----------
+
+  /// События восстановленных задач: обновление прогресса в карточке
+  /// PendingPart, замена её на VideoPart при успехе, снятие при ошибке.
+  void _onRestoredEvent(GenerationEvent ev) {
+    if (ev is GenCompleted) {
+      _applyToJobParts(ev.jobId, (m, idx, part) {
+        final path = ev.localPath.trim();
+        m.parts[idx] = path.isNotEmpty
+            ? VideoPart.fromPath(path)
+            : VideoPart.fromUrl(ev.remoteUrl);
+      });
+      store.save();
+    } else if (ev is GenProgress) {
+      _applyToJobParts(ev.jobId, (m, idx, part) {
+        m.parts[idx] = PendingPart(
+          name: part.name,
+          jobId: part.jobId,
+          progress: ev.percent,
+        );
+      });
+    } else if (ev is GenerationFailure) {
+      if (ev.error.message.contains('отменена')) {
+        _applyToJobParts(ev.jobId, (m, idx, part) => m.parts.removeAt(idx));
+      } else {
+        _applyToJobParts(ev.jobId, (m, idx, part) {
+          m.parts.removeAt(idx);
+          m
+            ..errorCode = ev.error.code
+            ..errorText = GenErrorMapper.detailsOf(ev.error);
+        });
+      }
+      store.save();
+    }
+    if (mounted) setState(() {});
+  }
+
+  /// Находит первое PendingPart с данным jobId во всех чатах
+  /// и применяет к нему [apply].
+  void _applyToJobParts(
+    String jobId,
+    void Function(ChatMessage m, int idx, PendingPart part) apply,
+  ) {
+    final id = jobId.trim();
+    if (id.isEmpty) return;
+    for (final chat in store.chats) {
+      for (final m in chat.messages) {
+        for (int i = 0; i < m.parts.length; i++) {
+          final part = m.parts[i];
+          if (part is PendingPart && part.jobId == id) {
+            apply(m, i, part);
+            return;
+          }
+        }
+      }
+    }
   }
 
   // ---------- щипок ----------
