@@ -44,8 +44,9 @@ class OpenRouterCatalogAdapter extends ModelCatalogAdapter {
     if (id.isEmpty) return null;
 
     final arch = ModelCatalogAdapter.asMap(entry['architecture']);
-    var input = ModelCatalogAdapter.parseModalities(arch?['input_modalities']);
-    var output =
+    final input =
+        ModelCatalogAdapter.parseModalities(arch?['input_modalities']);
+    final output =
         ModelCatalogAdapter.parseModalities(arch?['output_modalities']);
 
     // Если каталог не перечислил модальности списком — разбираем
