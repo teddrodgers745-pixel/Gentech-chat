@@ -5,12 +5,17 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'package:flutter/foundation.dart';
+
 import '../models/gen_error.dart';
+import '../providers/model_catalog_adapter.dart';
+import '../providers/model_info_resolver.dart';
 import 'active_jobs_store.dart';
 import 'artifact_materializer.dart';
 import 'generation_event.dart';
 import 'generation_executor.dart';
 import 'generation_request.dart';
+import 'parameter_translator.dart';
 
 /// Результат одного опроса состояния задачи.
 class _PollResult {
@@ -69,6 +74,12 @@ class AsyncJobExecutor extends GenerationExecutor {
   static const Set<String> _failedStatuses = <String>{
     'failed', 'failure', 'error', 'canceled', 'cancelled', 'rejected',
     'expired',
+  };
+
+  /// Статусы «задача ещё выполняется»: при отсутствии явного прогресса
+  /// для них генерируется оптимистичный процент по прошедшему времени.
+  static const Set<String> _runningStatuses = <String>{
+    'processing', 'running', 'in_progress',
   };
 
   /// Активные исполнители по jobId — для отмены из интерфейса
@@ -219,8 +230,13 @@ class AsyncJobExecutor extends GenerationExecutor {
         );
         return;
       }
-      final res =
-          await _pollOnce(client, base, record.jobId, record.apiKey);
+      final res = await _pollOnce(
+        client,
+        base,
+        record.jobId,
+        record.apiKey,
+        record.createdAt,
+      );
       if (_cancelled) {
         await ActiveJobsStore.instance.remove(record.jobId);
         yield const GenerationFailure(
@@ -282,9 +298,20 @@ class AsyncJobExecutor extends GenerationExecutor {
       'Content-Type': 'application/json',
       ..._authHeaders(request.apiKey),
     };
+    // Нормализация параметров под конкретную модель: duration (intChoice)
+    // уходит как число (5, 8, 10), пропорция — в формат модели
+    // (size, seconds для Sora и т.п.). Без схемы параметры уходят как есть.
+    final providerId =
+        ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '';
+    final info = ModelInfoResolver.resolveModel(providerId, request.model);
+    final translated = ParameterTranslator.translate(
+      Map<String, dynamic>.of(request.parameters),
+      info,
+    );
     final body = jsonEncode(<String, dynamic>{
       'model': request.model,
       'prompt': prompt,
+      ...translated,
     });
     for (final path in _createPaths) {
       final uri = Uri.tryParse('$base$path');
@@ -299,6 +326,10 @@ class AsyncJobExecutor extends GenerationExecutor {
       } catch (e) {
         throw NetworkError(details: 'Ошибка соединения: $e');
       }
+      debugPrint(
+        'AsyncJobExecutor CREATE $base$path -> ${resp.statusCode}: '
+        '${_debugBody(resp.body)}',
+      );
       final code = resp.statusCode;
       if (code == 404 || code == 405) continue; // фоллбэк на следующий путь
       if (code < 200 || code >= 300) throw _mapStatus(code, resp.body);
@@ -306,7 +337,7 @@ class AsyncJobExecutor extends GenerationExecutor {
       try {
         json = jsonDecode(resp.body);
       } catch (_) {}
-      final direct = _findVideoUrl(json, 0);
+      final direct = _findVideoUrl(json, 0) ?? _urlFromMessage(json);
       if (direct != null) return _CreateResult(directUrl: direct);
       final id = _findJobId(json, 0);
       if (id == null || id.isEmpty) continue;
@@ -331,6 +362,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     String base,
     String jobId,
     String apiKey,
+    DateTime createdAt,
   ) async {
     var notFound = 0;
     for (final prefix in _pollPrefixes) {
@@ -347,6 +379,10 @@ class AsyncJobExecutor extends GenerationExecutor {
         // Сетевая трудность — следующая попытка опроса.
         return const _PollResult();
       }
+      debugPrint(
+        'AsyncJobExecutor POLL $base$prefix$jobId -> ${resp.statusCode}: '
+        '${_debugBody(resp.body)}',
+      );
       final code = resp.statusCode;
       if (code == 401 || code == 403) {
         return _PollResult(fatal: AuthError(details: _details(resp.body)));
@@ -364,7 +400,7 @@ class AsyncJobExecutor extends GenerationExecutor {
         continue;
       }
       if (code >= 200 && code < 300) {
-        return _parsePollBody(resp.body);
+        return _parsePollBody(resp.body, createdAt);
       }
       // Прочие коды (5xx и т.п.): временная трудность, пробуем позже.
       return const _PollResult();
@@ -379,22 +415,31 @@ class AsyncJobExecutor extends GenerationExecutor {
     return const _PollResult();
   }
 
-  _PollResult _parsePollBody(String body) {
+  /// Разбор тела ответа опроса статуса.
+  ///
+  /// Статус ищется в json['status'], json['state'], json['data']['status'],
+  /// json['task']['status'] (рекурсивный поиск) и приводится к lowerCase.
+  /// Прогресс — json['progress'] / json['data']['progress']: int, double
+  /// (0.5 -> 50) либо строка ('50%'). Если прогресс не сообщён (0/null),
+  /// а статус 'processing'/'running'/'in_progress', используется
+  /// «оптимистичный» прогресс: 5% + 1.5% за каждую секунду ожидания,
+  /// максимум 90% — чтобы карточка в чате не застывала на «0%».
+  _PollResult _parsePollBody(String body, DateTime createdAt) {
     Object? json;
     try {
       json = jsonDecode(body);
     } catch (_) {
       return const _PollResult();
     }
-    final url = _findVideoUrl(json, 0) ?? '';
+    final url = _findVideoUrl(json, 0) ?? _urlFromMessage(json) ?? '';
     final pct = _findPercent(json, 0);
     if (url.isNotEmpty) {
       return _PollResult(videoUrl: url, percent: pct ?? 100);
     }
     final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
     if (_failedStatuses.contains(status)) {
-      return const _PollResult(
-        fatal: UnknownGenError(details: 'Провайдер сообщил об ошибке задачи.'),
+      return _PollResult(
+        fatal: UnknownGenError(details: _pollErrorText(json)),
       );
     }
     if (_doneStatuses.contains(status)) {
@@ -404,7 +449,64 @@ class AsyncJobExecutor extends GenerationExecutor {
         ),
       );
     }
-    return _PollResult(percent: pct);
+    var percent = pct;
+    if ((percent == null || percent <= 0) &&
+        _runningStatuses.contains(status)) {
+      final elapsed = DateTime.now().difference(createdAt).inSeconds;
+      percent = (5 + elapsed * 1.5).clamp(5.0, 90.0);
+    }
+    return _PollResult(percent: percent);
+  }
+
+  /// Текст ошибки задачи из JSON: json['error'] (строка либо объект с
+  /// message) либо json['message'].
+  static String _pollErrorText(Object? json) {
+    if (json is Map) {
+      final err = json['error'];
+      if (err is Map) {
+        final m = err['message'];
+        if (m is String && m.trim().isNotEmpty) return _clip(m);
+      }
+      if (err is String && err.trim().isNotEmpty) return _clip(err);
+      final m = json['message'];
+      if (m is String && m.trim().isNotEmpty) return _clip(m);
+    }
+    return 'Провайдер сообщил об ошибке задачи.';
+  }
+
+  /// Ссылка на видео внутри choices[0].message (строка либо content):
+  /// первый http(s)-адрес видеофайла в тексте сообщения.
+  static String? _urlFromMessage(Object? json) {
+    if (json is! Map) return null;
+    final choices = json['choices'];
+    if (choices is! List || choices.isEmpty || choices.first is! Map) {
+      return null;
+    }
+    final msg = (choices.first as Map)['message'];
+    final String? text;
+    if (msg is Map) {
+      final content = msg['content'];
+      text = content is String ? content : null;
+    } else if (msg is String) {
+      text = msg;
+    } else {
+      text = null;
+    }
+    if (text == null) return null;
+    final m = RegExp(r'https?://\S+?\.(?:mp4|webm|mov)(?:\?\S*)?')
+        .firstMatch(text);
+    return m?.group(0);
+  }
+
+  /// Тело ответа для debugPrint: JSON перекодируется, длинные ответы
+  /// обрезаются, битый JSON печатается как есть.
+  static String _debugBody(String body) {
+    try {
+      final s = jsonEncode(jsonDecode(body));
+      return s.length > 2000 ? '${s.substring(0, 2000)}…' : s;
+    } catch (_) {
+      return body.length > 2000 ? '${body.substring(0, 2000)}…' : body;
+    }
   }
 
   static Map<String, String> _authHeaders(String apiKey) =>
@@ -504,11 +606,21 @@ class AsyncJobExecutor extends GenerationExecutor {
     if (node is Map && depth <= 8) {
       for (final entry in node.entries) {
         final k = entry.key.toString().toLowerCase();
-        if ((k == 'progress' || k == 'percent' || k == 'percentage') &&
-            entry.value is num) {
-          var v = (entry.value as num).toDouble();
-          if (v >= 0 && v <= 1) v *= 100;
-          if (v >= 0 && v <= 100) return v;
+        if (k == 'progress' || k == 'percent' || k == 'percentage') {
+          final v = entry.value;
+          double? d;
+          if (v is num) {
+            d = v.toDouble();
+          } else if (v is String) {
+            // '50%', '50', '0.5' — извлекаем число из строки.
+            final m =
+                RegExp(r'-?\d+(?:[.,]\d+)?').firstMatch(v);
+            if (m != null) {
+              d = double.tryParse(m.group(0)!.replaceAll(',', '.'));
+            }
+          }
+          if (d != null && d >= 0 && d <= 1) d *= 100;
+          if (d != null && d >= 0 && d <= 100) return d;
         }
       }
       for (final entry in node.entries) {

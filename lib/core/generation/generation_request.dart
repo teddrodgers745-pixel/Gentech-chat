@@ -34,6 +34,11 @@ class GenerationRequest {
   /// null — оценить не удалось.
   final double? estimatedUsd;
 
+  /// Параметры генерации, собранные интерфейсом (aspect_ratio, duration,
+  /// resolution ...). Нормализуются под конкретную модель через
+  /// [ParameterTranslator] в исполнителе; пустая карта — параметров нет.
+  final Map<String, dynamic> parameters;
+
   const GenerationRequest({
     required this.baseUrl,
     required this.apiKey,
@@ -44,6 +49,7 @@ class GenerationRequest {
     this.reasoningEffort,
     this.tools = const <Tool>[],
     this.estimatedUsd,
+    this.parameters = const <String, dynamic>{},
   });
 
   @override
