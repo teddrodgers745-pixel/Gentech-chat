@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../core/generation/model_type_override_store.dart';
 import '../models.dart';
-import '../theme.dart';
 
 /// Шторка «Быстрый доступ»: список моделей из пресетов и общих настроек
 /// и секция «Тип модели» — ручной override типа активной модели

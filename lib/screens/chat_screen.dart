@@ -21,6 +21,13 @@ import '../core/models/cost_estimate.dart';
 import '../core/models/message_part.dart';
 import '../core/models/model_info.dart';
 import '../core/providers/heuristic_rules.dart';
+import '../core/generation/curated_parameter_catalog.dart';
+import '../core/generation/model_type_override_store.dart';
+import '../core/generation/parameter_translator.dart';
+import '../core/generation/parameter_validation_exception.dart';
+import '../core/generation/user_param_override_store.dart';
+import '../core/models/generation_schema.dart';
+import '../core/models/param_spec.dart';
 import '../features/composer/modes/image_gen_mode.dart';
 import '../services/chat_service.dart';
 import '../services/speech_service.dart';
@@ -30,6 +37,7 @@ import '../features/composer/adaptive_chat_input_bar.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
 import 'live_screen.dart';
+import 'quick_access_sheet.dart';
 import 'settings_screen.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -98,20 +106,50 @@ class _ChatScreenState extends State<ChatScreen> {
       HeuristicRules.inferRoute(HeuristicRules.normalize(modelId)) ==
       GenerationRoute.imageGeneration;
 
-  /// Модель видео (kling, veo, sora, wan ...): асинхронная задача.
-  static bool _isVideoModel(String modelId) =>
-      HeuristicRules.inferRoute(HeuristicRules.normalize(modelId)) ==
-      GenerationRoute.asyncJob;
+  /// Эффективный тип активной модели ('text'/'image'/'video') для панели
+  /// ввода; '' — ещё не разрешён. Обновляется при смене модели и override.
+  String _modelType = '';
+
+  /// Модель, для которой разрешён [_modelType] (защита от гонки await).
+  String _typeFor = '';
 
   @override
   void initState() {
     super.initState();
     // Восстановление незавершённых видео-задач после перезапуска приложения.
     _restoreSub = _genService.restorePendingJobs().listen(_onRestoredEvent);
+    // Смена активной модели (пресет либо общие настройки) -> переопределение
+    // эффективного типа модели для панели ввода.
+    settings.addListener(_onConfigChanged);
+    presets.addListener(_onConfigChanged);
+    _resolveType(effectiveConfig().model.trim());
+  }
+
+  void _onConfigChanged() {
+    _resolveType(effectiveConfig().model.trim());
+  }
+
+  /// Эффективный тип активной модели для панели ввода: ручной override
+  /// типа имеет приоритет, затем эвристика и каталог параметров
+  /// (см. ModelTypeOverrideStore.effectiveType).
+  Future<void> _resolveType(String modelId) async {
+    final id = modelId.trim();
+    if (id == _typeFor) return;
+    _typeFor = id;
+    String t;
+    try {
+      t = await ModelTypeOverrideStore.instance.effectiveType(id);
+    } catch (_) {
+      t = ModelTypes.text;
+    }
+    if (!mounted || _typeFor != id) return;
+    setState(() => _modelType = t);
   }
 
   @override
   void dispose() {
+    settings.removeListener(_onConfigChanged);
+    presets.removeListener(_onConfigChanged);
     _restoreSub?.cancel();
     _uiTimer?.cancel();
     _imageExecutor?.cancel();
@@ -242,103 +280,15 @@ class _ChatScreenState extends State<ChatScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  /// Шторка «Быстрый доступ»: список доступных моделей из пресетов и общих настроек.
+  /// Шторка «Быстрый доступ»: список моделей из пресетов и общих настроек
+  /// плюс секция «Тип модели» — ручной override типа активной модели.
   void _openQuickAccess() {
-    final models = <String>[];
-    void addModel(String raw) {
-      final m = raw.trim();
-      if (m.isEmpty || models.contains(m)) return;
-      models.add(m);
-    }
-
-    for (final pr in presets.items) {
-      addModel(pr.model);
-    }
-    addModel(settings.model);
-
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
-      builder: (ctx) {
-        final p = settings.palette;
-        final currentModel = effectiveConfig().model.trim();
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-                  child: Text(
-                    'Быстрый доступ',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: p.text,
-                    ),
-                  ),
-                ),
-                Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
-                    padding: EdgeInsets.zero,
-                    children: [
-                      if (models.isEmpty)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                          child: Text(
-                            'Моделей пока нет. Задайте модель в настройках провайдера.',
-                            style: TextStyle(color: p.muted, fontSize: 13),
-                          ),
-                        )
-                      else
-                        for (final m in models)
-                          ListTile(
-                            dense: true,
-                            title: Text(
-                              m.replaceFirst(
-                                RegExp(r'^models/', caseSensitive: false),
-                                '',
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: p.text,
-                                fontFamily: 'JetBrains Mono',
-                                fontFamilyFallback: const ['monospace'],
-                              ),
-                            ),
-                            trailing: m == currentModel
-                                ? Icon(Icons.check, size: 18, color: p.accent)
-                                : null,
-                            onTap: () {
-                              Preset? matched;
-                              for (final pr in presets.items) {
-                                if (pr.model.trim() == m) {
-                                  matched = pr;
-                                  break;
-                                }
-                              }
-                              if (matched != null) {
-                                presets.setActive(matched.id);
-                              } else {
-                                settings.setConnection(mdl: m);
-                                setState(() {});
-                              }
-                              Navigator.pop(ctx);
-                            },
-                          ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+      builder: (_) => QuickAccessSheet(
+        onTypeChanged: (_) => _resolveType(effectiveConfig().model.trim()),
+      ),
     );
   }
 
@@ -409,15 +359,32 @@ class _ChatScreenState extends State<ChatScreen> {
       _snack('Создайте и выберите профиль модели в настройках');
       return;
     }
-    // Модель-картинка: отправка идёт через /images/generations,
-    // вложения и уровень размышлений не используются.
-    if (_isImageModel(effectiveConfig().model.toLowerCase())) {
+    final modelId = effectiveConfig().model.trim();
+    // Эффективный тип модели: ручной override типа > эвристика по
+    // идентификатору > тип из каталога параметров (ModelTypeOverrideStore).
+    String genType;
+    try {
+      genType = await ModelTypeOverrideStore.instance.effectiveType(modelId);
+    } catch (_) {
+      genType = ModelTypes.text;
+    }
+    if (genType == ModelTypes.image) {
+      // Валидация перед отправкой: без спецификации параметров отправка
+      // блокируется с ErrorBubble, при спецификации проверяются комбинации.
+      if (!await _validateGenParams(
+        modelId,
+        isVideo: false,
+        aspectRatio: _aspectRatio,
+      )) {
+        return;
+      }
       await _sendImage(txt);
       return;
     }
-    // Модель видео (kling, veo, sora, wan ...): асинхронная задача
-    // через GenerationService (маршрут GenerationRoute.asyncJob).
-    if (_isVideoModel(effectiveConfig().model.toLowerCase())) {
+    if (genType == ModelTypes.video) {
+      if (!await _validateGenParams(modelId, isVideo: true)) {
+        return;
+      }
       await _sendVideo(txt);
       return;
     }
@@ -634,6 +601,73 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
     }
+  }
+
+  /// Добавляет в чат сообщение-ошибку, которое рендерится ErrorBubble
+  /// (код 'bad_request' -> заголовок «Некорректный запрос», текст — детали).
+  Future<void> _addGenErrorBubble(String text) async {
+    final chat = store.current ?? store.createChat();
+    chat.messages.add(ChatMessage(
+      id: newId(),
+      role: 'assistant',
+      errorCode: 'bad_request',
+      errorText: text,
+    ));
+    store.touch(chat);
+    if (mounted) setState(() {});
+    _toEnd();
+    await store.save();
+  }
+
+  /// Валидация отправки для генеративных моделей (изображение/видео).
+  /// Без спецификации параметров (курированный каталог либо override
+  /// пользователя) отправка блокируется с ErrorBubble. При известной
+  /// спецификации тело собирается через toImageBody/toVideoBody, чтобы
+  /// поймать ParameterValidationException до реального запроса.
+  Future<bool> _validateGenParams(
+    String modelId, {
+    required bool isVideo,
+    String? aspectRatio,
+  }) async {
+    try {
+      if (!CuratedParameterCatalog.isLoaded) {
+        await CuratedParameterCatalog.load();
+      }
+    } catch (_) {
+      // Каталог недоступен — resolveParams вернёт null, отправка будет
+      // заблокирована с подсказкой указать параметры вручную.
+    }
+    ModelParameters? spec;
+    try {
+      spec = await ParameterTranslator.resolveParams(
+        modelId,
+        userParamOverrideStore,
+      );
+    } catch (_) {
+      spec = null;
+    }
+    if (spec == null) {
+      await _addGenErrorBubble(
+        'Для этой модели не указаны параметры. '
+        'Нажмите «Указать параметры вручную» в панели ввода.',
+      );
+      return false;
+    }
+    try {
+      final p = UniversalParams.fromRaw(<String, dynamic>{
+        if (aspectRatio != null && aspectRatio.isNotEmpty)
+          ParamKeys.aspectRatio: aspectRatio,
+      });
+      if (isVideo) {
+        ParameterTranslator.toVideoBody(p, spec);
+      } else {
+        ParameterTranslator.toImageBody(p, spec);
+      }
+    } on ParameterValidationException catch (e) {
+      await _addGenErrorBubble(e.message);
+      return false;
+    }
+    return true;
   }
 
   Future<void> _regenerate() async {
@@ -877,6 +911,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 AdaptiveChatInputBar(
                   config: _currentConfig,
                   controller: _input,
+                  modelType: _modelType,
                   onAspectRatioChanged: (r) => _aspectRatio = r,
                   streaming: _streaming,
                   reasoningLevel: _reasoningLevel,
