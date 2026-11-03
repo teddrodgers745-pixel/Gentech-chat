@@ -31,6 +31,8 @@ dependencies:
   permission_handler: ^11.0.0
   # SVG-иконки капсул «Поиск» и «Мышление» в панели ввода.
   flutter_svg: ^2.0.9
+  # Открытие страницы моделей провайдера в браузере (без ключа).
+  url_launcher: ^6.3.0
   # Воспроизведение видео из VideoPart (асинхронные видео-задачи).
   video_player: ^2.9.2
   # Голосовой Live-режим: собственный WebSocket (BidiGenerateContent),
