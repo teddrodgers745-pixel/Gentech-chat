@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../features/gallery/artifacts_gallery_screen.dart';
 
 class HistoryDrawer extends StatelessWidget {
   /// false во время генерации ответа: переключать чаты нельзя.
@@ -69,6 +70,24 @@ class HistoryDrawer extends StatelessWidget {
                     store.startNew();
                     Navigator.pop(context);
                     onOpened();
+                  },
+                ),
+                ListTile(
+                  leading:
+                      Icon(Icons.photo_library_outlined, color: p.accent),
+                  title: const Text('Галерея'),
+                  subtitle: Text(
+                    'Сгенерированные изображения и видео',
+                    style: TextStyle(color: p.muted, fontSize: 12),
+                  ),
+                  onTap: () {
+                    final nav = Navigator.of(context);
+                    nav.pop();
+                    nav.push(
+                      MaterialPageRoute<void>(
+                        builder: (_) => const ArtifactsGalleryScreen(),
+                      ),
+                    );
                   },
                 ),
                 const Divider(height: 1),
