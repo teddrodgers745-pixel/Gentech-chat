@@ -1,34 +1,43 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
-import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:http/http.dart' as http;
-import 'package:path_provider/path_provider.dart';
+import 'package:dio/dio.dart';
 
 import '../models/gen_error.dart';
+import '../providers/model_catalog_adapter.dart';
 import 'artifact_materializer.dart';
 import 'generation_event.dart';
 import 'generation_executor.dart';
 import 'generation_request.dart';
+import 'image_dialect.dart';
 
-/// Исполнитель генерации изображений: запрос к OpenAI-совместимому
-/// эндпоинту POST {baseUrl}/images/generations.
+/// Исполнитель генерации изображений (HTTP через dio).
 ///
-/// Промпт берётся из последнего пользовательского сообщения [GenerationRequest];
-/// пропорция задаётся при создании исполнителя и переводится в размер холста
-/// (поле size). Результат отдаётся одним событием [GenerationDelta] с
-/// markdown-изображением: ссылка провайдера либо file://-путь, если провайдер
-/// вернул base64 (файл сохраняется в Documents/GenTech/images). Ошибка —
-/// последнее событие [GenerationFailure] с типизированным [GenError].
+/// Работает с тремя диалектами API ([ImageApiDialect]):
+///  - openAiStandard: POST {baseUrl}/images/generations (Polza и другие
+///    OpenAI-совместимые провайдеры);
+///  - shortImagesPath: POST {baseUrl}/images (RouterAI);
+///  - openRouterChatImages: POST {baseUrl}/chat/completions с полями
+///    modalities и image_config (OpenRouter).
+///
+/// Для REST-диалектов в тело передаются одновременно size и aspect_ratio.
+/// Если основной REST-эндпоинт ответил 404/405, запрос автоматически
+/// повторяется на альтернативном эндпоинте.
+///
+/// Промпт берётся из последнего пользовательского сообщения [GenerationRequest].
+/// Результат отдаётся одним событием [GenerationDelta] с markdown-изображением:
+/// ссылка провайдера либо file://-путь локальной копии (URL и data URL
+/// сохраняются через [ArtifactMaterializer]). Ошибка — последнее событие
+/// [GenerationFailure] с типизированным [GenError].
 class ImagesApiExecutor extends GenerationExecutor {
   /// Выбранная пропорция изображения ('1:1', '16:9', '9:16').
   final String aspectRatio;
 
   static const Duration _timeout = Duration(seconds: 180);
 
-  http.Client? _client;
+  Dio? _dio;
+  CancelToken? _cancelToken;
   bool _cancelled = false;
 
   ImagesApiExecutor({this.aspectRatio = '1:1'});
@@ -56,59 +65,148 @@ class ImagesApiExecutor extends GenerationExecutor {
       return;
     }
     final base = request.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    final client = http.Client();
-    _client = client;
+    final dialect = ImageDialectResolver.resolve(
+      baseUrl: base,
+      providerId: ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '',
+    );
+    final dio = Dio(
+      BaseOptions(
+        connectTimeout: _timeout,
+        receiveTimeout: _timeout,
+        responseType: ResponseType.plain,
+        validateStatus: (_) => true,
+      ),
+    );
+    _dio = dio;
+    final token = CancelToken();
+    _cancelToken = token;
     try {
-      final resp = await client
-          .post(
-            Uri.parse('$base/images/generations'),
-            headers: <String, String>{
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer ${request.apiKey}',
-            },
-            body: jsonEncode(<String, dynamic>{
-              'model': request.model,
-              'prompt': prompt,
-              'n': 1,
-              'size': sizeForRatio(aspectRatio),
-            }),
-          )
-          .timeout(_timeout);
+      final resp = await _requestImage(
+        dio, token, base, dialect, request, prompt,
+      );
       if (_cancelled) return;
-      if (resp.statusCode != 200) {
-        yield GenerationFailure(_mapError(resp.statusCode, resp.body));
+      final status = resp.statusCode ?? 0;
+      final body = resp.data ?? '';
+      if (status < 200 || status >= 300) {
+        yield GenerationFailure(_mapError(status, body));
         return;
       }
-      final imageUri = await _extractImageUri(resp.body);
+      final sources = _extractImageSourcesFromResponse(body);
       if (_cancelled) return;
-      if (imageUri == null || imageUri.isEmpty) {
+      if (sources.isEmpty) {
         yield const GenerationFailure(
           UnknownGenError(details: 'Провайдер не вернул изображение.'),
         );
         return;
       }
-      yield GenerationDelta(content: '![изображение]($imageUri)');
-    } on TimeoutException {
-      if (!_cancelled) {
+      final display = await _toDisplayUri(sources.first);
+      if (_cancelled) return;
+      yield GenerationDelta(content: '![изображение]($display)');
+    } on DioException catch (e) {
+      if (_cancelled || e.type == DioExceptionType.cancel) return;
+      final t = e.type;
+      if (t == DioExceptionType.connectionTimeout ||
+          t == DioExceptionType.receiveTimeout ||
+          t == DioExceptionType.sendTimeout) {
         yield const GenerationFailure(
           NetworkError(details: 'Провайдер не ответил за 180 секунд.'),
+        );
+      } else {
+        yield GenerationFailure(
+          NetworkError(details: 'Ошибка соединения: ${e.message ?? e}'),
         );
       }
     } catch (e) {
       if (!_cancelled) {
-        yield GenerationFailure(NetworkError(details: 'Ошибка соединения: $e'));
+        yield GenerationFailure(
+          NetworkError(details: 'Ошибка соединения: $e'),
+        );
       }
     } finally {
-      client.close();
-      if (identical(_client, client)) _client = null;
+      if (identical(_dio, dio)) _dio = null;
+      if (identical(_cancelToken, token)) _cancelToken = null;
     }
+  }
+
+  /// Один запрос картинки с учётом диалекта и автоматическим фоллбэком
+  /// между /images/generations и /images при ответе 404/405.
+  Future<Response<String>> _requestImage(
+    Dio dio,
+    CancelToken token,
+    String base,
+    ImageApiDialect dialect,
+    GenerationRequest request,
+    String prompt,
+  ) async {
+    final headers = <String, String>{
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer ${request.apiKey}',
+    };
+    if (dialect == ImageApiDialect.openRouterChatImages) {
+      return dio.post<String>(
+        '$base${ImageDialectResolver.primaryPath(dialect)}',
+        data: _openRouterBody(request.model, prompt),
+        options: Options(headers: headers),
+        cancelToken: token,
+      );
+    }
+    final fallback = ImageDialectResolver.fallbackRestPath(dialect);
+    final first = await dio.post<String>(
+      '$base${ImageDialectResolver.primaryPath(dialect)}',
+      data: _restBody(request.model, prompt),
+      options: Options(headers: headers),
+      cancelToken: token,
+    );
+    final code = first.statusCode ?? 0;
+    if (fallback != null && (code == 404 || code == 405)) {
+      return dio.post<String>(
+        '$base$fallback',
+        data: _restBody(request.model, prompt),
+        options: Options(headers: headers),
+        cancelToken: token,
+      );
+    }
+    return first;
+  }
+
+  /// Тело REST-запроса: size и aspect_ratio передаются одновременно —
+  /// разные провайдеры читают своё поле, лишнее игнорируют.
+  Map<String, dynamic> _restBody(String model, String prompt) {
+    return <String, dynamic>{
+      'model': model,
+      'prompt': prompt,
+      'n': 1,
+      'size': sizeForRatio(aspectRatio),
+      'aspect_ratio': aspectRatio,
+    };
+  }
+
+  /// Тело запроса OpenRouter: изображения приходят через chat/completions
+  /// с явным перечислением модальностей и конфигом пропорции.
+  Map<String, dynamic> _openRouterBody(String model, String prompt) {
+    return <String, dynamic>{
+      'model': model,
+      'messages': <Map<String, dynamic>>[
+        <String, dynamic>{'role': 'user', 'content': prompt},
+      ],
+      'modalities': <String>['image', 'text'],
+      'image_config': <String, dynamic>{'aspect_ratio': aspectRatio},
+    };
   }
 
   @override
   void cancel() {
     _cancelled = true;
-    _client?.close();
-    _client = null;
+    final t = _cancelToken;
+    final d = _dio;
+    _cancelToken = null;
+    _dio = null;
+    try {
+      t?.cancel();
+    } catch (_) {}
+    try {
+      d?.close();
+    } catch (_) {}
   }
 
   /// Промпт — текст последнего пользовательского сообщения
@@ -136,43 +234,74 @@ class ImagesApiExecutor extends GenerationExecutor {
     return '';
   }
 
-  /// Из ответа берётся url либо b64_json первой картинки;
-  /// base64 сохраняется локально и отдаётся как file://-ссылка.
-  static Future<String?> _extractImageUri(String body) async {
+  /// Универсальный парсер ответа провайдера: рекурсивный обход JSON
+  /// собирает все источники изображений — поля url/image_url (http, https,
+  /// data URL) и b64_json (оборачивается в data URL). Работает для
+  /// формата {data: [...]}, {images: [...]}, {url: ...} и для ответа
+  /// OpenRouter (choices -> message -> images / content).
+  static List<String> _extractImageSourcesFromResponse(String body) {
+    Object? json;
     try {
-      final j = jsonDecode(body);
-      if (j is! Map) return null;
-      final data = j['data'];
-      if (data is! List || data.isEmpty) return null;
-      final first = data.first;
-      if (first is! Map) return null;
-      final url = ((first['url'] as String?) ?? '').trim();
-      if (url.isNotEmpty) {
-        // Локальная копия: ссылки провайдеров часто временные и быстро
-        // истекают. При неудаче остаётся исходная ссылка — картинка
-        // всё равно отображается в чате.
-        final local = await ArtifactMaterializer.materialize(url);
-        if (local != null) return 'file://$local';
-        return url;
-      }
-      final b64 = ((first['b64_json'] as String?) ?? '').trim();
-      if (b64.isEmpty) return null;
-      final path = await _saveBase64(b64);
-      return 'file://$path';
+      json = jsonDecode(body);
     } catch (_) {
-      return null;
+      return const <String>[];
+    }
+    final out = <String>[];
+    _walkForSources(json, out, 0);
+    return out;
+  }
+
+  static void _walkForSources(Object? node, List<String> out, int depth) {
+    if (node == null || depth > 10 || out.length >= 8) return;
+    if (node is Map) {
+      node.forEach((key, value) {
+        final k = key.toString().toLowerCase();
+        if (value is String && value.trim().isNotEmpty) {
+          final s = value.trim();
+          if (k == 'b64_json') {
+            out.add(s.startsWith('data:') ? s : 'data:image/png;base64,$s');
+            return;
+          }
+          if ((k == 'url' || k == 'image_url') &&
+              (s.startsWith('http://') ||
+                  s.startsWith('https://') ||
+                  s.startsWith('data:image'))) {
+            out.add(s);
+          }
+          return;
+        }
+        _walkForSources(value, out, depth + 1);
+      });
+      return;
+    }
+    if (node is List) {
+      for (final e in node) {
+        _walkForSources(e, out, depth + 1);
+      }
     }
   }
 
-  static Future<String> _saveBase64(String b64) async {
-    final docs = await getApplicationDocumentsDirectory();
-    final folder = Directory('${docs.path}/GenTech/images');
-    await folder.create(recursive: true);
-    final file = File(
-      '${folder.path}/img_${DateTime.now().millisecondsSinceEpoch}.png',
+  /// Источник из ответа -> URI для markdown. URL и data URL сохраняются
+  /// локально (ссылки провайдеров часто временные); при неудаче остаётся
+  /// исходная ссылка — картинка всё равно отображается в чате.
+  static Future<String> _toDisplayUri(String source) async {
+    final s = source.trim();
+    if (s.startsWith('data:')) {
+      final local = await ArtifactMaterializer.materializeDataUrl(s);
+      if (local != null) return 'file://$local';
+      return s;
+    }
+    if (s.startsWith('http://') || s.startsWith('https://')) {
+      final local = await ArtifactMaterializer.materialize(s);
+      if (local != null) return 'file://$local';
+      return s;
+    }
+    // Сырой base64 без префикса: считаем PNG.
+    final local = await ArtifactMaterializer.materializeDataUrl(
+      'data:image/png;base64,$s',
     );
-    await file.writeAsBytes(base64Decode(b64), flush: true);
-    return file.path;
+    if (local != null) return 'file://$local';
+    return s;
   }
 
   /// Текст ошибки провайдера из JSON-ответа (error.message / message).

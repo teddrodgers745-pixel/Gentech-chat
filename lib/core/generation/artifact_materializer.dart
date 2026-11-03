@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -22,7 +23,9 @@ abstract final class ArtifactMaterializer {
   /// не похож на изображение, ошибка записи. Вызывающий код в случае
   /// null продолжает работать с исходной ссылкой.
   static Future<String?> materialize(String url, {http.Client? client}) async {
-    final u = Uri.tryParse(url.trim());
+    final trimmed = url.trim();
+    if (trimmed.startsWith('data:')) return materializeDataUrl(trimmed);
+    final u = Uri.tryParse(trimmed);
     if (u == null || (u.scheme != 'http' && u.scheme != 'https')) return null;
     final own = client == null;
     final c = client ?? http.Client();
@@ -46,6 +49,46 @@ abstract final class ArtifactMaterializer {
     } finally {
       if (own) c.close();
     }
+  }
+
+  /// Сохраняет строку вида data:image/...;base64,... в локальный файл
+  /// Documents/GenTech/images. Возвращает путь файла либо null, если
+  /// строка не является data URL изображения, декодирование не удалось
+  /// или содержимое не похоже на картинку.
+  static Future<String?> materializeDataUrl(String dataUrl) async {
+    final m = RegExp(
+      r'^data:image/([a-zA-Z0-9.+-]+);base64,(.+)$',
+      dotAll: true,
+    ).firstMatch(dataUrl.trim());
+    if (m == null) return null;
+    final mime = m.group(1)!.toLowerCase();
+    final raw = m.group(2)!.replaceAll(RegExp(r'\s'), '');
+    if (raw.isEmpty) return null;
+    final bytes = base64Decode(raw);
+    if (bytes.isEmpty || bytes.length > _maxBytes) return null;
+    if (!_looksLikeImage(bytes)) return null;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final folder = Directory('${docs.path}/GenTech/images');
+      await folder.create(recursive: true);
+      final file = File(
+        '${folder.path}/img_${DateTime.now().millisecondsSinceEpoch}'
+        '${_extFromMime(mime)}',
+      );
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Расширение файла по mime-типу из data URL; по умолчанию .png.
+  static String _extFromMime(String mime) {
+    if (mime.contains('jpeg') || mime.contains('jpg')) return '.jpg';
+    if (mime.contains('webp')) return '.webp';
+    if (mime.contains('gif')) return '.gif';
+    if (mime.contains('bmp')) return '.bmp';
+    return '.png';
   }
 
   /// По магическим байтам: PNG, JPEG, GIF, BMP и WEBP (RIFF....WEBP).

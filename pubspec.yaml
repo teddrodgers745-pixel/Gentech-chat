@@ -9,6 +9,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  dio: ^5.4.0
   http: any
   shared_preferences: any
   google_fonts: any
