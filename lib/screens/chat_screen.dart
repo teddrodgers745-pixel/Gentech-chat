@@ -15,9 +15,7 @@ import '../services/chat_service.dart';
 import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
-import '../widgets/inputs/adaptive_chat_input_bar.dart';
-// ignore: unused_import
-import '../widgets/inputs/text_chat_input.dart';
+import '../features/composer/adaptive_chat_input_bar.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
 import 'live_screen.dart';
