@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import '../models/model_info.dart';
+import 'curated_parameter_schemas.dart';
 import 'heuristic_rules.dart';
 import 'model_catalog_adapter.dart';
 import 'openrouter_catalog_adapter.dart';
@@ -55,7 +56,7 @@ abstract final class ModelInfoResolver {
     if (adapter == null) return const <ModelInfo>[];
     return <ModelInfo>[
       for (final m in adapter.parseCatalog(responseBody))
-        enforceHeuristicOverrides(m),
+        _withSchema(enforceHeuristicOverrides(m)),
     ];
   }
 
@@ -71,14 +72,37 @@ abstract final class ModelInfoResolver {
   }) {
     final id = rawModelId.trim();
     if (id.isEmpty) {
-      return HeuristicRules.build(rawModelId, providerId: providerId);
+      return _withSchema(
+        HeuristicRules.build(rawModelId, providerId: providerId),
+      );
     }
     final adapter = adapterFor(providerId);
     if (adapter != null && catalogEntry != null) {
       final info = adapter.parseModelEntry(catalogEntry);
-      if (info != null) return enforceHeuristicOverrides(info);
+      if (info != null) return _withSchema(enforceHeuristicOverrides(info));
     }
-    return HeuristicRules.build(id, providerId: providerId);
+    return _withSchema(HeuristicRules.build(id, providerId: providerId));
+  }
+
+  /// Заполняет generationSchema итоговой модели. Уже заданная схема
+  /// (пользовательское переопределение) имеет приоритет и не затирается;
+  /// иначе применяется каталог правил [CuratedParameterSchemas]
+  /// по провайдеру и идентификатору модели.
+  static ModelInfo _withSchema(ModelInfo info) {
+    if (info.generationSchema != null) return info;
+    final out = info.outputModalities;
+    final modality = out.contains(Modality.video)
+        ? Modality.video
+        : out.contains(Modality.image)
+            ? Modality.image
+            : Modality.text;
+    final schema = CuratedParameterSchemas.resolve(
+      info.providerId,
+      info.id,
+      modality,
+    );
+    if (schema == null) return info;
+    return info.copyWith(generationSchema: schema);
   }
 
   /// Принудительное обогащение по эвристике: если каталог провайдера
@@ -138,7 +162,9 @@ abstract final class ModelInfoResolver {
         if (v is String && v.trim().isNotEmpty) id = v.trim();
       }
       if (id == null || id.isEmpty || !seen.add(id)) continue;
-      out.add(HeuristicRules.build(id, providerId: providerId));
+      out.add(
+        _withSchema(HeuristicRules.build(id, providerId: providerId)),
+      );
     }
     return out;
   }

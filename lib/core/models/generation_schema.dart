@@ -111,12 +111,17 @@ class ParamSpec {
   /// 'true'/'false', для числовых — строковое число.
   final String defaultValue;
 
+  /// Скрытый параметр: участвует в payload запроса, но не показывается
+  /// в интерфейсе (например, фиксированная длительность у части моделей).
+  final bool hidden;
+
   const ParamSpec({
     required this.key,
     required this.label,
     required this.type,
     this.options = const <ParamOption>[],
     this.defaultValue = '',
+    this.hidden = false,
   });
 
   /// Значение по умолчанию, приведённое к типу параметра:
@@ -158,6 +163,7 @@ class ParamSpec {
           for (final o in options) o.toJson(),
         ],
         'defaultValue': defaultValue,
+        if (hidden) 'hidden': true,
       };
 
   factory ParamSpec.fromJson(Map<String, dynamic> j) {
@@ -182,6 +188,7 @@ class ParamSpec {
       type: _typeFromName(j['type'] as String?),
       options: options,
       defaultValue: (j['defaultValue'] as String?) ?? '',
+      hidden: j['hidden'] == true,
     );
   }
 
