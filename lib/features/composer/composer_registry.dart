@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'composer_mode.dart';
+import 'modes/image_gen_mode.dart';
 import 'modes/live_mode.dart';
 import 'modes/text_mode.dart';
 
@@ -11,11 +12,12 @@ import 'modes/text_mode.dart';
 class ComposerModeRegistry {
   final List<ComposerMode> _modes;
 
-  /// По умолчанию зарегистрированы текстовый и голосовой режимы;
-  /// будущие режимы (изображения, поиск и т.п.) добавляются сюда.
-  /// Первый режим в списке считается режимом по умолчанию.
+  /// По умолчанию зарегистрированы текстовый, голосовой режимы и режим
+  /// генерации изображений. Первый режим в списке считается режимом
+  /// по умолчанию.
   ComposerModeRegistry({List<ComposerMode>? modes})
-      : _modes = modes ?? const <ComposerMode>[TextMode(), LiveMode()];
+      : _modes = modes ??
+            const <ComposerMode>[TextMode(), LiveMode(), ImageGenMode()];
 
   /// Все зарегистрированные режимы (только для чтения).
   List<ComposerMode> get modes => List.unmodifiable(_modes);

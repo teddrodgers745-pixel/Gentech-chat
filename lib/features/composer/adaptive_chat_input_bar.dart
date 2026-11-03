@@ -3,9 +3,11 @@
 import 'package:flutter/material.dart';
 
 import '../../models/model_config.dart';
+import '../../widgets/inputs/image_gen_input.dart';
 import '../../widgets/inputs/live_voice_input.dart';
 import '../../widgets/inputs/text_chat_input.dart';
 import 'composer_mode.dart';
+import 'modes/image_gen_mode.dart';
 import 'composer_registry.dart';
 import 'modes/live_mode.dart';
 
@@ -28,6 +30,9 @@ class AdaptiveChatInputBar extends StatelessWidget {
   final VoidCallback? onStop;
   final VoidCallback? onStartLive;
 
+  /// Смена выбранной пропорции в режиме генерации изображений.
+  final ValueChanged<String>? onAspectRatioChanged;
+
   /// Реестр режимов композера; null — стандартный реестр
   /// (текстовый и голосовой режимы).
   final ComposerModeRegistry? registry;
@@ -45,11 +50,13 @@ class AdaptiveChatInputBar extends StatelessWidget {
     this.onSend,
     this.onStop,
     this.onStartLive,
+    this.onAspectRatioChanged,
     this.registry,
   });
 
   /// Режим по типу модели: live-модель — голосовой режим из реестра,
-  /// всё остальное — режим по умолчанию (текстовый).
+  /// модель-картинка — режим генерации изображений, всё остальное —
+  /// режим по умолчанию (текстовый).
   static ComposerMode _resolveMode(
     ModelConfig config,
     ComposerModeRegistry reg,
@@ -57,6 +64,10 @@ class AdaptiveChatInputBar extends StatelessWidget {
     if (config is LiveVoiceModelConfig) {
       final live = reg.byId(LiveMode.modeId);
       if (live != null) return live;
+    }
+    if (config is ImageGenModelConfig) {
+      final image = reg.byId(ImageGenMode.modeId);
+      if (image != null) return image;
     }
     return reg.defaultMode;
   }
@@ -76,6 +87,21 @@ class AdaptiveChatInputBar extends StatelessWidget {
         key: const ValueKey<String>('live_voice_input'),
         config: liveCfg,
         onStartLive: onStartLive,
+      );
+    } else if (mode.id == ImageGenMode.modeId) {
+      final imageCfg = cfg is ImageGenModelConfig
+          ? cfg
+          : const ImageGenModelConfig(
+              availableAspectRatios: <String>['1:1', '16:9', '9:16'],
+            );
+      child = ImageGenInput(
+        key: const ValueKey<String>('image_gen_input'),
+        config: imageCfg,
+        controller: controller,
+        streaming: streaming,
+        onAspectRatioChanged: onAspectRatioChanged,
+        onSend: onSend,
+        onStop: onStop,
       );
     } else {
       // Текстовый режим (а также генерация изображений: текстовый ввод
