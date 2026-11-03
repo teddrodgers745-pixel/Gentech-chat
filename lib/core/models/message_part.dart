@@ -112,7 +112,8 @@ class VideoPart extends MessagePart {
 }
 
 /// Часть, которая ещё «в процессе»: например, вложение выбрано, но его
-/// содержимое ещё не прочитано или ещё не загружено на провайдера.
+/// содержимое ещё не прочитано, либо выполняется асинхронная задача
+/// генерации (видео) с прогрессом и идентификатором у провайдера.
 class PendingPart extends MessagePart {
   /// Локальный путь файла, который обрабатывается (если известен).
   final String? localPath;
@@ -120,23 +121,35 @@ class PendingPart extends MessagePart {
   /// Понятное имя (имя файла либо подпись операции).
   final String name;
 
-  const PendingPart({required this.name, this.localPath});
+  /// Идентификатор асинхронной задачи у провайдера ('' — пока не известен).
+  final String jobId;
+
+  /// Прогресс задачи в процентах (0..100).
+  final double progress;
+
+  const PendingPart({
+    required this.name,
+    this.localPath,
+    this.jobId = '',
+    this.progress = 0,
+  });
 
   @override
   String get label => 'в обработке: $name';
 
   @override
-  String toString() => 'PendingPart($name)';
+  String toString() => 'PendingPart($name, $jobId)';
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is PendingPart &&
           other.name == name &&
-          other.localPath == localPath);
+          other.localPath == localPath &&
+          other.jobId == jobId);
 
   @override
-  int get hashCode => Object.hash(name, localPath);
+  int get hashCode => Object.hash(name, localPath, jobId);
 }
 
 /// Часть-ошибка: генерация ответа завершилась ошибкой [GenError].

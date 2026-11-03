@@ -119,4 +119,111 @@ abstract final class ArtifactMaterializer {
     }
     return '.png';
   }
+
+  // ---------- видео ----------
+
+  /// Таймаут и лимит размера для видео (ролики заметно больше картинок).
+  static const Duration _videoTimeout = Duration(seconds: 300);
+  static const int _maxVideoBytes = 200 * 1024 * 1024;
+
+  /// Скачивает видео [url] и сохраняет в Documents/GenTech/videos.
+  /// Возвращает абсолютный путь файла либо null: сеть недоступна,
+  /// содержимое не похоже на видео, ошибка записи.
+  static Future<String?> materializeVideo(
+    String url, {
+    http.Client? client,
+  }) async {
+    final trimmed = url.trim();
+    if (trimmed.startsWith('data:')) return _materializeVideoDataUrl(trimmed);
+    final u = Uri.tryParse(trimmed);
+    if (u == null || (u.scheme != 'http' && u.scheme != 'https')) return null;
+    final own = client == null;
+    final c = client ?? http.Client();
+    try {
+      final resp = await c.get(u).timeout(_videoTimeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) return null;
+      final bytes = resp.bodyBytes;
+      if (bytes.isEmpty || bytes.length > _maxVideoBytes) return null;
+      if (!_looksLikeVideo(bytes, resp)) return null;
+      final docs = await getApplicationDocumentsDirectory();
+      final folder = Directory('${docs.path}/GenTech/videos');
+      await folder.create(recursive: true);
+      final file = File(
+        '${folder.path}/vid_${DateTime.now().millisecondsSinceEpoch}'
+        '${_videoExt(resp, trimmed)}',
+      );
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    } catch (_) {
+      return null;
+    } finally {
+      if (own) c.close();
+    }
+  }
+
+  /// Сохраняет data URL вида data:video/mp4;base64,... в локальный файл.
+  static Future<String?> _materializeVideoDataUrl(String dataUrl) async {
+    final m = RegExp(
+      r'^data:video/([a-zA-Z0-9.+-]+);base64,(.+)$',
+      dotAll: true,
+    ).firstMatch(dataUrl.trim());
+    if (m == null) return null;
+    final mime = m.group(1)!.toLowerCase();
+    final raw = m.group(2)!.replaceAll(RegExp(r'\s'), '');
+    if (raw.isEmpty) return null;
+    List<int> bytes;
+    try {
+      bytes = base64Decode(raw);
+    } catch (_) {
+      return null;
+    }
+    if (bytes.isEmpty || bytes.length > _maxVideoBytes) return null;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final folder = Directory('${docs.path}/GenTech/videos');
+      await folder.create(recursive: true);
+      final file = File(
+        '${folder.path}/vid_${DateTime.now().millisecondsSinceEpoch}'
+        '${_videoExtFromMime(mime)}',
+      );
+      await file.writeAsBytes(bytes, flush: true);
+      return file.path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Похоже ли содержимое на видеофайл: mp4-магия 'ftyp' на смещении 4,
+  /// либо Content-Type с video/mp4/octet-stream.
+  static bool _looksLikeVideo(List<int> b, http.Response resp) {
+    if (b.length >= 12 &&
+        b[4] == 0x66 && // 'f'
+        b[5] == 0x74 && // 't'
+        b[6] == 0x79 && // 'y'
+        b[7] == 0x70) {
+      return true; // 'ftyp'
+    }
+    final ct = (resp.headers['content-type'] ?? '').toLowerCase();
+    return ct.contains('video') ||
+        ct.contains('mp4') ||
+        ct.contains('octet-stream');
+  }
+
+  static String _videoExtFromMime(String mime) {
+    if (mime.contains('webm')) return '.webm';
+    if (mime.contains('quicktime') || mime.contains('mov')) return '.mov';
+    return '.mp4';
+  }
+
+  /// Расширение по Content-Type, затем по пути URL; по умолчанию .mp4.
+  static String _videoExt(http.Response resp, String url) {
+    final ct = (resp.headers['content-type'] ?? '').toLowerCase();
+    if (ct.contains('webm')) return '.webm';
+    if (ct.contains('quicktime')) return '.mov';
+    final path = url.split('?').first.toLowerCase();
+    for (final e in const ['.mp4', '.webm', '.mov']) {
+      if (path.endsWith(e)) return e;
+    }
+    return '.mp4';
+  }
 }

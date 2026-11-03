@@ -53,3 +53,25 @@ class GenerationFailure extends GenerationEvent {
   String toString() => 'GenerationFailure(${error.code})';
 }
 
+/// Прогресс асинхронной задачи (генерация видео и т.п.): процент 0..100.
+class GenProgress extends GenerationEvent {
+  final String jobId;
+  final double percent;
+
+  const GenProgress({required this.jobId, required this.percent});
+}
+
+/// Асинхронная задача завершена: артефакт готов. Заполнен локальный путь
+/// (файл сохранён через ArtifactMaterializer) либо удалённая ссылка.
+class GenCompleted extends GenerationEvent {
+  final String jobId;
+  final String localPath;
+  final String remoteUrl;
+
+  const GenCompleted({
+    required this.jobId,
+    this.localPath = '',
+    this.remoteUrl = '',
+  });
+}
+
