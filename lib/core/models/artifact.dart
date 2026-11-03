@@ -3,7 +3,6 @@
 /// Результат генерации, сохранённый как отдельный артефакт:
 /// изображение или видео, полученное от модели (либо ещё только
 /// запрошенное). Ссылается на локальный файл и/или удалённый URL.
-/// Пока никем не подключён — фундамент для следующих этапов.
 class Artifact {
   /// Виды артефактов.
   static const String kindImage = 'image';
@@ -30,7 +29,10 @@ class Artifact {
   /// Предварительная оценка стоимости генерации в USD; null — нет оценки.
   final double? cost;
 
-  const Artifact({
+  /// Момент создания артефакта.
+  final DateTime createdAt;
+
+  Artifact({
     required this.id,
     this.kind = kindImage,
     this.localPath = '',
@@ -38,7 +40,8 @@ class Artifact {
     this.prompt = '',
     this.modelId = '',
     this.cost,
-  });
+    DateTime? createdAt,
+  }) : createdAt = createdAt ?? DateTime.now();
 
   /// Есть ли локальная копия файла.
   bool get hasLocalFile => localPath.trim().isNotEmpty;
@@ -60,6 +63,7 @@ class Artifact {
         'prompt': prompt,
         'modelId': modelId,
         'cost': cost,
+        'createdAt': createdAt.toIso8601String(),
       };
 
   factory Artifact.fromJson(Map<String, dynamic> j) => Artifact(
@@ -70,6 +74,9 @@ class Artifact {
         prompt: (j['prompt'] as String?) ?? '',
         modelId: (j['modelId'] as String?) ?? '',
         cost: (j['cost'] as num?)?.toDouble(),
+        createdAt:
+            DateTime.tryParse((j['createdAt'] as String?) ?? '') ??
+                DateTime.now(),
       );
 
   /// Копия с заменой отдельных полей.
@@ -80,6 +87,7 @@ class Artifact {
     String? prompt,
     String? modelId,
     double? cost,
+    DateTime? createdAt,
   }) {
     return Artifact(
       id: id,
@@ -89,6 +97,7 @@ class Artifact {
       prompt: prompt ?? this.prompt,
       modelId: modelId ?? this.modelId,
       cost: cost ?? this.cost,
+      createdAt: createdAt ?? this.createdAt,
     );
   }
 
