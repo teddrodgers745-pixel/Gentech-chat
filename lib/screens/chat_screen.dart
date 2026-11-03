@@ -11,6 +11,12 @@ import '../core/storage.dart';
 import '../models.dart';
 import '../models/model_config.dart';
 import '../models/tool.dart';
+import '../core/generation/generation_event.dart';
+import '../core/generation/generation_request.dart';
+import '../core/generation/images_api_executor.dart';
+import '../core/models/model_info.dart';
+import '../core/providers/heuristic_rules.dart';
+import '../features/composer/modes/image_gen_mode.dart';
 import '../services/chat_service.dart';
 import '../services/speech_service.dart';
 import '../services/tts_service.dart';
@@ -47,6 +53,12 @@ class _ChatScreenState extends State<ChatScreen> {
   /// 3 = xHigh, 4 = Max.
   int _reasoningLevel = 0;
 
+  /// Выбранная пропорция изображения (режим генерации картинок).
+  String _aspectRatio = '1:1';
+
+  /// Активный исполнитель генерации изображений (для кнопки «стоп»).
+  ImagesApiExecutor? _imageExecutor;
+
   /// Вложения, ожидающие отправки (файлы и картинки).
   final List<PlatformFile> _pending = [];
 
@@ -55,15 +67,30 @@ class _ChatScreenState extends State<ChatScreen> {
     if (modelId.contains('live') || modelId.contains('native-audio')) {
       return const LiveVoiceModelConfig();
     }
+    if (_isImageModel(modelId)) {
+      return ImageGenModelConfig(
+        availableAspectRatios: <String>[
+          for (final c in ImageGenMode.aspectRatios) c.id,
+        ],
+      );
+    }
     return TextModelConfig(
       supportsAttachments: true,
       supportsWebSearch: settings.webSearchMode != 'off',
     );
   }
 
+  /// Модель-картинка: маршрут генерации изображений по эвристике
+  /// (dall-e, flux, imagen и т.п.). Каталог провайдера имеет приоритет,
+  /// но здесь он недоступен — эвристика консервативна и безопасна.
+  static bool _isImageModel(String modelId) =>
+      HeuristicRules.inferRoute(HeuristicRules.normalize(modelId)) ==
+      GenerationRoute.imageGeneration;
+
   @override
   void dispose() {
     _uiTimer?.cancel();
+    _imageExecutor?.cancel();
     _chatService.cancel();
     ttsService.stop();
     _input.dispose();
@@ -299,6 +326,12 @@ class _ChatScreenState extends State<ChatScreen> {
       _snack('Создайте и выберите профиль модели в настройках');
       return;
     }
+    // Модель-картинка: отправка идёт через /images/generations,
+    // вложения и уровень размышлений не используются.
+    if (_isImageModel(effectiveConfig().model.toLowerCase())) {
+      await _sendImage(txt);
+      return;
+    }
     final picked = <PickedFileRef>[
       for (final f in _pending)
         if (f.path != null && f.path!.isNotEmpty)
@@ -326,6 +359,67 @@ class _ChatScreenState extends State<ChatScreen> {
     await _runCompletion(chat, userApiContent: apiContent);
   }
 
+  /// Генерация изображения: запрос к /images/generations через
+  /// [ImagesApiExecutor]. Результат приходит одним markdown-изображением
+  /// (ссылка провайдера либо локальный файл) и попадает в чат как
+  /// обычное сообщение ассистента.
+  Future<void> _sendImage(String txt) async {
+    if (txt.isEmpty) {
+      _snack('Опишите изображение');
+      return;
+    }
+    final chat = store.current ?? store.createChat();
+    final reply = ChatMessage(id: newId(), role: 'assistant');
+    chat.messages.add(ChatMessage(id: newId(), role: 'user', content: txt));
+    chat.messages.add(reply);
+    if (chat.title == 'Новый чат') {
+      chat.title = txt.length > 40 ? '${txt.substring(0, 40)}…' : txt;
+    }
+    _input.clear();
+    setState(() => _streaming = true);
+    store.touch(chat);
+    _toEnd();
+
+    final cfg = effectiveConfig();
+    final executor = ImagesApiExecutor(aspectRatio: _aspectRatio);
+    _imageExecutor = executor;
+    final request = GenerationRequest(
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey,
+      model: cfg.model,
+      messages: <Map<String, dynamic>>[
+        <String, dynamic>{'role': 'user', 'content': txt},
+      ],
+      stream: false,
+    );
+    String? error;
+    try {
+      await for (final ev in executor.run(request)) {
+        if (ev is GenerationDelta) {
+          reply.content += ev.content;
+        } else if (ev is GenerationFailure) {
+          error = ev.error.message;
+        }
+        _scheduleUi();
+      }
+    } catch (e) {
+      error = 'Ошибка соединения: $e';
+    }
+    _imageExecutor = null;
+
+    _uiTimer?.cancel();
+    _uiTimer = null;
+    if (reply.content.isEmpty) chat.messages.remove(reply);
+    if (!mounted) {
+      await store.save();
+      return;
+    }
+    setState(() => _streaming = false);
+    store.touch(chat);
+    await store.save();
+    if (error != null) _snack(error);
+  }
+
   Future<void> _regenerate() async {
     final chat = store.current;
     if (chat == null || chat.messages.isEmpty || _streaming) return;
@@ -339,7 +433,10 @@ class _ChatScreenState extends State<ChatScreen> {
     await _runCompletion(chat);
   }
 
-  void _stop() => _chatService.cancel();
+  void _stop() {
+    _imageExecutor?.cancel();
+    _chatService.cancel();
+  }
 
   Future<List<Tool>> _activeTools() async {
     try {
@@ -556,6 +653,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 AdaptiveChatInputBar(
                   config: _currentConfig,
                   controller: _input,
+                  onAspectRatioChanged: (r) => _aspectRatio = r,
                   streaming: _streaming,
                   reasoningLevel: _reasoningLevel,
                   onCycleReasoning: _cycleReasoning,
