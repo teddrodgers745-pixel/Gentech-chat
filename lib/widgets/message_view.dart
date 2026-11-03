@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
@@ -250,6 +252,9 @@ class RichMarkdown extends StatelessWidget {
           builders: <String, MarkdownElementBuilder>{
             'code': _CodeBuilder(p, mono),
           },
+          imageBuilder: (Uri uri, String? title, String? alt) {
+            return _MarkdownImage(uri: uri, alt: alt ?? '');
+          },
         );
       },
     );
@@ -409,6 +414,64 @@ class _CodeBlock extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Изображение внутри markdown-ответа: локальный файл (file://, как
+/// сохраняет ImagesApiExecutor) либо сетевая ссылка. Ошибка загрузки
+/// показывается аккуратной заглушкой, сообщение не ломается.
+class _MarkdownImage extends StatelessWidget {
+  final Uri uri;
+  final String alt;
+
+  const _MarkdownImage({required this.uri, required this.alt});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: settings,
+      builder: (context, _) {
+        final p = settings.palette;
+        final Widget image;
+        if (uri.scheme == 'file') {
+          image = Image.file(
+            File(uri.toFilePath()),
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => _placeholder(p),
+          );
+        } else {
+          image = Image.network(
+            uri.toString(),
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => _placeholder(p),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(maxHeight: 420),
+              alignment: Alignment.center,
+              color: p.codeBg,
+              child: image,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _placeholder(Palette p) {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Text(
+        'Не удалось загрузить изображение',
+        textAlign: TextAlign.center,
+        style: TextStyle(color: p.muted, fontSize: 13),
       ),
     );
   }
