@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'generation_schema.dart';
+
 /// Модальность данных: что модель принимает на вход или отдаёт на выход.
 enum Modality {
   text,
@@ -129,9 +131,9 @@ class Pricing {
 }
 
 /// Сводка возможностей модели: модальности входа/выхода, маршрут
-/// генерации, флаги стриминга/инструментов/размышлений, контекст и цены.
-/// Используется интерфейсом (адаптивный ввод, фильтры списка моделей)
-/// и сервисами (выбор формата запроса). Пока никем не вызывается.
+/// генерации, флаги стриминга/инструментов/размышлений, контекст, цены
+/// и схема параметров генерации. Используется интерфейсом (адаптивный
+/// ввод, фильтры списка моделей) и сервисами (выбор формата запроса).
 class ModelInfo {
   /// Полный идентификатор модели, как его вернул каталог
   /// (например 'vendor/model-name').
@@ -170,6 +172,10 @@ class ModelInfo {
   /// Источник этих сведений.
   final CapabilitySource source;
 
+  /// Схема параметров генерации (пропорции, размер, длительность и т.п.);
+  /// null — модель не сообщает параметры либо кеш старого формата.
+  final GenerationSchema? generationSchema;
+
   const ModelInfo({
     required this.id,
     this.displayName,
@@ -183,6 +189,7 @@ class ModelInfo {
     this.contextLength,
     this.pricing,
     this.source = CapabilitySource.heuristic,
+    this.generationSchema,
   });
 
   // ---------- геттеры ----------
@@ -271,6 +278,7 @@ class ModelInfo {
     int? contextLength,
     Pricing? pricing,
     CapabilitySource? source,
+    GenerationSchema? generationSchema,
   }) {
     return ModelInfo(
       id: id,
@@ -285,6 +293,104 @@ class ModelInfo {
       contextLength: contextLength ?? this.contextLength,
       pricing: pricing ?? this.pricing,
       source: source ?? this.source,
+      generationSchema: generationSchema ?? this.generationSchema,
+    );
+  }
+
+  // ---------- сериализация ----------
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'id': id,
+        if (displayName != null) 'displayName': displayName,
+        'providerId': providerId,
+        'inputModalities': <String>[for (final m in inputModalities) m.name],
+        'outputModalities': <String>[for (final m in outputModalities) m.name],
+        'route': route.name,
+        'supportsStreaming': supportsStreaming,
+        'supportsTools': supportsTools,
+        'supportsReasoning': supportsReasoning,
+        if (contextLength != null) 'contextLength': contextLength,
+        if (pricing != null)
+          'pricing': <String, dynamic>{
+            if (pricing!.inputPerMillion != null)
+              'inputPerMillion': pricing!.inputPerMillion,
+            if (pricing!.outputPerMillion != null)
+              'outputPerMillion': pricing!.outputPerMillion,
+            'currency': pricing!.currency,
+          },
+        'source': source.name,
+        if (generationSchema != null)
+          'generationSchema': generationSchema!.toJson(),
+      };
+
+  /// Безопасный разбор: старые кеши без отдельных ключей (включая
+  /// generationSchema) читаются со значениями по умолчанию, битые
+  /// имена enum не роняют разбор.
+  factory ModelInfo.fromJson(Map<String, dynamic> j) {
+    Set<Modality> modalities(Object? raw) {
+      final out = <Modality>{};
+      if (raw is List) {
+        for (final e in raw) {
+          final m = Modality.fromName(e?.toString());
+          if (m != null) out.add(m);
+        }
+      }
+      return out;
+    }
+
+    GenerationRoute routeFrom(Object? raw) {
+      final s = (raw as String?)?.trim() ?? '';
+      for (final r in GenerationRoute.values) {
+        if (r.name == s) return r;
+      }
+      return GenerationRoute.chatCompletions;
+    }
+
+    CapabilitySource sourceFrom(Object? raw) {
+      final s = (raw as String?)?.trim() ?? '';
+      for (final c in CapabilitySource.values) {
+        if (c.name == s) return c;
+      }
+      return CapabilitySource.heuristic;
+    }
+
+    Pricing? pricingFrom(Object? raw) {
+      if (raw is! Map) return null;
+      final m = Map<String, dynamic>.from(raw);
+      final inP = (m['inputPerMillion'] as num?)?.toDouble();
+      final outP = (m['outputPerMillion'] as num?)?.toDouble();
+      if (inP == null && outP == null) return null;
+      return Pricing(
+        inputPerMillion: inP,
+        outputPerMillion: outP,
+        currency: (m['currency'] as String?) ?? 'USD',
+      );
+    }
+
+    var input = modalities(j['inputModalities']);
+    if (input.isEmpty) input = const <Modality>{Modality.text};
+    var output = modalities(j['outputModalities']);
+    if (output.isEmpty) output = const <Modality>{Modality.text};
+
+    final schemaRaw = j['generationSchema'];
+    final schema = schemaRaw is Map
+        ? GenerationSchema.fromJson(Map<String, dynamic>.from(schemaRaw))
+        : null;
+
+    return ModelInfo(
+      id: ((j['id'] as String?) ?? '').trim(),
+      displayName: j['displayName'] as String?,
+      providerId: (j['providerId'] as String?) ?? '',
+      inputModalities: input,
+      outputModalities: output,
+      route: routeFrom(j['route']),
+      supportsStreaming: (j['supportsStreaming'] as bool?) ?? true,
+      supportsTools: (j['supportsTools'] as bool?) ?? true,
+      supportsReasoning: (j['supportsReasoning'] as bool?) ?? false,
+      contextLength: (j['contextLength'] as num?)?.toInt(),
+      pricing: pricingFrom(j['pricing']),
+      source: sourceFrom(j['source']),
+      generationSchema: schema,
     );
   }
 
