@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 
 import '../app_state.dart';
+import '../core/models/message_part.dart';
 import '../models.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
@@ -23,11 +25,16 @@ class MessageView extends StatelessWidget {
   final bool streaming;
   final VoidCallback? onRegenerate;
 
+  /// Части сообщения (ImagePart/VideoPart) для прямого отображения.
+  /// По умолчанию пусто: обычные сообщения рендерятся как раньше.
+  final List<MessagePart> parts;
+
   const MessageView({
     super.key,
     required this.message,
     this.streaming = false,
     this.onRegenerate,
+    this.parts = const <MessagePart>[],
   });
 
   @override
@@ -78,6 +85,7 @@ class MessageView extends StatelessWidget {
                   p: p,
                   size: size,
                 ),
+              ..._partsWidgets(p),
               ..._contentWidgets(message.content),
               if (waiting)
                 const Padding(
@@ -141,6 +149,26 @@ class MessageView extends StatelessWidget {
       }
     }
     return out.isEmpty ? <Widget>[RichMarkdown(content)] : out;
+  }
+
+  /// Части сообщения: изображение (локальный файл либо ссылка) и видео.
+  /// Текстовые и ожидающие части здесь не рендерятся: текст уже входит
+  /// в основной контент, ожидающие части живут в панели ввода.
+  List<Widget> _partsWidgets(Palette p) {
+    if (parts.isEmpty) return const <Widget>[];
+    final out = <Widget>[];
+    for (final part in parts) {
+      switch (part) {
+        case ImagePart():
+          out.add(_PartImage(part: part, p: p));
+        case VideoPart():
+          out.add(_PartVideo(part: part, p: p));
+        case TextPart():
+        case PendingPart():
+          break;
+      }
+    }
+    return out;
   }
 }
 
@@ -472,6 +500,143 @@ class _MarkdownImage extends StatelessWidget {
         'Не удалось загрузить изображение',
         textAlign: TextAlign.center,
         style: TextStyle(color: p.muted, fontSize: 13),
+      ),
+    );
+  }
+}
+
+/// Изображение из части сообщения: локальный файл, https-ссылка либо
+/// data URL. Стиль повторяет изображения в markdown-ответах:
+/// та же рамка, радиус 14, фон codeBg и предел высоты 420.
+class _PartImage extends StatelessWidget {
+  final ImagePart part;
+  final Palette p;
+
+  const _PartImage({required this.part, required this.p});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(maxHeight: 420),
+          alignment: Alignment.center,
+          color: p.codeBg,
+          child: _image(),
+        ),
+      ),
+    );
+  }
+
+  Widget _image() {
+    if (part.isLocal) {
+      return Image.file(
+        File(part.localPath ?? ''),
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => _fallback,
+      );
+    }
+    final url = (part.remoteUrl ?? '').trim();
+    if (url.startsWith('data:image')) {
+      final comma = url.indexOf(',');
+      if (comma >= 0 && comma + 1 < url.length) {
+        try {
+          final bytes = base64Decode(url.substring(comma + 1));
+          return Image.memory(
+            bytes,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => _fallback,
+          );
+        } catch (_) {
+          return _fallback;
+        }
+      }
+      return _fallback;
+    }
+    if (url.isEmpty) return _fallback;
+    return Image.network(
+      url,
+      fit: BoxFit.contain,
+      errorBuilder: (_, __, ___) => _fallback,
+    );
+  }
+
+  Widget get _fallback => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Text(
+          'Не удалось загрузить изображение',
+          textAlign: TextAlign.center,
+          style: TextStyle(color: p.muted, fontSize: 13),
+        ),
+      );
+}
+
+/// Видео из части сообщения: карточка в стиле FileCard с иконкой,
+/// именем файла и пометкой «Видео».
+class _PartVideo extends StatelessWidget {
+  final VideoPart part;
+  final Palette p;
+
+  const _PartVideo({required this.part, required this.p});
+
+  String get _name {
+    final src = part.isLocal ? (part.localPath ?? '') : (part.remoteUrl ?? '');
+    final clean = src.replaceFirst(RegExp(r'^file://'), '');
+    final idx = clean.lastIndexOf('/');
+    if (idx >= 0 && idx < clean.length - 1) return clean.substring(idx + 1);
+    return clean.isEmpty ? 'видео' : clean;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: p.card,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: p.border),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: p.accent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(Icons.movie_outlined, size: 22, color: p.accent),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: fontStyle(
+                    settings.codeFont,
+                    size: 14,
+                    weight: FontWeight.w600,
+                    color: p.text,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Видео',
+                  style: TextStyle(fontSize: 12, color: p.muted),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/gen_error.dart';
+import 'artifact_materializer.dart';
 import 'generation_event.dart';
 import 'generation_executor.dart';
 import 'generation_request.dart';
@@ -146,7 +147,14 @@ class ImagesApiExecutor extends GenerationExecutor {
       final first = data.first;
       if (first is! Map) return null;
       final url = ((first['url'] as String?) ?? '').trim();
-      if (url.isNotEmpty) return url;
+      if (url.isNotEmpty) {
+        // Локальная копия: ссылки провайдеров часто временные и быстро
+        // истекают. При неудаче остаётся исходная ссылка — картинка
+        // всё равно отображается в чате.
+        final local = await ArtifactMaterializer.materialize(url);
+        if (local != null) return 'file://$local';
+        return url;
+      }
       final b64 = ((first['b64_json'] as String?) ?? '').trim();
       if (b64.isEmpty) return null;
       final path = await _saveBase64(b64);
