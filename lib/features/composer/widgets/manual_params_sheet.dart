@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../../../app_state.dart';
 import '../../../core/models/param_spec.dart';
-import '../../../theme.dart';
 
 /// Показывает нижнюю шторку ручного ввода параметров модели.
 /// Возвращает разобранный [ModelParameters] (confidence 'user') либо
