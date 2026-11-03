@@ -5,12 +5,15 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 
 import '../models/gen_error.dart';
+import '../models/generation_schema.dart';
 import '../providers/model_catalog_adapter.dart';
+import '../providers/model_info_resolver.dart';
 import 'artifact_materializer.dart';
 import 'generation_event.dart';
 import 'generation_executor.dart';
 import 'generation_request.dart';
 import 'image_dialect.dart';
+import 'parameter_translator.dart';
 
 /// Исполнитель генерации изображений (HTTP через dio).
 ///
@@ -21,7 +24,9 @@ import 'image_dialect.dart';
 ///  - openRouterChatImages: POST {baseUrl}/chat/completions с полями
 ///    modalities и image_config (OpenRouter).
 ///
-/// Для REST-диалектов в тело передаются одновременно size и aspect_ratio.
+/// Параметры генерации (size, aspect_ratio, resolution и т.п.) собираются
+/// по generationSchema модели через [ParameterTranslator] и вливаются
+/// в тело POST-запроса; для диалекта OpenRouter — внутри image_config.
 /// Если основной REST-эндпоинт ответил 404/405, запрос автоматически
 /// повторяется на альтернативном эндпоинте.
 ///
@@ -142,18 +147,28 @@ class ImagesApiExecutor extends GenerationExecutor {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ${request.apiKey}',
     };
+    // Сведения о модели (эвристика по идентификатору, каталог в
+    // исполнителе недоступен) и нормализация параметров под её
+    // generationSchema: какие поля и в каком виде ожидает провайдер.
+    final providerId = ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '';
+    final info = ModelInfoResolver.resolveModel(providerId, request.model);
+    final translated = ParameterTranslator.translate(
+      <String, dynamic>{ParamKeys.aspectRatio: aspectRatio},
+      info,
+    );
     if (dialect == ImageApiDialect.openRouterChatImages) {
       return dio.post<String>(
         '$base${ImageDialectResolver.primaryPath(dialect)}',
-        data: _openRouterBody(request.model, prompt),
+        data: _openRouterBody(request.model, prompt, translated),
         options: Options(headers: headers),
         cancelToken: token,
       );
     }
     final fallback = ImageDialectResolver.fallbackRestPath(dialect);
+    final body = _restBody(request.model, prompt, translated);
     final first = await dio.post<String>(
       '$base${ImageDialectResolver.primaryPath(dialect)}',
-      data: _restBody(request.model, prompt),
+      data: body,
       options: Options(headers: headers),
       cancelToken: token,
     );
@@ -161,7 +176,7 @@ class ImagesApiExecutor extends GenerationExecutor {
     if (fallback != null && (code == 404 || code == 405)) {
       return dio.post<String>(
         '$base$fallback',
-        data: _restBody(request.model, prompt),
+        data: body,
         options: Options(headers: headers),
         cancelToken: token,
       );
@@ -169,29 +184,50 @@ class ImagesApiExecutor extends GenerationExecutor {
     return first;
   }
 
-  /// Тело REST-запроса: size и aspect_ratio передаются одновременно —
-  /// разные провайдеры читают своё поле, лишнее игнорируют.
-  Map<String, dynamic> _restBody(String model, String prompt) {
+  /// Тело REST-запроса: базовые поля плюс нормализованные параметры
+  /// модели (size, aspect_ratio, image_resolution ... — по её схеме).
+  Map<String, dynamic> _restBody(
+    String model,
+    String prompt,
+    Map<String, dynamic> translated,
+  ) {
+    final params = Map<String, dynamic>.of(translated)
+      ..remove('image_config');
     return <String, dynamic>{
       'model': model,
       'prompt': prompt,
       'n': 1,
-      'size': sizeForRatio(aspectRatio),
-      'aspect_ratio': aspectRatio,
+      ...params,
     };
   }
 
   /// Тело запроса OpenRouter: изображения приходят через chat/completions
-  /// с явным перечислением модальностей и конфигом пропорции.
-  Map<String, dynamic> _openRouterBody(String model, String prompt) {
-    return <String, dynamic>{
+  /// с явным перечислением модальностей; параметры генерации собираются
+  /// в image_config — из результата translate либо из плоских ключей,
+  /// если модель не сообщила openRouterChatConfig-схему.
+  Map<String, dynamic> _openRouterBody(
+    String model,
+    String prompt,
+    Map<String, dynamic> translated,
+  ) {
+    final body = <String, dynamic>{
       'model': model,
       'messages': <Map<String, dynamic>>[
         <String, dynamic>{'role': 'user', 'content': prompt},
       ],
       'modalities': <String>['image', 'text'],
-      'image_config': <String, dynamic>{'aspect_ratio': aspectRatio},
     };
+    final cfg = <String, dynamic>{};
+    final direct = translated['image_config'];
+    if (direct is Map) {
+      cfg.addAll(Map<String, dynamic>.from(direct));
+    }
+    for (final key in const <String>['aspect_ratio', 'size', 'quality']) {
+      final v = translated[key];
+      if (v != null && !cfg.containsKey(key)) cfg[key] = v;
+    }
+    if (cfg.isNotEmpty) body['image_config'] = cfg;
+    return body;
   }
 
   @override
