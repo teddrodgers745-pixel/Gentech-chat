@@ -77,6 +77,10 @@ abstract final class GenErrorMapper {
       case DioExceptionType.connectionError:
       case DioExceptionType.unknown:
         return NetworkError(details: _clip(e.message ?? 'Ошибка соединения.'));
+      default:
+        // Прочие типы Dio (в т.ч. добавленные в новых версиях пакета)
+        // трактуем как сбой соединения — безопасное значение по умолчанию.
+        return NetworkError(details: _clip(e.message ?? 'Ошибка соединения.'));
     }
   }
 

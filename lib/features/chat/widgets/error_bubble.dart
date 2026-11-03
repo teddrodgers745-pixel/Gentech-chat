@@ -2,16 +2,15 @@
 
 import 'package:flutter/material.dart';
 
-import '../../app_state.dart';
-import '../../core/models/gen_error.dart';
-import '../../screens/settings_screen.dart';
-import '../../theme.dart';
+import '../../../core/models/gen_error.dart';
+import '../../../core/models/gen_error_mapper.dart';
+import '../../../screens/settings_screen.dart';
 
 /// Контекстное действие карточки ошибки. Ровно одно на карточку.
 enum _ErrorAction { retry, changeModel, settings }
 
 /// Карточка ошибки генерации в стиле приложения: иконка в тёплом круге,
-/// заголовок, текст ошибки ([GenError.message]) и ОДНА контекстная кнопка:
+/// заголовок, текст ошибки и ОДНА контекстная кнопка:
 ///  - AuthError / InsufficientFunds -> «Настройки»;
 ///  - ModelNotFoundError -> «Сменить модель»;
 ///  - остальные -> «Повторить».
@@ -110,109 +109,104 @@ class ErrorBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: settings,
-      builder: (context, _) {
-        final p = settings.palette;
-        return Container(
-          width: double.infinity,
-          margin: const EdgeInsets.symmetric(vertical: 6),
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: p.card,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: p.border),
-          ),
-          child: Column(
+    final theme = Theme.of(context);
+    final cs = theme.colorScheme;
+    final details = GenErrorMapper.detailsOf(error);
+    final bodyText =
+        details.trim().isEmpty ? 'Не удалось получить ответ от модели.' : details;
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: cs.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 38,
-                    height: 38,
-                    decoration: BoxDecoration(
-                      color: p.accent.withValues(alpha: 0.14),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(_icon, size: 20, color: p.accent),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _title,
-                          style: fontStyle(
-                            settings.bodyFont,
-                            size: 15,
-                            weight: FontWeight.w700,
-                            color: p.text,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          error.message,
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            height: 1.4,
-                            color: p.muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              if (originalPrompt.trim().isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text(
-                  originalPrompt,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.35,
-                    fontStyle: FontStyle.italic,
-                    color: p.muted,
-                  ),
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: 0.14),
+                  shape: BoxShape.circle,
                 ),
-              ],
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: OutlinedButton.icon(
-                  onPressed: () => _run(context),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: p.accent,
-                    side: BorderSide(color: p.accent, width: 1.4),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 16,
-                      vertical: 10,
+                child: Icon(_icon, size: 20, color: cs.primary),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _title,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: cs.onSurface,
+                      ),
                     ),
-                    minimumSize: const Size(0, 40),
-                    textStyle: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
+                    const SizedBox(height: 4),
+                    Text(
+                      bodyText,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        height: 1.4,
+                        color: cs.onSurfaceVariant,
+                      ),
                     ),
-                  ),
-                  icon: Icon(
-                    switch (_action) {
-                      _ErrorAction.retry => Icons.refresh_rounded,
-                      _ErrorAction.changeModel => Icons.swap_horiz_rounded,
-                      _ErrorAction.settings => Icons.tune_rounded,
-                    },
-                    size: 18,
-                  ),
-                  label: Text(_actionLabel),
+                  ],
                 ),
               ),
             ],
           ),
-        );
-      },
+          if (originalPrompt.trim().isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              originalPrompt,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: theme.textTheme.bodySmall?.copyWith(
+                height: 1.35,
+                fontStyle: FontStyle.italic,
+                color: cs.onSurfaceVariant,
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              onPressed: () => _run(context),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: cs.primary,
+                side: BorderSide(color: cs.primary, width: 1.4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 10,
+                ),
+                minimumSize: const Size(0, 40),
+                textStyle: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              icon: Icon(
+                switch (_action) {
+                  _ErrorAction.retry => Icons.refresh_rounded,
+                  _ErrorAction.changeModel => Icons.swap_horiz_rounded,
+                  _ErrorAction.settings => Icons.tune_rounded,
+                },
+                size: 18,
+              ),
+              label: Text(_actionLabel),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
