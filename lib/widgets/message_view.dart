@@ -601,7 +601,7 @@ class _PartVideo extends StatefulWidget {
   final VideoPart part;
   final Palette p;
 
-  const _PartVideo({super.key, required this.part, required this.p});
+  const _PartVideo({required this.part, required this.p});
 
   @override
   State<_PartVideo> createState() => _PartVideoState();
@@ -815,7 +815,7 @@ class _PartPending extends StatelessWidget {
   final PendingPart part;
   final Palette p;
 
-  const _PartPending({super.key, required this.part, required this.p});
+  const _PartPending({required this.part, required this.p});
 
   @override
   Widget build(BuildContext context) {

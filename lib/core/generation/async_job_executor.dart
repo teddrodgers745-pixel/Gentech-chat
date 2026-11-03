@@ -76,7 +76,6 @@ class AsyncJobExecutor extends GenerationExecutor {
   static final Map<String, AsyncJobExecutor> _active =
       <String, AsyncJobExecutor>{};
 
-  http.Client? _client;
   bool _cancelled = false;
   String _jobId = '';
 
@@ -114,7 +113,6 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
     final base = request.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     final client = http.Client();
-    _client = client;
     try {
       final created = await _createJob(client, base, request, prompt);
       if (_cancelled) {
@@ -178,7 +176,6 @@ class AsyncJobExecutor extends GenerationExecutor {
       if (_jobId.isNotEmpty && identical(_active[_jobId], this)) {
         _active.remove(_jobId);
       }
-      _client = null;
       client.close();
     }
   }
@@ -190,7 +187,6 @@ class AsyncJobExecutor extends GenerationExecutor {
     _jobId = record.jobId;
     _active[_jobId] = this;
     final client = http.Client();
-    _client = client;
     try {
       yield GenProgress(jobId: _jobId, percent: record.progress);
       yield* _watch(
@@ -202,7 +198,6 @@ class AsyncJobExecutor extends GenerationExecutor {
       if (_jobId.isNotEmpty && identical(_active[_jobId], this)) {
         _active.remove(_jobId);
       }
-      _client = null;
       client.close();
     }
   }
@@ -393,13 +388,13 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
     final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
     if (_failedStatuses.contains(status)) {
-      return _PollResult(
+      return const _PollResult(
         fatal: UnknownGenError(details: 'Провайдер сообщил об ошибке задачи.'),
       );
     }
     if (_doneStatuses.contains(status)) {
-      return _PollResult(
-        fatal: const UnknownGenError(
+      return const _PollResult(
+        fatal: UnknownGenError(
           details: 'Провайдер завершил задачу, но не вернул видео.',
         ),
       );
