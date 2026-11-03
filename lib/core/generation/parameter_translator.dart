@@ -85,12 +85,8 @@ abstract final class ParameterTranslator {
   /// Параметры модели: сначала override пользователя, затем курированный
   /// каталог; null — модель неизвестна ни там, ни там.
   ///
-  /// Параметр [cat] сохранён в сигнатуре по контракту этапа: каталог
-  /// является статическим ([CuratedParameterCatalog.load]/[CuratedParameterCatalog.byId]),
-  /// поэтому внутри используется статический доступ.
   static Future<ModelParameters?> resolveParams(
     String modelId,
-    CuratedParameterCatalog cat,
     UserParamOverrideStore ov,
   ) async {
     final user = await ov.load(modelId);
@@ -169,11 +165,7 @@ abstract final class ParameterTranslator {
     if (!CuratedParameterCatalog.isLoaded) {
       await CuratedParameterCatalog.load();
     }
-    final spec = await resolveParams(
-      modelId,
-      CuratedParameterCatalog,
-      userParamOverrideStore,
-    );
+    final spec = await resolveParams(modelId, userParamOverrideStore);
     if (spec == null || !spec.hasAny) return fallback();
     final p = UniversalParams.fromRaw(rawParams);
     final durations = spec.durations;
