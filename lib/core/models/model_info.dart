@@ -42,7 +42,11 @@ enum GenerationRoute {
   liveRealtime,
   textToSpeech,
   audioTranscription,
-  embeddings;
+  embeddings,
+
+  /// Асинхронная задача генерации видео: запрос создаёт задание,
+  /// результат приходит позже (kling, veo, sora, wan ...).
+  asyncJob;
 
   /// Человекочитаемое название по-русски.
   String get label => switch (this) {
@@ -53,6 +57,7 @@ enum GenerationRoute {
         GenerationRoute.textToSpeech => 'озвучка',
         GenerationRoute.audioTranscription => 'распознавание речи',
         GenerationRoute.embeddings => 'эмбеддинги',
+        GenerationRoute.asyncJob => 'генерация видео (асинхронно)',
       };
 
   /// Модель общается через чат-протокол (текстовые сообщения).

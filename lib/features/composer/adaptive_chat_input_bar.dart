@@ -2,6 +2,8 @@
 
 import 'package:flutter/material.dart';
 
+import '../../app_state.dart';
+import '../../core/providers/heuristic_rules.dart';
 import '../../models/model_config.dart';
 import '../../widgets/inputs/image_gen_input.dart';
 import '../../widgets/inputs/live_voice_input.dart';
@@ -10,6 +12,8 @@ import 'composer_mode.dart';
 import 'modes/image_gen_mode.dart';
 import 'composer_registry.dart';
 import 'modes/live_mode.dart';
+import 'video_gen_input.dart';
+import 'video_gen_mode.dart';
 
 /// Адаптивная нижняя панель чата: активный режим ввода выбирается через
 /// [ComposerModeRegistry] по типу [ModelConfig], панель переключается
@@ -55,11 +59,13 @@ class AdaptiveChatInputBar extends StatelessWidget {
   });
 
   /// Режим по типу модели: live-модель — голосовой режим из реестра,
-  /// модель-картинка — режим генерации изображений, всё остальное —
+  /// модель-картинка — режим генерации изображений, видео-модель
+  /// (kling, veo, sora ...) — режим генерации видео, всё остальное —
   /// режим по умолчанию (текстовый).
   static ComposerMode _resolveMode(
     ModelConfig config,
     ComposerModeRegistry reg,
+    String modelId,
   ) {
     if (config is LiveVoiceModelConfig) {
       final live = reg.byId(LiveMode.modeId);
@@ -69,13 +75,18 @@ class AdaptiveChatInputBar extends StatelessWidget {
       final image = reg.byId(ImageGenMode.modeId);
       if (image != null) return image;
     }
+    final video = reg.byId(VideoGenMode.modeId);
+    if (video != null &&
+        video.supportsModel(HeuristicRules.build(modelId).outputModalities)) {
+      return video;
+    }
     return reg.defaultMode;
   }
 
   @override
   Widget build(BuildContext context) {
     final reg = registry ?? ComposerModeRegistry();
-    final mode = _resolveMode(config, reg);
+    final mode = _resolveMode(config, reg, effectiveConfig().model);
     final cfg = config;
 
     final Widget child;
@@ -100,6 +111,14 @@ class AdaptiveChatInputBar extends StatelessWidget {
         controller: controller,
         streaming: streaming,
         onAspectRatioChanged: onAspectRatioChanged,
+        onSend: onSend,
+        onStop: onStop,
+      );
+    } else if (mode.id == VideoGenMode.modeId) {
+      child = VideoGenInput(
+        key: const ValueKey<String>('video_gen_input'),
+        controller: controller,
+        streaming: streaming,
         onSend: onSend,
         onStop: onStop,
       );

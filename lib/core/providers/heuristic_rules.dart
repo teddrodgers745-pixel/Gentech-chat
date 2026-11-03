@@ -13,6 +13,15 @@ abstract final class HeuristicRules {
     'dall-e', 'dalle', 'flux', 'stable-diffusion', 'stablediffusion',
     'sdxl', 'sd3', 'imagen', 'recraft', 'ideogram', 'kolors', 'cogview',
     'seedream', 'hidream', 'qwen-image', 'gpt-image', 'grok-2-image',
+    // wanx — генератор изображений Ali: без этой подсказки подстрока 'wan'
+    // из видео-списка ошибочно утащила бы его в видео.
+    'wanx',
+  ];
+
+  // --- генераторы видео (асинхронная задача, результат приходит позже) ---
+  static const List<String> _videoGenHints = <String>[
+    'kling', 'wan', 'sora', 'veo', 'runway', 'gen-3', 'luma', 'ray-2',
+    'minimax-video', 'hailuo', 'hunyuan-video', 'seedance', 'cogvideo',
   ];
 
   // --- голосовые realtime-модели (двусторонний аудиочат) ---
@@ -92,6 +101,11 @@ abstract final class HeuristicRules {
     if (containsAny(id, _imageGenHints)) {
       return GenerationRoute.imageGeneration;
     }
+    // Видео проверяется ПОСЛЕ изображений: 'gen-3' входит в 'imagen-3',
+    // и без этого порядка картинка misклассифицировалась бы как видео.
+    if (containsAny(id, _videoGenHints)) {
+      return GenerationRoute.asyncJob;
+    }
     if (containsAny(id, _embeddingHints)) return GenerationRoute.embeddings;
     if (containsAny(id, _liveVoiceHints)) return GenerationRoute.liveRealtime;
     if (containsAny(id, _ttsHints)) return GenerationRoute.textToSpeech;
@@ -113,6 +127,7 @@ abstract final class HeuristicRules {
       case GenerationRoute.embeddings:
       case GenerationRoute.textToSpeech:
       case GenerationRoute.imageGeneration:
+      case GenerationRoute.asyncJob:
         return const <Modality>{Modality.text};
       case GenerationRoute.liveRealtime:
         final out = <Modality>{Modality.text, Modality.audio};
@@ -137,6 +152,8 @@ abstract final class HeuristicRules {
     switch (r) {
       case GenerationRoute.imageGeneration:
         return const <Modality>{Modality.image};
+      case GenerationRoute.asyncJob:
+        return const <Modality>{Modality.video};
       case GenerationRoute.textToSpeech:
       case GenerationRoute.liveRealtime:
         return const <Modality>{Modality.audio, Modality.text};

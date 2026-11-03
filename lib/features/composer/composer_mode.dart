@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import '../../core/models/model_info.dart';
+
 /// Инструменты, доступные панели ввода (композера).
 /// Какой из них показывать, решает активный [ComposerMode].
 enum ComposerTool {
@@ -26,4 +28,12 @@ abstract class ComposerMode {
 
   /// Поддерживает ли режим данный инструмент (показывать ли кнопку).
   bool supports(ComposerTool tool);
+
+  /// Приоритет выбора режима: чем больше число, тем выше режим стоит
+  /// при подборе под модель. По умолчанию 0.
+  int get priority => 0;
+
+  /// Подходит ли режим модели с данными модальностями выхода.
+  /// По умолчанию — нет; конкретные режимы переопределяют.
+  bool supportsModel(Set<Modality> outputModalities) => false;
 }

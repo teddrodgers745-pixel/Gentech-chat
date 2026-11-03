@@ -4,6 +4,7 @@ import 'composer_mode.dart';
 import 'modes/image_gen_mode.dart';
 import 'modes/live_mode.dart';
 import 'modes/text_mode.dart';
+import 'video_gen_mode.dart';
 
 /// Реестр режимов композера: список доступных режимов, режим по
 /// умолчанию и поиск по стабильному идентификатору. Новые режимы
@@ -12,12 +13,17 @@ import 'modes/text_mode.dart';
 class ComposerModeRegistry {
   final List<ComposerMode> _modes;
 
-  /// По умолчанию зарегистрированы текстовый, голосовой режимы и режим
-  /// генерации изображений. Первый режим в списке считается режимом
-  /// по умолчанию.
+  /// По умолчанию зарегистрированы текстовый, голосовой режимы, режим
+  /// генерации изображений и режим генерации видео. Первый режим
+  /// в списке считается режимом по умолчанию.
   ComposerModeRegistry({List<ComposerMode>? modes})
       : _modes = modes ??
-            const <ComposerMode>[TextMode(), LiveMode(), ImageGenMode()];
+            const <ComposerMode>[
+              TextMode(),
+              LiveMode(),
+              ImageGenMode(),
+              VideoGenMode(),
+            ];
 
   /// Все зарегистрированные режимы (только для чтения).
   List<ComposerMode> get modes => List.unmodifiable(_modes);
