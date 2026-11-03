@@ -1,0 +1,1914 @@
+[
+  {
+    "id": "recraft/recraft-v4",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "auto"
+    ],
+    "size_options": [
+      "1024x1024",
+      "1344x768",
+      "768x1344"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "auto"
+    ],
+    "size_options": [
+      "2048x2048",
+      "2688x1536",
+      "1536x2688"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4-vector",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "size_options": [
+      "1024x1024"
+    ],
+    "special_constraints": [
+      "vector output is SVG"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4-pro-vector",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "size_options": [
+      "2048x2048"
+    ],
+    "special_constraints": [
+      "vector output is SVG"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v3",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4.1",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "auto"
+    ],
+    "size_options": [
+      "1024x1024",
+      "1344x768",
+      "768x1344"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4.1-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "auto"
+    ],
+    "size_options": [
+      "2048x2048"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4.1-vector",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4.1-pro-vector",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "size_options": [
+      "2048x2048"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4.1-utility",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4.1-utility-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4.1-flash",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4-styles",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4-styles-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4-styles-vector",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "recraft/recraft-v4-styles-pro-vector",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "krea/krea-2-medium",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:2",
+      "16:9",
+      "4:5",
+      "2:3",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "krea/krea-2-large",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:2",
+      "16:9",
+      "4:5",
+      "2:3",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "krea/krea-2-medium-turbo",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:2",
+      "16:9",
+      "4:5",
+      "2:3",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "krea/k3-edit",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:2",
+      "16:9",
+      "4:5",
+      "2:3",
+      "9:16"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance-seed/seedream-4.5",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "3:2",
+      "2:3",
+      "auto"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance-seed/seedream-5-0-lite",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "3:2",
+      "2:3",
+      "auto"
+    ],
+    "resolutions": [
+      "1K",
+      "2K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance-seed/seedream-5-0-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "2:3",
+      "3:2",
+      "21:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K"
+    ],
+    "special_constraints": [
+      "conflicting resolution/aspect_ratio rejected"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance-seed/seedream-5-0-flash",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "1:2",
+      "2:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9",
+      "9:19.5",
+      "19.5:9",
+      "9:20",
+      "20:9",
+      "9:21",
+      "21:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "black-forest-labs/flux-3-image",
+    "type": "image",
+    "aspect_ratios": [
+      "21:9",
+      "2:1",
+      "16:9",
+      "3:2",
+      "7:5",
+      "4:3",
+      "5:4",
+      "1:1",
+      "4:5",
+      "3:4",
+      "5:7",
+      "2:3",
+      "9:16",
+      "1:2",
+      "9:21",
+      "auto"
+    ],
+    "resolutions": [
+      "768sq",
+      "1K",
+      "1.5K",
+      "2K",
+      "4K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "black-forest-labs/flux-3-image-klein",
+    "type": "image",
+    "aspect_ratios": [
+      "21:9",
+      "2:1",
+      "16:9",
+      "3:2",
+      "7:5",
+      "4:3",
+      "5:4",
+      "1:1",
+      "4:5",
+      "3:4",
+      "5:7",
+      "2:3",
+      "9:16",
+      "1:2",
+      "9:21",
+      "auto"
+    ],
+    "resolutions": [
+      "768sq",
+      "1K",
+      "1.5K",
+      "2K",
+      "4K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "black-forest-labs/flux.2-max",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3",
+      "16:9",
+      "9:16",
+      "21:9",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "black-forest-labs/flux.2-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3",
+      "16:9",
+      "9:16",
+      "21:9",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "black-forest-labs/flux.2-flex",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3",
+      "16:9",
+      "9:16",
+      "21:9",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "black-forest-labs/flux.2-klein-4b",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3",
+      "16:9",
+      "9:16",
+      "21:9",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "qwen/qwen-image-2.1-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "1:2",
+      "1:4",
+      "2:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "auto"
+    ],
+    "special_constraints": [
+      "width/height rejected with 400; use aspect_ratio only"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "qwen/qwen-image-2.1-turbo",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "1:2",
+      "1:4",
+      "2:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "auto"
+    ],
+    "special_constraints": [
+      "width/height rejected with 400; use aspect_ratio only"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "qwen/qwen-image-3",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "1:2",
+      "1:4",
+      "2:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "auto"
+    ],
+    "special_constraints": [
+      "width/height rejected with 400; use aspect_ratio only"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "qwen/qwen-image-3-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "1:2",
+      "1:4",
+      "2:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "auto"
+    ],
+    "special_constraints": [
+      "width/height rejected with 400; use aspect_ratio only"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "openai/gpt-image-2",
+    "type": "image",
+    "size_options": [
+      "1024x1024",
+      "1536x1024",
+      "1024x1536",
+      "auto"
+    ],
+    "quality_options": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "special_constraints": [
+      "no aspect_ratio, use size only"
+    ],
+    "aspect_ratios": [],
+    "durations": [],
+    "resolutions": [],
+    "confidence": "high"
+  },
+  {
+    "id": "openai/gpt-image-1",
+    "type": "image",
+    "size_options": [
+      "1024x1024",
+      "1536x1024",
+      "1024x1536"
+    ],
+    "quality_options": [
+      "low",
+      "medium",
+      "high",
+      "auto"
+    ],
+    "special_constraints": [
+      "no aspect_ratio, use size only"
+    ],
+    "aspect_ratios": [],
+    "durations": [],
+    "resolutions": [],
+    "confidence": "high"
+  },
+  {
+    "id": "openai/gpt-image-1-mini",
+    "type": "image",
+    "size_options": [
+      "1024x1024",
+      "1536x1024",
+      "1024x1536"
+    ],
+    "quality_options": [
+      "low",
+      "medium",
+      "high",
+      "auto"
+    ],
+    "special_constraints": [
+      "no aspect_ratio, use size only"
+    ],
+    "aspect_ratios": [],
+    "durations": [],
+    "resolutions": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/gemini-3.1-flash-image",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "1:4",
+      "1:8",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "8:1",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/gemini-3.1-flash-image-preview",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "1:4",
+      "1:8",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "8:1",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/gemini-3.1-flash-lite-image",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "1:4",
+      "1:8",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "8:1",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/gemini-2.5-flash-image",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/gemini-3-pro-image",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/gemini-3-pro-image-preview",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:3",
+      "4:5",
+      "5:4",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/gemini-nano-banana-2.1",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "1:4",
+      "1:8",
+      "2:3",
+      "3:2",
+      "3:4",
+      "4:1",
+      "4:3",
+      "4:5",
+      "5:4",
+      "8:1",
+      "9:16",
+      "16:9",
+      "21:9"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "microsoft/mai-image-2.5",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "3:2",
+      "2:3",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "microsoft/mai-image-2.5-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "3:2",
+      "2:3",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "microsoft/mai-image-2.6",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "3:2",
+      "2:3",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "microsoft/mai-image-2.6-flash",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "4:3",
+      "3:4",
+      "16:9",
+      "9:16",
+      "3:2",
+      "2:3",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "x-ai/grok-imagine-image-2.0",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "3:4",
+      "4:3",
+      "9:16",
+      "16:9",
+      "2:3",
+      "3:2",
+      "9:19.5",
+      "19.5:9",
+      "9:20",
+      "20:9",
+      "1:2",
+      "2:1",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "x-ai/grok-imagine-image-quality",
+    "type": "image",
+    "aspect_ratios": [
+      "1:1",
+      "3:4",
+      "4:3",
+      "9:16",
+      "16:9",
+      "2:3",
+      "3:2",
+      "9:19.5",
+      "19.5:9",
+      "9:20",
+      "20:9",
+      "1:2",
+      "2:1",
+      "auto"
+    ],
+    "durations": [],
+    "resolutions": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "sourceful/riverflow-v2.5-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3",
+      "16:9",
+      "9:16",
+      "21:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "sourceful/riverflow-v2.5-fast",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3",
+      "16:9",
+      "9:16",
+      "21:9"
+    ],
+    "resolutions": [
+      "1K",
+      "2K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "sourceful/riverflow-v2-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "21:9",
+      "16:9",
+      "3:2",
+      "4:3",
+      "5:4",
+      "4:5",
+      "3:4",
+      "2:3",
+      "9:16"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "sourceful/riverflow-v2-fast",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "21:9",
+      "16:9",
+      "3:2",
+      "4:3",
+      "5:4",
+      "4:5",
+      "3:4",
+      "2:3",
+      "9:16"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "sourceful/riverflow-v2.6-pro",
+    "type": "image",
+    "aspect_ratios": [
+      "auto",
+      "1:1",
+      "21:9",
+      "16:9",
+      "3:2",
+      "4:3",
+      "5:4",
+      "4:5",
+      "3:4",
+      "2:3",
+      "9:16"
+    ],
+    "resolutions": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "durations": [],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "openai/sora-2-pro",
+    "type": "video",
+    "size_options": [
+      "1280x720",
+      "720x1280",
+      "1024x1792",
+      "1792x1024",
+      "1920x1080"
+    ],
+    "durations": [
+      4,
+      8,
+      12,
+      16,
+      20
+    ],
+    "special_constraints": [
+      "no aspect_ratio, use size only",
+      "1080p export requires sora-2-pro"
+    ],
+    "aspect_ratios": [],
+    "resolutions": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/veo-3.1",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16"
+    ],
+    "durations": [
+      4,
+      6,
+      8
+    ],
+    "resolutions": [
+      "720p",
+      "1080p",
+      "4K"
+    ],
+    "special_constraints": [
+      "4K only with 8s"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/veo-3.1-fast",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16"
+    ],
+    "durations": [
+      4,
+      6,
+      8
+    ],
+    "resolutions": [
+      "720p",
+      "1080p",
+      "4K"
+    ],
+    "special_constraints": [
+      "4K only with 8s"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "google/veo-3.1-lite",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16"
+    ],
+    "durations": [
+      4,
+      6,
+      8
+    ],
+    "resolutions": [
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "kwaivgi/kling-v3.0-pro",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 3,
+      "max": 15
+    },
+    "resolutions": [
+      "720p",
+      "1080p",
+      "4K"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "kwaivgi/kling-v3.0-std",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 3,
+      "max": 15
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "kwaivgi/kling-video-o1",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1"
+    ],
+    "durations": [
+      5,
+      10
+    ],
+    "resolutions": [
+      "720p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "minimax/hailuo-3",
+    "type": "video",
+    "aspect_ratios": [
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16",
+      "adaptive"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 4,
+      "max": 15
+    },
+    "resolutions": [
+      "768p",
+      "2K"
+    ],
+    "special_constraints": [
+      "720p/1080p rejected"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "minimax/hailuo-3-max",
+    "type": "video",
+    "aspect_ratios": [
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 5,
+      "max": 15
+    },
+    "resolutions": [
+      "480p",
+      "768p"
+    ],
+    "special_constraints": [
+      "2K rejected"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "minimax/hailuo-2.3",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9"
+    ],
+    "durations": [
+      6,
+      10
+    ],
+    "resolutions": [
+      "768p",
+      "1080p"
+    ],
+    "special_constraints": [
+      "1080p only with 6s",
+      "10s only with 768p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "runway/gen-4.5",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "4:3",
+      "1:1",
+      "3:4",
+      "21:9"
+    ],
+    "durations": [
+      5,
+      8,
+      10
+    ],
+    "resolutions": [
+      "720p"
+    ],
+    "special_constraints": [
+      "t2v only 16:9/9:16"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "confidence": "high"
+  },
+  {
+    "id": "alibaba/wan-3.0",
+    "type": "video",
+    "aspect_ratios": [
+      "adaptive",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 2,
+      "max": 30
+    },
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "alibaba/wan-3.0-prime",
+    "type": "video",
+    "aspect_ratios": [
+      "adaptive",
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 2,
+      "max": 30
+    },
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "alibaba/wan-2.7",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1",
+      "4:3",
+      "3:4"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 2,
+      "max": 15
+    },
+    "resolutions": [
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "alibaba/wan-2.6",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16"
+    ],
+    "durations": [
+      5,
+      10,
+      15
+    ],
+    "resolutions": [
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "alibaba/happyhorse-1.0",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1",
+      "4:3",
+      "3:4",
+      "21:9",
+      "9:21"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 3,
+      "max": 15
+    },
+    "resolutions": [
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "alibaba/happyhorse-1.1",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1",
+      "4:3",
+      "3:4",
+      "21:9",
+      "9:21"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 3,
+      "max": 15
+    },
+    "resolutions": [
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance/seedance-2.5",
+    "type": "video",
+    "aspect_ratios": [
+      "auto",
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 4,
+      "max": 30
+    },
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance/seedance-2.0",
+    "type": "video",
+    "aspect_ratios": [
+      "auto",
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 4,
+      "max": 15
+    },
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p",
+      "4K"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance/seedance-2.0-fast",
+    "type": "video",
+    "aspect_ratios": [
+      "auto",
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 4,
+      "max": 15
+    },
+    "resolutions": [
+      "480p",
+      "720p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance/seedance-2.0-mini",
+    "type": "video",
+    "aspect_ratios": [
+      "auto",
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 4,
+      "max": 15
+    },
+    "resolutions": [
+      "480p",
+      "720p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "bytedance/seedance-1-5-pro",
+    "type": "video",
+    "aspect_ratios": [
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 4,
+      "max": 12
+    },
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "x-ai/grok-imagine-video-1.5",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 1,
+      "max": 15
+    },
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "x-ai/grok-imagine-video-1.5-lite",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 1,
+      "max": 15
+    },
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "x-ai/grok-imagine-video",
+    "type": "video",
+    "aspect_ratios": [
+      "16:9",
+      "9:16",
+      "1:1",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 1,
+      "max": 15
+    },
+    "resolutions": [
+      "480p",
+      "720p"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  },
+  {
+    "id": "black-forest-labs/flux-3-video",
+    "type": "video",
+    "aspect_ratios": [
+      "21:9",
+      "16:9",
+      "4:3",
+      "1:1",
+      "3:4",
+      "9:16"
+    ],
+    "durations": {
+      "type": "range",
+      "min": 5,
+      "max": 20
+    },
+    "resolutions": [
+      "720p",
+      "1080p",
+      "2K",
+      "4K"
+    ],
+    "size_options": [],
+    "quality_options": [],
+    "special_constraints": [],
+    "confidence": "high"
+  }
+]
