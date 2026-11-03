@@ -12,6 +12,8 @@ import '../models.dart';
 import '../models/model_config.dart';
 import '../models/tool.dart';
 import '../core/generation/generation_event.dart';
+import '../core/models/gen_error.dart';
+import '../core/models/gen_error_mapper.dart';
 import '../core/generation/generation_request.dart';
 import '../core/generation/images_api_executor.dart';
 import '../core/models/model_info.dart';
@@ -392,24 +394,32 @@ class _ChatScreenState extends State<ChatScreen> {
       ],
       stream: false,
     );
-    String? error;
+    GenError? genError;
     try {
       await for (final ev in executor.run(request)) {
         if (ev is GenerationDelta) {
           reply.content += ev.content;
         } else if (ev is GenerationFailure) {
-          error = ev.error.message;
+          genError = ev.error;
         }
         _scheduleUi();
       }
     } catch (e) {
-      error = 'Ошибка соединения: $e';
+      genError = GenErrorMapper.fromException(e);
     }
     _imageExecutor = null;
 
     _uiTimer?.cancel();
     _uiTimer = null;
-    if (reply.content.isEmpty) chat.messages.remove(reply);
+    if (genError != null) {
+      // Ошибка генерации изображения: карточка ErrorBubble в чате
+      // вместо снекбара, с возможностью повторить запрос.
+      reply
+        ..errorCode = genError.code
+        ..errorText = GenErrorMapper.detailsOf(genError);
+    } else if (reply.content.isEmpty) {
+      chat.messages.remove(reply);
+    }
     if (!mounted) {
       await store.save();
       return;
@@ -417,7 +427,6 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _streaming = false);
     store.touch(chat);
     await store.save();
-    if (error != null) _snack(error);
   }
 
   Future<void> _regenerate() async {
@@ -485,7 +494,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
 
     ChatMessage? toolMsg;
-    String? error;
+    GenError? genError;
     try {
       final tools = await _activeTools();
       await for (final ch in _chatService.sendMessage(
@@ -520,15 +529,21 @@ class _ChatScreenState extends State<ChatScreen> {
         reply.reasoning += ch.reasoning;
         _scheduleUi();
       }
-    } on ChatServiceException catch (e) {
-      error = e.message;
     } catch (e) {
-      if (!_chatService.wasCancelled) error = 'Ошибка соединения: $e';
+      if (!_chatService.wasCancelled) genError = GenErrorMapper.fromException(e);
     }
 
     _uiTimer?.cancel();
     _uiTimer = null;
-    if (reply.content.isEmpty && reply.reasoning.isEmpty) {
+    final err = genError;
+    if (err != null) {
+      // Ошибка сохраняется в самом сообщении и отображается через
+      // ErrorBubble (MessageView читает errorCode/errorText): карточка
+      // с иконкой, текстом и одной контекстной кнопкой «Повторить».
+      reply
+        ..errorCode = err.code
+        ..errorText = GenErrorMapper.detailsOf(err);
+    } else if (reply.content.isEmpty && reply.reasoning.isEmpty) {
       chat.messages.remove(reply);
     }
     if (!mounted) {
@@ -538,10 +553,11 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _streaming = false);
     store.touch(chat);
     await store.save();
-    if (error == null && settings.autoTts && reply.content.trim().isNotEmpty) {
+    if (err == null &&
+        settings.autoTts &&
+        reply.content.trim().isNotEmpty) {
       ttsService.speakAuto(reply.id, reply.content);
     }
-    if (error != null) _snack(error);
   }
 
   // ---------- интерфейс ----------
