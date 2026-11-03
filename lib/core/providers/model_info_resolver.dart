@@ -5,6 +5,7 @@ import 'heuristic_rules.dart';
 import 'model_catalog_adapter.dart';
 import 'openrouter_catalog_adapter.dart';
 import 'polza_catalog_adapter.dart';
+import 'universal_catalog_adapter.dart';
 
 /// Универсальный резолвер сведений о моделях.
 ///
@@ -14,19 +15,25 @@ import 'polza_catalog_adapter.dart';
 ///  3. эвристику по идентификатору модели ([HeuristicRules]) — откат,
 ///     когда каталог недоступен или структура ответа не распознана.
 ///
-/// Пока резолвер никем не вызывается — фундамент для следующих этапов
-/// (список моделей, адаптивный ввод, выбор формата запроса).
+/// Эвристика также выступает «предохранителем» против неверных данных
+/// каталога: если провайдер прислал неправильный тип (например,
+/// text->text для flux-schnell), [enforceHeuristicOverrides] принудительно
+/// восстанавливает маршрут генерации изображений и модальность выхода.
 abstract final class ModelInfoResolver {
-  /// Адаптер каталога по идентификатору провайдера.
-  /// null — провайдер не поддерживает разбор каталога.
+  /// Адаптер каталога по идентификатору провайдера. Для известных
+  /// провайдеров — специализированный адаптер; для остальных —
+  /// [UniversalCatalogAdapter], разбирающий общие поля каталога.
+  /// null — идентификатор пуст.
   static ModelCatalogAdapter? adapterFor(String providerId) {
-    switch (providerId.trim().toLowerCase()) {
+    final id = providerId.trim().toLowerCase();
+    if (id.isEmpty) return null;
+    switch (id) {
       case 'openrouter':
         return const OpenRouterCatalogAdapter();
       case 'polza':
         return const PolzaCatalogAdapter();
       default:
-        return null;
+        return UniversalCatalogAdapter(id);
     }
   }
 
@@ -38,15 +45,18 @@ abstract final class ModelInfoResolver {
   }
 
   /// Разбирает полный ответ каталога через подходящий адаптер.
-  /// Возвращает пустой список, если провайдер не распознан или ответ
-  /// не разобран — вызывающий код в этом случае откатывается к эвристике.
+  /// Возвращает пустой список, если ответ не разобран, — вызывающий
+  /// код в этом случае откатывается к эвристике.
   static List<ModelInfo> parseCatalog(
     String providerId,
     Map<String, dynamic> responseBody,
   ) {
     final adapter = adapterFor(providerId);
     if (adapter == null) return const <ModelInfo>[];
-    return adapter.parseCatalog(responseBody);
+    return <ModelInfo>[
+      for (final m in adapter.parseCatalog(responseBody))
+        enforceHeuristicOverrides(m),
+    ];
   }
 
   /// Сведения об одной модели.
@@ -66,9 +76,43 @@ abstract final class ModelInfoResolver {
     final adapter = adapterFor(providerId);
     if (adapter != null && catalogEntry != null) {
       final info = adapter.parseModelEntry(catalogEntry);
-      if (info != null) return info;
+      if (info != null) return enforceHeuristicOverrides(info);
     }
     return HeuristicRules.build(id, providerId: providerId);
+  }
+
+  /// Принудительное обогащение по эвристике: если каталог провайдера
+  /// сообщил неверный тип модели, эвристика по идентификатору
+  /// восстанавливает маршрут и модальности выхода.
+  ///
+  /// Пример: провайдер отдаёт flux-schnell как text->text — модель
+  /// принудительно помечается маршрутом генерации изображений
+  /// ([GenerationRoute.imageGeneration]) и выходом [Modality.image].
+  /// Аналогично видео-семейства (kling, sora, wan ...) форсируются
+  /// в асинхронный видео-маршрут с выходом [Modality.video].
+  static ModelInfo enforceHeuristicOverrides(ModelInfo info) {
+    final id = HeuristicRules.normalize(info.id);
+    final heuristicRoute = HeuristicRules.inferRoute(id);
+    if (heuristicRoute == GenerationRoute.imageGeneration) {
+      if (info.route != GenerationRoute.imageGeneration ||
+          !info.outputModalities.contains(Modality.image)) {
+        return info.copyWith(
+          route: GenerationRoute.imageGeneration,
+          outputModalities: const <Modality>{Modality.image},
+        );
+      }
+      return info;
+    }
+    if (heuristicRoute == GenerationRoute.asyncJob) {
+      if (info.route != GenerationRoute.asyncJob ||
+          !info.outputModalities.contains(Modality.video)) {
+        return info.copyWith(
+          route: GenerationRoute.asyncJob,
+          outputModalities: const <Modality>{Modality.video},
+        );
+      }
+    }
+    return info;
   }
 
   /// Список моделей из ответа каталога с откатом к эвристике:

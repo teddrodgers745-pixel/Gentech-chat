@@ -99,6 +99,7 @@ abstract class ModelCatalogAdapter {
     final host = (uri?.host ?? '').toLowerCase();
     if (host.endsWith('openrouter.ai')) return 'openrouter';
     if (host.endsWith('polza.ai')) return 'polza';
+    if (host.contains('routerai')) return 'routerai';
     return null;
   }
 }

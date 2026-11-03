@@ -13,6 +13,7 @@ abstract final class HeuristicRules {
     'dall-e', 'dalle', 'flux', 'stable-diffusion', 'stablediffusion',
     'sdxl', 'sd3', 'imagen', 'recraft', 'ideogram', 'kolors', 'cogview',
     'seedream', 'hidream', 'qwen-image', 'gpt-image', 'grok-2-image',
+    'midjourney',
     // wanx — генератор изображений Ali: без этой подсказки подстрока 'wan'
     // из видео-списка ошибочно утащила бы его в видео.
     'wanx',
@@ -22,6 +23,7 @@ abstract final class HeuristicRules {
   static const List<String> _videoGenHints = <String>[
     'kling', 'wan', 'sora', 'veo', 'runway', 'gen-3', 'luma', 'ray-2',
     'minimax-video', 'hailuo', 'hunyuan-video', 'seedance', 'cogvideo',
+    'mochi', 'pika',
   ];
 
   // --- голосовые realtime-модели (двусторонний аудиочат) ---
@@ -48,6 +50,7 @@ abstract final class HeuristicRules {
   static const List<String> _visionHints = <String>[
     'vision', 'omni', '-vl', 'vl-', 'llava', 'pixtral', 'internvl',
     'molmo', 'minicpm-v', 'glm-4v', 'qvq', 'qwen-vl', 'grok-vision',
+    'grok-2-vision', 'deepseek-vl',
     'gpt-4o', 'gpt-4.1', 'gpt-4-turbo', 'gpt-5', 'gemini', 'claude-3',
     'claude-4', 'phi-3-vision', 'phi-4-multimodal', 'gemma-3',
   ];
