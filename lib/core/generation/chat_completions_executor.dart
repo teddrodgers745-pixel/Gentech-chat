@@ -2,7 +2,6 @@
 
 import '../../models/chat_message.dart' show toolStatusDone, toolStatusError, toolStatusRunning;
 import '../models/gen_error.dart';
-import '../../models/tool.dart';
 import '../../services/chat_service.dart';
 import 'generation_event.dart';
 import 'generation_executor.dart';
