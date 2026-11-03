@@ -30,6 +30,10 @@ class GenerationRequest {
   /// Инструменты, разрешённые модели (function calling).
   final List<Tool> tools;
 
+  /// Предварительная оценка стоимости запроса в USD (для Artifact.cost);
+  /// null — оценить не удалось.
+  final double? estimatedUsd;
+
   const GenerationRequest({
     required this.baseUrl,
     required this.apiKey,
@@ -39,6 +43,7 @@ class GenerationRequest {
     this.temperature,
     this.reasoningEffort,
     this.tools = const <Tool>[],
+    this.estimatedUsd,
   });
 
   @override

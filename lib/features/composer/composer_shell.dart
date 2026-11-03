@@ -6,6 +6,7 @@ import '../../app_state.dart';
 import '../../theme.dart';
 import 'composer_controller.dart';
 import 'composer_mode.dart';
+import 'widgets/cost_estimate_badge.dart';
 
 /// Панель ввода (композер): поле сообщения и кнопки инструментов,
 /// которые разрешает активный [ComposerMode]. Пока не подключена к
@@ -77,7 +78,7 @@ class _ComposerShellState extends State<ComposerShell> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: settings,
+      listenable: Listenable.merge(<Listenable>[settings, presets]),
       builder: (context, _) {
         final p = settings.palette;
         final mode = _ctl.mode;
@@ -139,7 +140,17 @@ class _ComposerShellState extends State<ComposerShell> {
                     Expanded(
                       child: Align(
                         alignment: Alignment.centerLeft,
-                        child: _modeBadge(mode, p),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _modeBadge(mode, p),
+                            CostEstimateBadge(
+                              modelId: effectiveConfig().model,
+                              p: p,
+                              textController: _ctl.text,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                     if (mode.supports(ComposerTool.attach) && !streaming)

@@ -16,6 +16,7 @@ import '../core/models/gen_error.dart';
 import '../core/models/gen_error_mapper.dart';
 import '../core/generation/generation_request.dart';
 import '../core/generation/images_api_executor.dart';
+import '../core/models/cost_estimate.dart';
 import '../core/models/model_info.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../features/composer/modes/image_gen_mode.dart';
@@ -393,6 +394,10 @@ class _ChatScreenState extends State<ChatScreen> {
         <String, dynamic>{'role': 'user', 'content': txt},
       ],
       stream: false,
+      estimatedUsd: CostEstimator.estimate(
+        modelId: cfg.model,
+        prompt: txt,
+      ).estimatedUsd,
     );
     GenError? genError;
     try {

@@ -27,6 +27,9 @@ class Artifact {
   /// Идентификатор модели, создавшей артефакт.
   final String modelId;
 
+  /// Предварительная оценка стоимости генерации в USD; null — нет оценки.
+  final double? cost;
+
   const Artifact({
     required this.id,
     this.kind = kindImage,
@@ -34,6 +37,7 @@ class Artifact {
     this.remoteUrl = '',
     this.prompt = '',
     this.modelId = '',
+    this.cost,
   });
 
   /// Есть ли локальная копия файла.
@@ -55,6 +59,7 @@ class Artifact {
         'remoteUrl': remoteUrl,
         'prompt': prompt,
         'modelId': modelId,
+        'cost': cost,
       };
 
   factory Artifact.fromJson(Map<String, dynamic> j) => Artifact(
@@ -64,6 +69,7 @@ class Artifact {
         remoteUrl: (j['remoteUrl'] as String?) ?? '',
         prompt: (j['prompt'] as String?) ?? '',
         modelId: (j['modelId'] as String?) ?? '',
+        cost: (j['cost'] as num?)?.toDouble(),
       );
 
   /// Копия с заменой отдельных полей.
@@ -73,6 +79,7 @@ class Artifact {
     String? remoteUrl,
     String? prompt,
     String? modelId,
+    double? cost,
   }) {
     return Artifact(
       id: id,
@@ -81,6 +88,7 @@ class Artifact {
       remoteUrl: remoteUrl ?? this.remoteUrl,
       prompt: prompt ?? this.prompt,
       modelId: modelId ?? this.modelId,
+      cost: cost ?? this.cost,
     );
   }
 
