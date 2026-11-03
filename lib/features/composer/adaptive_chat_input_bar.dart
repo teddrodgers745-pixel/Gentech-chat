@@ -41,6 +41,10 @@ class AdaptiveChatInputBar extends StatelessWidget {
   /// (текстовый и голосовой режимы).
   final ComposerModeRegistry? registry;
 
+  /// Ручной override типа модели: '' (авто), 'text', 'image' либо 'video'.
+  /// Задан — режим панели выбирается по нему, а не по эвристике.
+  final String modelType;
+
   const AdaptiveChatInputBar({
     super.key,
     required this.config,
@@ -56,21 +60,32 @@ class AdaptiveChatInputBar extends StatelessWidget {
     this.onStartLive,
     this.onAspectRatioChanged,
     this.registry,
+    this.modelType = '',
   });
 
-  /// Режим по типу модели: live-модель — голосовой режим из реестра,
-  /// модель-картинка — режим генерации изображений, видео-модель
-  /// (kling, veo, sora ...) — режим генерации видео, всё остальное —
-  /// режим по умолчанию (текстовый).
+  /// Режим по типу модели: явный override типа имеет приоритет, затем
+  /// live-модель — голосовой режим из реестра, модель-картинка — режим
+  /// генерации изображений, видео-модель (kling, veo, sora ...) — режим
+  /// генерации видео, всё остальное — режим по умолчанию (текстовый).
   static ComposerMode _resolveMode(
     ModelConfig config,
     ComposerModeRegistry reg,
     String modelId,
+    String modelType,
   ) {
     if (config is LiveVoiceModelConfig) {
       final live = reg.byId(LiveMode.modeId);
       if (live != null) return live;
     }
+    if (modelType == 'image') {
+      final image = reg.byId(ImageGenMode.modeId);
+      if (image != null) return image;
+    }
+    if (modelType == 'video') {
+      final video = reg.byId(VideoGenMode.modeId);
+      if (video != null) return video;
+    }
+    if (modelType == 'text') return reg.defaultMode;
     if (config is ImageGenModelConfig) {
       final image = reg.byId(ImageGenMode.modeId);
       if (image != null) return image;
@@ -86,7 +101,8 @@ class AdaptiveChatInputBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final reg = registry ?? ComposerModeRegistry();
-    final mode = _resolveMode(config, reg, effectiveConfig().model);
+    final mode =
+        _resolveMode(config, reg, effectiveConfig().model, modelType);
     final cfg = config;
 
     final Widget child;
