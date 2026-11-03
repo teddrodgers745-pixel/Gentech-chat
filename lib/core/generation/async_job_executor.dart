@@ -16,6 +16,7 @@ import 'generation_event.dart';
 import 'generation_executor.dart';
 import 'generation_request.dart';
 import 'parameter_translator.dart';
+import 'parameter_validation_exception.dart';
 
 /// Результат одного опроса состояния задачи.
 class _PollResult {
@@ -176,6 +177,10 @@ class AsyncJobExecutor extends GenerationExecutor {
       } else {
         yield GenerationFailure(g);
       }
+    } on ParameterValidationException catch (e) {
+      if (!_cancelled) {
+        yield GenerationFailure(BadRequestError(details: e.message));
+      }
     } catch (e) {
       if (!_cancelled) {
         yield GenerationFailure(
@@ -304,9 +309,11 @@ class AsyncJobExecutor extends GenerationExecutor {
     final providerId =
         ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '';
     final info = ModelInfoResolver.resolveModel(providerId, request.model);
-    final translated = ParameterTranslator.translate(
-      Map<String, dynamic>.of(request.parameters),
-      info,
+    final rawParams = Map<String, dynamic>.of(request.parameters);
+    final translated = await ParameterTranslator.translateWithCatalog(
+      modelId: request.model,
+      rawParams: rawParams,
+      fallback: () => ParameterTranslator.translate(rawParams, info),
     );
     final body = jsonEncode(<String, dynamic>{
       'model': request.model,

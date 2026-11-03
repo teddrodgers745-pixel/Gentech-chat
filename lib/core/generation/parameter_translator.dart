@@ -2,24 +2,66 @@
 
 import '../models/generation_schema.dart';
 import '../models/model_info.dart';
+import '../models/param_spec.dart';
+import 'curated_parameter_catalog.dart';
+import 'parameter_validation_exception.dart';
+import 'user_param_override_store.dart';
+
+/// Универсальные параметры генерации, собранные интерфейсом нейтрально:
+/// пропорция, длительность, разрешение, размер холста и качество.
+/// Переводятся в формат конкретной модели методами
+/// [ParameterTranslator.toImageBody] / [ParameterTranslator.toVideoBody]
+/// по её [ModelParameters].
+class UniversalParams {
+  final String? aspectRatio;
+  final int? duration;
+  final String? resolution;
+  final String? size;
+  final String? quality;
+
+  const UniversalParams({
+    this.aspectRatio,
+    this.duration,
+    this.resolution,
+    this.size,
+    this.quality,
+  });
+
+  /// Читает нейтральные параметры из сырой карты запроса (ключи
+  /// [ParamKeys]); пустые и нестроковые значения считаются отсутствующими.
+  factory UniversalParams.fromRaw(Map<String, dynamic> raw) {
+    return UniversalParams(
+      aspectRatio: _string(raw[ParamKeys.aspectRatio]),
+      duration: _int(raw[ParamKeys.duration]),
+      resolution: _string(raw[ParamKeys.resolution]),
+      size: _string(raw[ParamKeys.size]),
+      quality: _string(raw[ParamKeys.quality]),
+    );
+  }
+
+  static String? _string(Object? v) {
+    if (v is! String) return null;
+    final t = v.trim();
+    return t.isEmpty ? null : t;
+  }
+
+  static int? _int(Object? v) {
+    if (v is int) return v;
+    if (v is num) return v.round();
+    if (v is String) return int.tryParse(v.trim());
+    return null;
+  }
+}
 
 /// Нормализация параметров генерации под конкретную модель.
 ///
-/// Интерфейс собирает значения параметров нейтрально (aspect_ratio,
-/// duration, resolution ...), а провайдеры ожидают их в разных форматах.
-/// [ParameterTranslator.translate] приводит сырые параметры к формату
-/// конкретной модели по её [GenerationSchema]:
-///  - [PayloadStyle.sizeOnly] — провайдер понимает только `size`,
-///    пропорция превращается в размер холста через mappedSize;
-///  - [PayloadStyle.openAiSora] — пропорция -> `size`, длительность ->
-///    `seconds` (int), параметры OpenAI Sora;
-///  - [PayloadStyle.openRouterChatConfig] — параметры упаковываются
-///    внутрь `image_config` (chat/completions OpenRouter);
-///  - [PayloadStyle.standardFlat] — плоские поля рядом с model/prompt;
-///    для генераторов изображений разрешение уходит как `image_resolution`.
-///
-/// Если у модели нет схемы (generationSchema == null), параметры
-/// возвращаются как есть — прежнее поведение.
+/// Два уровня:
+///  1. [translateWithCatalog] — курированный каталог
+///     ([CuratedParameterCatalog]) и пользовательский override
+///     ([UserParamOverrideStore], приоритет user > curated) с правилами
+///     ограничений модели ([ModelParameters.constraints]);
+///  2. [translate] — прежний путь по [GenerationSchema] модели;
+///     используется как fallback, когда модель неизвестна каталогу.
 abstract final class ParameterTranslator {
   /// Приводит [rawParams] к формату payload модели [model].
   /// Возвращает новую карту; исходная не меняется.
@@ -38,7 +80,171 @@ abstract final class ParameterTranslator {
     };
   }
 
-  // ---------- стили payload ----------
+  // ---------- каталог параметров (приоритет user > curated) ----------
+
+  /// Параметры модели: сначала override пользователя, затем курированный
+  /// каталог; null — модель неизвестна ни там, ни там.
+  ///
+  /// Параметр [cat] сохранён в сигнатуре по контракту этапа: каталог
+  /// является статическим ([CuratedParameterCatalog.load]/[CuratedParameterCatalog.byId]),
+  /// поэтому внутри используется статический доступ.
+  static Future<ModelParameters?> resolveParams(
+    String modelId,
+    CuratedParameterCatalog cat,
+    UserParamOverrideStore ov,
+  ) async {
+    final user = await ov.load(modelId);
+    if (user != null) return user;
+    return CuratedParameterCatalog.byId(modelId);
+  }
+
+  /// Тело параметров REST-запроса генерации изображения.
+  ///
+  /// Правила по ограничениям модели:
+  ///  - 'no aspect_ratio' — провайдер понимает только size: пропорция
+  ///    конвертируется в размер холста (16:9 -> 1792x1024,
+  ///    9:16 -> 1024x1792, 1:1 -> 1024x1024);
+  ///  - 'width/height rejected' — отправляется только aspect_ratio;
+  ///  - '1080p only with 6s' — проверка комбинации, иначе
+  ///    [ParameterValidationException].
+  static Map<String, dynamic> toImageBody(
+    UniversalParams p,
+    ModelParameters spec,
+  ) {
+    _validateCombination(p, spec);
+    final out = <String, dynamic>{};
+    if (_hasConstraint(spec, 'no aspect_ratio')) {
+      final size = _sizeFor(p);
+      if (size != null) out[ParamKeys.size] = size;
+      _addQuality(out, p, spec);
+      return out;
+    }
+    if (_hasConstraint(spec, 'width/height rejected')) {
+      final r = p.aspectRatio;
+      if (r != null) out[ParamKeys.aspectRatio] = r;
+      return out;
+    }
+    if (p.aspectRatio != null) out[ParamKeys.aspectRatio] = p.aspectRatio!;
+    if (p.size != null) out[ParamKeys.size] = p.size!;
+    if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
+    _addQuality(out, p, spec);
+    return out;
+  }
+
+  /// Тело параметров запроса генерации видео (те же правила ограничений,
+  /// плюс duration/resolution/quality).
+  static Map<String, dynamic> toVideoBody(
+    UniversalParams p,
+    ModelParameters spec,
+  ) {
+    _validateCombination(p, spec);
+    final out = <String, dynamic>{};
+    if (_hasConstraint(spec, 'no aspect_ratio')) {
+      final size = _sizeFor(p);
+      if (size != null) out[ParamKeys.size] = size;
+    } else if (_hasConstraint(spec, 'width/height rejected')) {
+      // Только aspect_ratio: размерные поля не отправляются вовсе.
+      final r = p.aspectRatio;
+      if (r != null) out[ParamKeys.aspectRatio] = r;
+      return out;
+    } else {
+      if (p.aspectRatio != null) out[ParamKeys.aspectRatio] = p.aspectRatio!;
+      if (p.size != null) out[ParamKeys.size] = p.size!;
+    }
+    if (p.duration != null) out[ParamKeys.duration] = p.duration!;
+    if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
+    _addQuality(out, p, spec);
+    return out;
+  }
+
+  /// Точка входа для исполнителей: если модель известна каталогу
+  /// (user override либо curated), тело собирается по правилам
+  /// ограничений; если универсальные параметры пусты или модель
+  /// неизвестна — используется [fallback] (прежнее поведение).
+  static Future<Map<String, dynamic>> translateWithCatalog({
+    required String modelId,
+    required Map<String, dynamic> rawParams,
+    required Map<String, dynamic> Function() fallback,
+  }) async {
+    if (!CuratedParameterCatalog.isLoaded) {
+      await CuratedParameterCatalog.load();
+    }
+    final spec = await resolveParams(
+      modelId,
+      CuratedParameterCatalog,
+      userParamOverrideStore,
+    );
+    if (spec == null || !spec.hasAny) return fallback();
+    final p = UniversalParams.fromRaw(rawParams);
+    final durations = spec.durations;
+    final isVideo = durations != null && !durations.isEmpty;
+    final body = isVideo ? toVideoBody(p, spec) : toImageBody(p, spec);
+    if (body.isEmpty) return fallback();
+    return body;
+  }
+
+  // ---------- правила ограничений ----------
+
+  /// Есть ли у модели ограничение, содержащее [needle] (без регистра).
+  static bool _hasConstraint(ModelParameters spec, String needle) {
+    final n = needle.toLowerCase();
+    for (final c in spec.constraints) {
+      if (c.toLowerCase().contains(n)) return true;
+    }
+    return false;
+  }
+
+  /// Правило '1080p only with 6s': разрешение 1080p допустимо только
+  /// при явно заданной длительности 6 секунд.
+  static void _validateCombination(UniversalParams p, ModelParameters spec) {
+    if (!_hasConstraint(spec, '1080p only with 6s')) return;
+    final res = (p.resolution ?? '').trim().toLowerCase();
+    if (res != '1080p') return;
+    final d = p.duration;
+    if (d != null && d != 6) {
+      throw const ParameterValidationException(
+        'Для этой модели 1080p доступен только при длительности 6 секунд. '
+        'Выберите другое разрешение либо длительность 6 с.',
+      );
+    }
+  }
+
+  /// Размер холста для тела: явный size пользователя, иначе пропорция,
+  /// конвертированная по правилу 'no aspect_ratio'; null — не задано.
+  static String? _sizeFor(UniversalParams p) {
+    final s = p.size;
+    if (s != null && s.isNotEmpty) return s;
+    final r = p.aspectRatio;
+    if (r == null || r.isEmpty) return null;
+    return _sizeForRatio(r);
+  }
+
+  /// 16:9 -> 1792x1024, 9:16 -> 1024x1792, 1:1 и прочее -> 1024x1024.
+  static String _sizeForRatio(String ratio) {
+    switch (ratio.trim()) {
+      case '16:9':
+        return '1792x1024';
+      case '9:16':
+        return '1024x1792';
+      default:
+        return '1024x1024';
+    }
+  }
+
+  /// Качество уходит в тело, только если модель его заявляет
+  /// (либо список качеств неизвестен).
+  static void _addQuality(
+    Map<String, dynamic> out,
+    UniversalParams p,
+    ModelParameters spec,
+  ) {
+    final q = p.quality;
+    if (q == null) return;
+    if (spec.qualities.isNotEmpty && !spec.qualities.contains(q)) return;
+    out[ParamKeys.quality] = q;
+  }
+
+  // ---------- стили payload (прежний путь по GenerationSchema) ----------
 
   /// sizeOnly: единственное поле `size` из mappedSize пропорции либо
   /// из значения параметра size. Ключ aspect_ratio не отправляется.
@@ -100,7 +306,8 @@ abstract final class ParameterTranslator {
     if (duration != null) out[ParamKeys.duration] = duration;
     final resolution = params[ParamKeys.resolution];
     if (resolution is String && resolution.trim().isNotEmpty) {
-      final key = model.isImageGenerator ? 'image_resolution' : ParamKeys.resolution;
+      final key =
+          model.isImageGenerator ? 'image_resolution' : ParamKeys.resolution;
       out[key] = resolution.trim();
     }
     return out;

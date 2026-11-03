@@ -14,6 +14,7 @@ import 'generation_executor.dart';
 import 'generation_request.dart';
 import 'image_dialect.dart';
 import 'parameter_translator.dart';
+import 'parameter_validation_exception.dart';
 
 /// Исполнитель генерации изображений (HTTP через dio).
 ///
@@ -121,6 +122,10 @@ class ImagesApiExecutor extends GenerationExecutor {
           NetworkError(details: 'Ошибка соединения: ${e.message ?? e}'),
         );
       }
+    } on ParameterValidationException catch (e) {
+      if (!_cancelled) {
+        yield GenerationFailure(BadRequestError(details: e.message));
+      }
     } catch (e) {
       if (!_cancelled) {
         yield GenerationFailure(
@@ -152,9 +157,11 @@ class ImagesApiExecutor extends GenerationExecutor {
     // generationSchema: какие поля и в каком виде ожидает провайдер.
     final providerId = ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '';
     final info = ModelInfoResolver.resolveModel(providerId, request.model);
-    final translated = ParameterTranslator.translate(
-      <String, dynamic>{ParamKeys.aspectRatio: aspectRatio},
-      info,
+    final rawParams = <String, dynamic>{ParamKeys.aspectRatio: aspectRatio};
+    final translated = await ParameterTranslator.translateWithCatalog(
+      modelId: request.model,
+      rawParams: rawParams,
+      fallback: () => ParameterTranslator.translate(rawParams, info),
     );
     if (dialect == ImageApiDialect.openRouterChatImages) {
       return dio.post<String>(
