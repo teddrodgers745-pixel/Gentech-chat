@@ -115,6 +115,8 @@ Map<String, dynamic> _encodePart(MessagePart part) {
       'localPath': p.localPath,
       'jobId': p.jobId,
       'progress': p.progress,
+      if (p.debugSnippets != null) 'debugSnippets': p.debugSnippets,
+      if (p.debugLogPath != null) 'debugLogPath': p.debugLogPath,
     };
   }
   if (p is ErrorPart) {
@@ -142,11 +144,16 @@ MessagePart? _decodePart(Object? raw) {
         remoteUrl: (j['remoteUrl'] as String?) ?? '',
       );
     case 'pending':
+      final rawSnippets = j['debugSnippets'];
       return PendingPart(
         name: (j['name'] as String?) ?? '',
         localPath: (j['localPath'] as String?) ?? '',
         jobId: (j['jobId'] as String?) ?? '',
         progress: (j['progress'] as num?)?.toDouble() ?? 0,
+        debugSnippets: rawSnippets is List
+            ? <String>[for (final e in rawSnippets) if (e != null) e.toString()]
+            : null,
+        debugLogPath: (j['debugLogPath'] as String?),
       );
     case 'error':
       return ErrorPart(

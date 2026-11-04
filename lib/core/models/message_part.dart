@@ -127,11 +127,21 @@ class PendingPart extends MessagePart {
   /// Прогресс задачи в процентах (0..100).
   final double progress;
 
+  /// Диагностика зависшей задачи (показ в карточке — этап 2):
+  /// последние события исполнителя ('create: ...',
+  /// 'poll N (http=X): ...', 'file: <путь>') и путь JSONL-файла.
+  final List<String>? debugSnippets;
+
+  /// Путь к debug-файлу задачи; null — диагностика недоступна.
+  final String? debugLogPath;
+
   const PendingPart({
     required this.name,
     this.localPath,
     this.jobId = '',
     this.progress = 0,
+    this.debugSnippets,
+    this.debugLogPath,
   });
 
   @override

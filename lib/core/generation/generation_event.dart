@@ -62,7 +62,23 @@ class GenProgress extends GenerationEvent {
   final String jobId;
   final double percent;
 
-  const GenProgress({required this.jobId, required this.percent});
+  /// true — сервер не сообщил числовой прогресс, но задача «в процессе»:
+  /// интерфейс показывает неопределённую индикацию вместо процента.
+  final bool indeterminate;
+
+  /// Диагностика зависшей задачи: последние события исполнителя
+  /// ('create: ...', 'poll N (http=X): ...') и путь JSONL-файла
+  /// с полным журналом. null — диагностика недоступна.
+  final List<String>? debugSnippets;
+  final String? debugLogPath;
+
+  const GenProgress({
+    required this.jobId,
+    required this.percent,
+    this.indeterminate = false,
+    this.debugSnippets,
+    this.debugLogPath,
+  });
 }
 
 /// Асинхронная задача завершена: артефакт готов. Заполнен локальный путь

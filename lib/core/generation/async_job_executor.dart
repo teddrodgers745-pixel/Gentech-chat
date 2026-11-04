@@ -2,8 +2,10 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
 import 'package:flutter/foundation.dart';
 
@@ -22,9 +24,17 @@ import 'parameter_validation_exception.dart';
 class _PollResult {
   final String videoUrl;
   final double? percent;
+
+  /// Сервер сообщил «в процессе» без числового прогресса.
+  final bool indeterminate;
   final GenError? fatal;
 
-  const _PollResult({this.videoUrl = '', this.percent, this.fatal});
+  const _PollResult({
+    this.videoUrl = '',
+    this.percent,
+    this.indeterminate = false,
+    this.fatal,
+  });
 
   bool get isFatal => fatal != null;
   bool get isDone => videoUrl.isNotEmpty;
@@ -90,6 +100,14 @@ class AsyncJobExecutor extends GenerationExecutor {
 
   bool _cancelled = false;
   String _jobId = '';
+
+  /// Путь к JSONL-файлу диагностики текущей задачи
+  /// (Documents/GenTech/debug/video_<timestamp>.log); null — недоступен.
+  String? debugLogPath;
+
+  /// События задачи для сниппетов PendingPart (create/poll, с отсечкой
+  /// хвоста, чтобы список не рос бесконечно).
+  final List<String> _snippets = <String>[];
 
   /// Отменяет активную задачу по идентификатору. Задача снимается
   /// из хранилища, PendingPart в чате убирается обработчиком события.
