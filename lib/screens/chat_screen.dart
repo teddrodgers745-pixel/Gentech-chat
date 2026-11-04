@@ -114,21 +114,58 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Модель, для которой разрешён [_modelType] (защита от гонки await).
   String _typeFor = '';
 
+  /// Хранилище пользовательских override параметров модели.
+  late final UserParamOverrideStore _overrideStore;
+
+  /// Реактивный контроллер «что умеет активная модель».
+  late final ActiveModelController _activeModel;
+
   @override
   void initState() {
     super.initState();
     // Восстановление незавершённых видео-задач после перезапуска приложения.
     _restoreSub = _genService.restorePendingJobs().listen(_onRestoredEvent);
+    // Контроллер возможностей активной модели: параметры, vision, reasoning.
+    _overrideStore = UserParamOverrideStore();
+    _activeModel = ActiveModelController(overrides: _overrideStore);
     // Смена активной модели (пресет либо общие настройки) -> переопределение
     // эффективного типа модели для панели ввода.
     settings.addListener(_onConfigChanged);
     presets.addListener(_onConfigChanged);
-    _resolveType(effectiveConfig().model.trim());
+    _onConfigChanged();
   }
 
   void _onConfigChanged() {
-    _resolveType(effectiveConfig().model.trim());
+    final modelId = effectiveConfig().model.trim();
+    _resolveType(modelId);
+    _syncActiveModel(modelId);
   }
+
+  /// Инициализация контроллера текущей моделью: параметры берутся из
+  /// override пользователя либо курированного каталога, флаги vision и
+  /// reasoning — из эвристики по идентификатору. Ошибки не роняют экран.
+  Future<void> _syncActiveModel(String modelId) async {
+    final id = modelId.trim();
+    try {
+      await _activeModel.setModel(
+        id,
+        vision: _heuristicVision(id),
+        reasoning: _heuristicReasoning(id),
+      );
+    } catch (_) {
+      // Каталог недоступен — контроллер останется с пустыми параметрами.
+    }
+  }
+
+  /// Принимает ли модель изображения на вход (по эвристике).
+  static bool _heuristicVision(String modelId) {
+    final id = HeuristicRules.normalize(modelId);
+    return HeuristicRules.inferInputModalities(id).contains(Modality.image);
+  }
+
+  /// Умеет ли модель размышлять (по эвристике).
+  static bool _heuristicReasoning(String modelId) =>
+      HeuristicRules.inferSupportsReasoning(HeuristicRules.normalize(modelId));
 
   /// Эффективный тип активной модели для панели ввода: ручной override
   /// типа имеет приоритет, затем эвристика и каталог параметров
@@ -149,6 +186,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
+    _activeModel.dispose();
     settings.removeListener(_onConfigChanged);
     presets.removeListener(_onConfigChanged);
     _restoreSub?.cancel();
