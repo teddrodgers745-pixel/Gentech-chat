@@ -82,8 +82,12 @@ class ModelParameters {
   /// ('no aspect_ratio, use size only', '4K only with 8s' ...).
   List<String> constraints;
 
-  /// Достоверность данных ('high' в курированном каталоге,
-  /// 'user' в пользовательских override).
+  /// Тип модели ('video' и т.п.); null — тип не задан (авто).
+  String? type;
+
+  /// Достоверность данных: 'high' в курированном каталоге, 'auto' из
+  /// пресетов моделей, 'user' в пользовательских override, 'skip' —
+  /// модель не является генератором.
   String confidence;
 
   /// true — параметры заданы пользователем (override), а не каталогом.
@@ -96,13 +100,20 @@ class ModelParameters {
     List<String>? sizes,
     List<String>? qualities,
     List<String>? constraints,
+    this.type,
     this.confidence = 'low',
     this.isUserDefined = false,
   })  : aspectRatios = aspectRatios ?? <String>[],
+
         resolutions = resolutions ?? <String>[],
         sizes = sizes ?? <String>[],
         qualities = qualities ?? <String>[],
         constraints = constraints ?? <String>[];
+
+  /// Пустая спецификация: данных о параметрах нет. Используется каталогом,
+  /// чтобы отличить «нет данных» от «модель не генератор» (confidence='skip').
+  factory ModelParameters.unknown({String confidence = 'low'}) =>
+      ModelParameters(confidence: confidence, isUserDefined: false);
 
   /// Есть ли у модели хоть один настраиваемый параметр.
   bool get hasAny =>
@@ -119,6 +130,7 @@ class ModelParameters {
         'sizes': <String>[...sizes],
         'qualities': <String>[...qualities],
         'constraints': <String>[...constraints],
+        if (type != null) 'type': type,
         'confidence': confidence,
         'isUserDefined': isUserDefined,
       };
@@ -151,6 +163,7 @@ class ModelParameters {
       sizes: strings(j['sizes']),
       qualities: strings(j['qualities']),
       constraints: strings(j['constraints']),
+      type: (j['type'] as String?),
       confidence: (j['confidence'] as String?) ?? 'low',
       isUserDefined: j['isUserDefined'] == true,
     );
