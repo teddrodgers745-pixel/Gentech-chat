@@ -811,11 +811,25 @@ class _PartVideoState extends State<_PartVideo> {
 
 /// Ожидающая часть: круговой прогресс асинхронной задачи (генерация
 /// видео) и кнопка отмены по jobId. Стиль карточки — как у VideoPart.
+/// При наличии диагностики задачи (debugSnippets либо debugLogPath)
+/// под прогрессом показывается сворачиваемый блок отладки: последние
+/// события моноширинным шрифтом, путь JSONL-лога и кнопка копирования.
 class _PartPending extends StatelessWidget {
   final PendingPart part;
   final Palette p;
 
   const _PartPending({required this.part, required this.p});
+
+  /// Есть ли отладочные данные для показа.
+  bool get _hasDebug =>
+      (part.debugSnippets != null && part.debugSnippets!.isNotEmpty) ||
+      part.debugLogPath != null;
+
+  /// Сниппет для показа: обрезается до 500 символов.
+  static String _clipSnippet(String s) {
+    final t = s.trim();
+    return t.length > 500 ? '${t.substring(0, 500)}…' : t;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -830,58 +844,139 @@ class _PartPending extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: p.border),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          SizedBox(
-            width: 42,
-            height: 42,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                SizedBox(
-                  width: 42,
-                  height: 42,
-                  child: CircularProgressIndicator(
-                    value: pct <= 0 ? null : pct / 100,
-                    strokeWidth: 3,
-                    color: p.accent,
-                  ),
+          Row(
+            children: [
+              SizedBox(
+                width: 42,
+                height: 42,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    SizedBox(
+                      width: 42,
+                      height: 42,
+                      child: CircularProgressIndicator(
+                        value: pct <= 0 ? null : pct / 100,
+                        strokeWidth: 3,
+                        color: p.accent,
+                      ),
+                    ),
+                    Icon(Icons.movie_outlined, size: 18, color: p.accent),
+                  ],
                 ),
-                Icon(Icons.movie_outlined, size: 18, color: p.accent),
-              ],
-            ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      part.name.trim().isEmpty ? 'Генерация видео' : part.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: p.text,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${pct.toStringAsFixed(0)}%',
+                      style: TextStyle(fontSize: 12, color: p.muted),
+                    ),
+                  ],
+                ),
+              ),
+              if (part.jobId.trim().isNotEmpty)
+                IconButton(
+                  tooltip: 'Отменить',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 20,
+                  icon: Icon(Icons.close_rounded, size: 20, color: p.muted),
+                  onPressed: () => AsyncJobExecutor.cancelJob(part.jobId),
+                ),
+            ],
           ),
-          const SizedBox(width: 12),
-          Expanded(
+          if (_hasDebug) _debugTile(context, p),
+        ],
+      ),
+    );
+  }
+
+  /// Сворачиваемый блок отладки: сниппеты моноширинным шрифтом
+  /// (до 500 символов каждый), путь debug-файла и кнопка копирования
+  /// всего сразу в буфер обмена одним тапом.
+  Widget _debugTile(BuildContext context, Palette p) {
+    final snippets = part.debugSnippets ?? const <String>[];
+    final path = part.debugLogPath ?? '';
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 4),
+        childrenPadding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+        initiallyExpanded: false,
+        iconColor: p.muted,
+        collapsedIconColor: p.muted,
+        expandedAlignment: Alignment.centerLeft,
+        title: Text(
+          'Показать отладочную информацию',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: p.muted, fontSize: 13),
+        ),
+        trailing: IconButton(
+          tooltip: 'Копировать отладку',
+          visualDensity: VisualDensity.compact,
+          iconSize: 18,
+          icon: Icon(Icons.copy_rounded, size: 18, color: p.muted),
+          onPressed: () {
+            Clipboard.setData(
+              ClipboardData(text: '${snippets.join('\n')}\n$path'),
+            );
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Отладка скопирована'),
+                duration: Duration(seconds: 1),
+              ),
+            );
+          },
+        ),
+        children: [
+          SelectionArea(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  part.name.trim().isEmpty ? 'Генерация видео' : part.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: p.text,
+                for (final s in snippets)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: Text(
+                      _clipSnippet(s),
+                      style: TextStyle(
+                        fontFamily: 'JetBrains Mono',
+                        fontFamilyFallback: const ['monospace'],
+                        fontSize: 11,
+                        height: 1.45,
+                        color: p.text,
+                      ),
+                    ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${pct.toStringAsFixed(0)}%',
-                  style: TextStyle(fontSize: 12, color: p.muted),
-                ),
+                if (path.isNotEmpty)
+                  Text(
+                    'Файл: $path',
+                    style: TextStyle(
+                      fontFamily: 'JetBrains Mono',
+                      fontFamilyFallback: const ['monospace'],
+                      fontSize: 10.5,
+                      color: p.muted,
+                    ),
+                  ),
               ],
             ),
           ),
-          if (part.jobId.trim().isNotEmpty)
-            IconButton(
-              tooltip: 'Отменить',
-              visualDensity: VisualDensity.compact,
-              iconSize: 20,
-              icon: Icon(Icons.close_rounded, size: 20, color: p.muted),
-              onPressed: () => AsyncJobExecutor.cancelJob(part.jobId),
-            ),
         ],
       ),
     );
