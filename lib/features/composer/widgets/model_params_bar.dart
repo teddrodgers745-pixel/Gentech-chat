@@ -192,7 +192,20 @@ class _ModelParamsBarState extends State<ModelParamsBar> {
         if (!_loaded) return const SizedBox.shrink();
         final spec = _spec;
         if (spec == null) return _unknownSection(p);
-        if (!spec.hasAny) return const SizedBox.shrink();
+        final confidence = spec.confidence;
+        // TTS/voice/upscale: генераторам параметры не нужны — панель скрыта.
+        if (confidence == 'skip') return const SizedBox.shrink();
+        // Обычная текстовая LLM (auto без ar/dur/res/sizes): панель не нужна.
+        if (confidence == 'auto' && _isEmptyAutoSpec(spec)) {
+          return const SizedBox.shrink();
+        }
+        if (!spec.hasAny) {
+          // Пользовательский override без значений: подпись и ручной ввод.
+          if (confidence == 'user' || spec.isUserDefined) {
+            return _userOnlySection(p);
+          }
+          return const SizedBox.shrink();
+        }
         return _specSection(p, spec);
       },
     );
@@ -266,6 +279,7 @@ class _ModelParamsBarState extends State<ModelParamsBar> {
     if (chips.isEmpty) return const SizedBox.shrink();
 
     final isUser = spec.confidence == 'user' || spec.isUserDefined;
+    final isAuto = spec.confidence == 'auto';
     return Padding(
       padding: const EdgeInsets.fromLTRB(6, 2, 6, 10),
       child: Column(
@@ -274,8 +288,58 @@ class _ModelParamsBarState extends State<ModelParamsBar> {
           if (isUser) ...[
             _userRow(p),
             const SizedBox(height: 6),
+          ] else if (isAuto) ...[
+            Text(
+              'Параметры из каталога RouterAI',
+              style: TextStyle(
+                fontSize: 11,
+                height: 1.2,
+                color: p.muted,
+              ),
+            ),
+            const SizedBox(height: 6),
           ],
           Wrap(spacing: 8, runSpacing: 8, children: chips),
+          if (isAuto) ...[
+            const SizedBox(height: 8),
+            _smallButton(
+              p,
+              'Указать параметры вручную',
+              Icons.edit_outlined,
+              _manual,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Пустая auto-спецификация: обычная текстовая LLM без параметров
+  /// генерации — панель не показывается вовсе.
+  bool _isEmptyAutoSpec(ModelParameters spec) {
+    final durs = spec.durations;
+    return spec.aspectRatios.isEmpty &&
+        (durs == null || durs.isEmpty) &&
+        spec.resolutions.isEmpty &&
+        spec.sizes.isEmpty;
+  }
+
+  /// Секция пользовательского override без чипсов: подпись, кнопка
+  /// «Сбросить» и ручной ввод для коррекции.
+  Widget _userOnlySection(Palette p) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(6, 2, 6, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _userRow(p),
+          const SizedBox(height: 8),
+          _smallButton(
+            p,
+            'Указать параметры вручную',
+            Icons.edit_outlined,
+            _manual,
+          ),
         ],
       ),
     );
