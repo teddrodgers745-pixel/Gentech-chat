@@ -90,7 +90,8 @@ class AsyncJobExecutor extends GenerationExecutor {
   /// Статусы «задача ещё выполняется»: при отсутствии явного прогресса
   /// для них генерируется оптимистичный процент по прошедшему времени.
   static const Set<String> _runningStatuses = <String>{
-    'processing', 'running', 'in_progress',
+    'queued', 'pending', 'starting', 'processing', 'in_progress', 'running',
+    'created',
   };
 
   /// Активные исполнители по jobId — для отмены из интерфейса
@@ -108,6 +109,13 @@ class AsyncJobExecutor extends GenerationExecutor {
   /// События задачи для сниппетов PendingPart (create/poll, с отсечкой
   /// хвоста, чтобы список не рос бесконечно).
   final List<String> _snippets = <String>[];
+
+  /// Raw-тело последнего ответа создания задачи (до jsonDecode) —
+  /// для сниппета диагностики 'create: ...'.
+  String rawCreateBody = '';
+
+  /// Сниппет 'file: <путь>' добавляется в debugSnippets один раз.
+  bool _fileSnippetAdded = false;
 
   /// Отменяет активную задачу по идентификатору. Задача снимается
   /// из хранилища, PendingPart в чате убирается обработчиком события.
@@ -144,6 +152,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     final base = request.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     final client = http.Client();
     try {
+      await _initDebugLog();
       final created = await _createJob(client, base, request, prompt);
       if (_cancelled) {
         yield const GenerationFailure(
@@ -185,7 +194,12 @@ class AsyncJobExecutor extends GenerationExecutor {
       _active[_jobId] = this;
       await ActiveJobsStore.instance.save(record);
       // Первый прогресс сразу после создания: интерфейс узнаёт jobId.
-      yield GenProgress(jobId: record.jobId, percent: 0);
+      yield GenProgress(
+        jobId: record.jobId,
+        percent: 0,
+        debugSnippets: _debugPayload(),
+        debugLogPath: debugLogPath,
+      );
       yield* _watch(client, base, record);
     } on GenError catch (g) {
       if (_cancelled) {
@@ -223,9 +237,15 @@ class AsyncJobExecutor extends GenerationExecutor {
     _cancelled = false;
     _jobId = record.jobId;
     _active[_jobId] = this;
+    await _initDebugLog();
     final client = http.Client();
     try {
-      yield GenProgress(jobId: _jobId, percent: record.progress);
+      yield GenProgress(
+        jobId: _jobId,
+        percent: record.progress,
+        debugSnippets: _debugPayload(),
+        debugLogPath: debugLogPath,
+      );
       yield* _watch(
         client,
         record.baseUrl.trim().replaceAll(RegExp(r'/+$'), ''),
@@ -259,6 +279,7 @@ class AsyncJobExecutor extends GenerationExecutor {
         record.jobId,
         record.apiKey,
         record.createdAt,
+        attempt,
       );
       if (_cancelled) {
         await ActiveJobsStore.instance.remove(record.jobId);
@@ -296,7 +317,13 @@ class AsyncJobExecutor extends GenerationExecutor {
       }
       final pct = res.percent ?? _defaultPercent(attempt);
       await ActiveJobsStore.instance.updateProgress(record.jobId, pct);
-      yield GenProgress(jobId: record.jobId, percent: pct);
+      yield GenProgress(
+        jobId: record.jobId,
+        percent: pct,
+        indeterminate: res.indeterminate,
+        debugSnippets: _debugPayload(),
+        debugLogPath: debugLogPath,
+      );
       await Future<void>.delayed(_pollInterval);
     }
     await ActiveJobsStore.instance.remove(record.jobId);
@@ -351,21 +378,29 @@ class AsyncJobExecutor extends GenerationExecutor {
       } catch (e) {
         throw NetworkError(details: 'Ошибка соединения: $e');
       }
+      // Raw-тело ответа до jsonDecode — сохраняется в JSONL-лог.
+      final String rawCreate = resp.body;
+      rawCreateBody = rawCreate;
       debugPrint(
         'AsyncJobExecutor CREATE $base$path -> ${resp.statusCode}: '
-        '${_debugBody(resp.body)}',
+        '${_debugBody(rawCreate)}',
       );
+      await _logCreate('$base$path', resp.statusCode, rawCreate);
       final code = resp.statusCode;
       if (code == 404 || code == 405) continue; // фоллбэк на следующий путь
       if (code < 200 || code >= 300) throw _mapStatus(code, resp.body);
       Object? json;
       try {
-        json = jsonDecode(resp.body);
+        json = jsonDecode(rawCreate);
       } catch (_) {}
       final direct = _findVideoUrl(json, 0) ?? _urlFromMessage(json);
-      if (direct != null) return _CreateResult(directUrl: direct);
+      if (direct != null) {
+        _addSnippet('create: ${_excerpt(rawCreateBody)}');
+        return _CreateResult(directUrl: direct);
+      }
       final id = _findJobId(json, 0);
       if (id == null || id.isEmpty) continue;
+      _addSnippet('create: ${_excerpt(rawCreateBody)}');
       return _CreateResult(
         record: AsyncJobRecord(
           jobId: id,
@@ -388,27 +423,43 @@ class AsyncJobExecutor extends GenerationExecutor {
     String jobId,
     String apiKey,
     DateTime createdAt,
+    int attempt,
   ) async {
     var notFound = 0;
     for (final prefix in _pollPrefixes) {
-      final uri = Uri.tryParse('$base$prefix$jobId');
+      final queryUrl = '$base$prefix$jobId';
+      final uri = Uri.tryParse(queryUrl);
       if (uri == null) continue;
       final http.Response resp;
       try {
         resp = await client
             .get(uri, headers: _authHeaders(apiKey))
             .timeout(_requestTimeout);
-      } on TimeoutException {
+      } on TimeoutException catch (e) {
+        await _logPollError(attempt, queryUrl, 'timeout: $e');
+        _addSnippet('poll $attempt (ошибка): timeout');
         return const _PollResult();
-      } catch (_) {
+      } catch (e) {
         // Сетевая трудность — следующая попытка опроса.
+        await _logPollError(attempt, queryUrl, '$e');
+        _addSnippet('poll $attempt (ошибка): $e');
         return const _PollResult();
       }
+      // Raw-тело ответа до jsonDecode — сохраняется в JSONL-лог.
+      final String rawPollBody = resp.body;
       debugPrint(
-        'AsyncJobExecutor POLL $base$prefix$jobId -> ${resp.statusCode}: '
-        '${_debugBody(resp.body)}',
+        'AsyncJobExecutor POLL $queryUrl -> ${resp.statusCode}: '
+        '${_debugBody(rawPollBody)}',
       );
       final code = resp.statusCode;
+      if (code >= 200 && code < 300) {
+        await _logPollBody(attempt, queryUrl, code, rawPollBody);
+        _addSnippet('poll $attempt (http=$code): ${_excerpt(rawPollBody)}');
+      } else {
+        final err = 'HTTP $code: ${_details(rawPollBody)}';
+        await _logPollError(attempt, queryUrl, err);
+        _addSnippet('poll $attempt (http=$code): ${_excerpt(err)}');
+      }
       if (code == 401 || code == 403) {
         return _PollResult(fatal: AuthError(details: _details(resp.body)));
       }
@@ -474,29 +525,41 @@ class AsyncJobExecutor extends GenerationExecutor {
         ),
       );
     }
+    // Числовой прогресс сервера приоритетен; без числа — «в процессе»
+    // (indeterminate: true), оптимистичный процент сохранён для плавности.
     var percent = pct;
-    if ((percent == null || percent <= 0) &&
-        _runningStatuses.contains(status)) {
+    final indeterminate = percent == null || percent <= 0;
+    if (indeterminate && _runningStatuses.contains(status)) {
       final elapsed = DateTime.now().difference(createdAt).inSeconds;
       percent = (5 + elapsed * 1.5).clamp(5.0, 90.0);
     }
-    return _PollResult(percent: percent);
+    return _PollResult(percent: percent, indeterminate: indeterminate);
   }
 
-  /// Текст ошибки задачи из JSON: json['error'] (строка либо объект с
-  /// message) либо json['message'].
+  /// Текст ошибки задачи из JSON: первый непустой текст из полей
+  /// error / message / details / reason; если поле — объект, берём
+  /// его .message.
   static String _pollErrorText(Object? json) {
     if (json is Map) {
-      final err = json['error'];
-      if (err is Map) {
-        final m = err['message'];
-        if (m is String && m.trim().isNotEmpty) return _clip(m);
+      for (final key in const <String>[
+        'error', 'message', 'details', 'reason',
+      ]) {
+        final t = _errorFieldText(json[key]);
+        if (t != null) return _clip(t);
       }
-      if (err is String && err.trim().isNotEmpty) return _clip(err);
-      final m = json['message'];
-      if (m is String && m.trim().isNotEmpty) return _clip(m);
     }
     return 'Провайдер сообщил об ошибке задачи.';
+  }
+
+  /// Текст одного поля ошибки: строка как есть, объект — его .message.
+  static String? _errorFieldText(Object? v) {
+    if (v is Map) {
+      final m = v['message'];
+      if (m is String && m.trim().isNotEmpty) return m;
+      return null;
+    }
+    if (v is String && v.trim().isNotEmpty) return v;
+    return null;
   }
 
   /// Ссылка на видео внутри choices[0].message (строка либо content):
@@ -521,6 +584,93 @@ class AsyncJobExecutor extends GenerationExecutor {
     final m = RegExp(r'https?://\S+?\.(?:mp4|webm|mov)(?:\?\S*)?')
         .firstMatch(text);
     return m?.group(0);
+  }
+
+  // ---------- диагностика зависания (JSONL-лог) ----------
+
+  /// Готовит путь JSONL-файла диагностики
+  /// Documents/GenTech/debug/video_<timestamp>.log. Best-effort:
+  /// любая ошибка не влияет на генерацию.
+  Future<void> _initDebugLog() async {
+    if (debugLogPath != null) return;
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final dir = Directory('${docs.path}/GenTech/debug');
+      await dir.create(recursive: true);
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      debugLogPath = '${dir.path}/video_$ts.log';
+    } catch (e) {
+      debugPrint('AsyncJobExecutor: debug log init failed: $e');
+      debugLogPath = null;
+    }
+  }
+
+  /// Дописывает одну JSONL-строку в debug-файл. Всё IO в try/catch.
+  Future<void> _logJson(Map<String, dynamic> entry) async {
+    final path = debugLogPath;
+    if (path == null || path.isEmpty) return;
+    try {
+      final f = File(path);
+      await f.parent.create(recursive: true);
+      await f.writeAsString('${jsonEncode(entry)}\n', mode: FileMode.append);
+    } catch (e) {
+      debugPrint('AsyncJobExecutor: debug log write failed: $e');
+    }
+  }
+
+  Future<void> _logCreate(String url, int code, String raw) =>
+      _logJson(<String, dynamic>{
+        'phase': 'create',
+        'url': url,
+        'http': code,
+        'body': raw,
+      });
+
+  Future<void> _logPollBody(int n, String url, int code, String raw) =>
+      _logJson(<String, dynamic>{
+        'phase': 'poll',
+        'n': n,
+        'url': url,
+        'http': code,
+        'body': raw,
+      });
+
+  Future<void> _logPollError(int n, String url, String error) =>
+      _logJson(<String, dynamic>{
+        'phase': 'poll',
+        'n': n,
+        'url': url,
+        'error': error,
+      });
+
+  /// Добавляет событие в сниппеты; хвост отсекается, чтобы список
+  /// не рос бесконечно за 120 попыток опроса.
+  void _addSnippet(String s) {
+    _snippets.add(s);
+    if (_snippets.length > 6) {
+      _snippets.removeRange(0, _snippets.length - 6);
+    }
+  }
+
+  /// Сниппеты для PendingPart: 'file: <путь>' (один раз) плюс последние
+  /// 3 события задачи ('create: ...' / 'poll N (http=X): ...').
+  List<String> _debugPayload() {
+    final out = <String>[];
+    final path = debugLogPath;
+    if (path != null && path.isNotEmpty && !_fileSnippetAdded) {
+      _fileSnippetAdded = true;
+      out.add('file: $path');
+    }
+    final events = _snippets.length > 3
+        ? _snippets.sublist(_snippets.length - 3)
+        : _snippets;
+    return <String>[...out, ...events];
+  }
+
+  /// Фрагмент сырого тела для сниппета (до 500 символов, без переводов строк).
+  static String _excerpt(String raw) {
+    final t = raw.replaceAll('\n', ' ').trim();
+    return t.length > 500 ? '${t.substring(0, 500)}…' : t;
   }
 
   /// Тело ответа для debugPrint: JSON перекодируется, длинные ответы
