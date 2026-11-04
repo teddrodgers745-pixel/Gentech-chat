@@ -947,28 +947,34 @@ class _ChatScreenState extends State<ChatScreen> {
               children: [
                 Expanded(child: _messages(chat, p)),
                 _attachmentActions(p),
-                AdaptiveChatInputBar(
-                  config: _currentConfig,
-                  controller: _input,
-                  modelType: _modelType,
-                  onAspectRatioChanged: (r) => _aspectRatio = r,
-                  streaming: _streaming,
-                  reasoningLevel: _reasoningLevel,
-                  onCycleReasoning: _cycleReasoning,
-                  onToggleMic: _toggleMic,
-                  onAttach: _attach,
-                  onSend: _send,
-                  onStop: _stop,
-                  onStartLive: () {
-                    ttsService.stop();
-                    final key = effectiveConfig().apiKey.trim();
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => LiveScreen(apiKey: key),
-                      ),
-                    );
-                  },
+                // Панель ввода подписана на контроллер активной модели:
+                // смена модели (параметры, vision, reasoning) сразу
+                // перестраивает композер без ручных setState.
+                ListenableBuilder(
+                  listenable: _activeModel,
+                  builder: (ctx, _) => AdaptiveChatInputBar(
+                    config: _currentConfig,
+                    controller: _input,
+                    modelType: _modelType,
+                    onAspectRatioChanged: (r) => _aspectRatio = r,
+                    streaming: _streaming,
+                    reasoningLevel: _reasoningLevel,
+                    onCycleReasoning: _cycleReasoning,
+                    onToggleMic: _toggleMic,
+                    onAttach: _attach,
+                    onSend: _send,
+                    onStop: _stop,
+                    onStartLive: () {
+                      ttsService.stop();
+                      final key = effectiveConfig().apiKey.trim();
+                      Navigator.push(
+                        ctx,
+                        MaterialPageRoute(
+                          builder: (_) => LiveScreen(apiKey: key),
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ],
             ),
