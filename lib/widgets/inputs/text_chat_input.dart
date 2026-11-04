@@ -49,6 +49,19 @@ class _TextChatInputState extends State<TextChatInput> {
   TextEditingController? _internalController;
   int _localReasoningLevel = 0;
 
+  /// Фокус поля сообщения: капсула подсвечивает обводку акцентом.
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocusChanged);
+  }
+
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
+  }
+
   static const double _radius = 24;
 
   static const List<String> _reasoningLabels = <String>[
@@ -88,6 +101,8 @@ class _TextChatInputState extends State<TextChatInput> {
 
   @override
   void dispose() {
+    _focus.removeListener(_onFocusChanged);
+    _focus.dispose();
     _internalController?.dispose();
     super.dispose();
   }
@@ -117,16 +132,22 @@ class _TextChatInputState extends State<TextChatInput> {
       builder: (context, _) {
         final p = settings.palette;
         return Padding(
-          padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
           child: AnimatedSize(
             duration: const Duration(milliseconds: 160),
             alignment: Alignment.bottomCenter,
             clipBehavior: Clip.none,
-            child: Container(
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
               decoration: BoxDecoration(
-                color: p.card,
+                color: p.surface,
                 borderRadius: BorderRadius.circular(_radius),
-                border: Border.all(color: p.border),
+                border: Border.all(
+                  color: _focus.hasFocus
+                      ? p.accent.withValues(alpha: 0.45)
+                      : p.border,
+                ),
                 boxShadow: [
                   BoxShadow(
                     color: Colors.black.withValues(alpha: 0.08),
@@ -147,6 +168,7 @@ class _TextChatInputState extends State<TextChatInput> {
                 children: [
                   TextField(
                     controller: _effectiveController,
+                    focusNode: _focus,
                     keyboardType: TextInputType.multiline,
                     textCapitalization: TextCapitalization.sentences,
                     cursorColor: p.accent,
