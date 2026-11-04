@@ -11,6 +11,7 @@ import '../core/storage.dart';
 import '../models.dart';
 import '../models/model_config.dart';
 import '../models/tool.dart';
+import '../core/generation/active_model_controller.dart';
 import '../core/generation/generation_event.dart';
 import '../core/models/gen_error.dart';
 import '../core/models/gen_error_mapper.dart';
