@@ -1,0 +1,18 @@
+[
+  {"id": "black-forest-labs/flux-1-schnell", "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"], "durations": [], "resolutions": []},
+  {"id": "black-forest-labs/flux-1-dev", "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"], "durations": [], "resolutions": []},
+  {"id": "black-forest-labs/flux-1-pro", "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"], "durations": [], "resolutions": []},
+  {"id": "black-forest-labs/flux-1.1-pro", "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"], "durations": [], "resolutions": []},
+  {"id": "black-forest-labs/flux-2-pro", "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4", "21:9"], "durations": [], "resolutions": []},
+  {"id": "black-forest-labs/flux-3-video", "aspect_ratios": ["16:9", "9:16", "1:1"], "durations": [4, 8, 12], "resolutions": []},
+  {"id": "stabilityai/stable-diffusion-xl", "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"], "durations": [], "resolutions": []},
+  {"id": "stabilityai/stable-diffusion-3.5-large", "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"], "durations": [], "resolutions": []},
+  {"id": "stabilityai/stable-video-diffusion", "aspect_ratios": ["16:9", "9:16"], "durations": [4, 8], "resolutions": []},
+  {"id": "wan-video/wan-2.1-t2v", "aspect_ratios": ["16:9", "9:16"], "durations": [5], "resolutions": []},
+  {"id": "wan-video/wan-2.1-i2v", "aspect_ratios": ["16:9", "9:16"], "durations": [5], "resolutions": []},
+  {"id": "wan-video/wan-2.2-t2v", "aspect_ratios": ["16:9", "9:16", "1:1"], "durations": [5], "resolutions": []},
+  {"id": "kling/kling-v1.5", "aspect_ratios": ["16:9", "9:16", "1:1"], "durations": [5, 10], "resolutions": []},
+  {"id": "minimax/hailuo-02", "aspect_ratios": ["16:9", "9:16"], "durations": [6, 10], "resolutions": []},
+  {"id": "google/imagen-3", "aspect_ratios": ["1:1", "16:9", "9:16", "4:3", "3:4"], "durations": [], "resolutions": []},
+  {"id": "google/veo-3", "aspect_ratios": ["16:9", "9:16"], "durations": [8], "resolutions": []}
+]
