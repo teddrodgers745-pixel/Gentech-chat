@@ -1,99 +1,65 @@
-// Copyright (c) 2026 Minkail. All rights reserved.
-
 import 'dart:convert';
-
 import 'package:flutter/services.dart' show rootBundle;
 
-/// Пресет одной модели: допустимые соотношения сторон, длительности
-/// и разрешения. Простой неизменяемый снимок данных из asset.
+/// Пресеты одной модели: какие параметры можно выбирать в интерфейсе.
 class ModelPreset {
   final String id;
+  final String type; // text | image | video
+  final int? contextLength;
+  final bool vision;
+  final bool reasoning;
   final List<String> aspectRatios;
   final List<int> durations;
   final List<String> resolutions;
 
   const ModelPreset({
     required this.id,
-    required this.aspectRatios,
-    required this.durations,
-    required this.resolutions,
+    required this.type,
+    this.contextLength,
+    this.vision = false,
+    this.reasoning = false,
+    this.aspectRatios = const [],
+    this.durations = const [],
+    this.resolutions = const [],
   });
+
+  factory ModelPreset.fromJson(Map<String, dynamic> j) => ModelPreset(
+        id: j['id'] as String,
+        type: j['type'] as String,
+        contextLength: j['ctx'] as int?,
+        vision: j['vision'] == true,
+        reasoning: j['reasoning'] == true,
+        aspectRatios: List<String>.from(j['ar'] ?? const []),
+        durations: List<int>.from(j['dur'] ?? const []),
+        resolutions: List<String>.from(j['res'] ?? const []),
+      );
+
+  // Какие селекторы показывать в UI (пустой список = селектор скрыт).
+  bool get showAspectRatio => aspectRatios.isNotEmpty;
+  bool get showDuration => durations.isNotEmpty;
+  bool get showResolution => resolutions.isNotEmpty;
+
+  /// Модель генерирует картинки/видео, а не обычный текст.
+  bool get isMedia => type == 'image' || type == 'video' || showAspectRatio;
 }
 
-/// Fallback-слой параметров из assets/model_presets.json.
-///
-/// Формат asset — список записей вида:
-/// {"id": "...", "aspect_ratios": [...], "durations": [...],
-///  "resolutions": [...]}
-/// (допускается также карта {id: {...}}). Ключи с указанием
-/// провайдера («model@provider») и «чистые» идентификаторы хранятся
-/// одинаково; поиск — сначала точный, затем по базовому id.
 class ModelPresets {
+  ModelPresets._(this._byId);
   final Map<String, ModelPreset> _byId;
 
-  const ModelPresets._(this._byId);
-
-  /// Читает и разбирает asset. Бросает исключение при недоступности
-  /// файла или битом JSON — вызывающий код обязан это обработать
-  /// (в CuratedParameterCatalog.load это уже сделано).
+  /// Загрузка из assets/model_presets.json
   static Future<ModelPresets> load() async {
     final raw = await rootBundle.loadString('assets/model_presets.json');
-    final decoded = jsonDecode(raw);
-    final map = <String, ModelPreset>{};
-
-    void addFromMap(Map<String, dynamic> m) {
-      final id = ((m['id'] as String?) ?? '').trim();
-      if (id.isEmpty || map.containsKey(id)) return;
-      map[id] = ModelPreset(
-        id: id,
-        aspectRatios: _strings(m['aspect_ratios']),
-        durations: _ints(m['durations']),
-        resolutions: _strings(m['resolutions']),
-      );
-    }
-
-    if (decoded is List) {
-      for (final e in decoded) {
-        if (e is Map) addFromMap(Map<String, dynamic>.from(e));
-      }
-    } else if (decoded is Map) {
-      decoded.forEach((key, value) {
-        if (value is Map) {
-          final m = Map<String, dynamic>.from(value);
-          m.putIfAbsent('id', () => key.toString());
-          addFromMap(m);
-        }
-      });
-    }
-    return ModelPresets._(map);
+    final list = (jsonDecode(raw) as List).cast<Map<String, dynamic>>();
+    return ModelPresets._({
+      for (final j in list) j['id'] as String: ModelPreset.fromJson(j),
+    });
   }
 
-  /// Пресет модели: сначала точное совпадение идентификатора
-  /// (в том числе с суффиксом @provider), затем по базовому id
-  /// без суффикса. null — пресета нет.
-  ModelPreset? forModel(String modelId) {
-    final id = modelId.trim();
-    if (id.isEmpty) return null;
-    final exact = _byId[id];
-    if (exact != null) return exact;
-    final base = id.split('@').first.trim();
-    if (base.isEmpty || base == id) return null;
-    return _byId[base];
-  }
+  /// Ищет пресет; суффикс провайдера (@provider=...) отбрасывается.
+  ModelPreset? forModel(String modelId) =>
+      _byId[modelId.split('@').first.trim()];
 
-  static List<String> _strings(Object? raw) {
-    if (raw is! List) return const <String>[];
-    return <String>[
-      for (final v in raw)
-        if (v != null) v.toString(),
-    ];
-  }
-
-  static List<int> _ints(Object? raw) {
-    if (raw is! List) return const <int>[];
-    return <int>[
-      for (final v in raw)
-        if (v is num) v.round(),
-    ];
-  }
+  Iterable<ModelPreset> get all => _byId.values;
+  Iterable<ModelPreset> ofType(String t) => all.where((m) => m.type == t);
 }
