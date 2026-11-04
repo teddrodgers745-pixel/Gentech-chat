@@ -5,13 +5,24 @@ import 'package:flutter/material.dart';
 
 import '../../app_state.dart';
 import '../../core/models/active_model_capabilities.dart';
+import '../../core/models/param_spec.dart';
 import '../../theme.dart';
 import 'video_gen_mode.dart';
 
+/// Вариант выбора чипса: машинный идентификатор и подпись по-русски.
+class _Choice {
+  final String id;
+  final String label;
+
+  const _Choice(this.id, this.label);
+}
+
 /// Панель ввода режима генерации видео: большое поле промпта, выбор
-/// пропорций (16:9, 9:16, 1:1), выбор длительности (5 с, 10 с) и кнопка
-/// прикрепления референсного кадра. Визуально повторяет капсулу
-/// генерации изображений: та же карточка, радиусы, акцент и кнопка.
+/// пропорций, длительностей и разрешений из параметров активной модели
+/// ([ActiveModelCapabilities.params]), кнопка прикрепления референсного
+/// кадра. Статические варианты VideoGenMode используются только как
+/// fallback, когда модель неизвестна каталогу. Визуально повторяет
+/// капсулу генерации изображений: та же карточка, радиусы, акцент.
 class VideoGenInput extends StatefulWidget {
   /// Возможности активной модели (параметры генерации и т.п.).
   final ActiveModelCapabilities capabilities;
@@ -39,10 +50,80 @@ class _VideoGenInputState extends State<VideoGenInput> {
   TextEditingController? _internalController;
   String _ratio = '16:9';
   String _duration = '5s';
+  String _resolution = '';
   PlatformFile? _frame;
 
   TextEditingController get _effectiveController =>
       widget.controller ?? (_internalController ??= TextEditingController());
+
+  /// Пропорции модели: из параметров, иначе статический набор режима.
+  List<String> get _ratioChoices {
+    final p = widget.capabilities.params;
+    final list = (p != null && p.aspectRatios.isNotEmpty)
+        ? p.aspectRatios
+        : VideoGenMode.aspectRatios.map((e) => e.id).toList();
+    final clean = <String>[
+      for (final r in list)
+        if (r.trim().isNotEmpty) r.trim(),
+    ];
+    return clean.isEmpty ? const <String>['16:9'] : clean;
+  }
+
+  /// Длительности модели: дискретный список либо опорные точки диапазона.
+  /// Пустой список у модели -> статический fallback режима (5 с / 10 с).
+  List<_Choice> get _durationChoices {
+    final p = widget.capabilities.params;
+    final out = _durationsFrom(p?.durations);
+    if (out.isNotEmpty) return out;
+    return <_Choice>[
+      for (final d in VideoGenMode.durations) _Choice(d.id, d.label),
+    ];
+  }
+
+  /// Разрешения модели ('720p', '1080p', '1K' ...); пустой список —
+  /// селектор разрешений не показывается.
+  List<_Choice> get _resolutionChoices {
+    final p = widget.capabilities.params;
+    final list = p?.resolutions ?? const <String>[];
+    return <_Choice>[
+      for (final r in list)
+        if (r.trim().isNotEmpty) _Choice(r.trim(), r.trim()),
+    ];
+  }
+
+  /// Разбор диапазона/списка длительностей в варианты чипсов.
+  static List<_Choice> _durationsFrom(DurationRange? range) {
+    final d = range;
+    if (d == null || d.isEmpty) return const <_Choice>[];
+    final disc = d.discrete;
+    if (disc != null && disc.isNotEmpty) {
+      return <_Choice>[
+        for (final v in disc) _Choice('${v}s', '$v с'),
+      ];
+    }
+    final min = d.min;
+    final max = d.max;
+    if (min != null && max != null && max > min) {
+      return <_Choice>[
+        _Choice('${min}s', '$min с'),
+        _Choice('${max}s', '$max с'),
+      ];
+    }
+    final only = min ?? max;
+    if (only == null) return const <_Choice>[];
+    return <_Choice>[_Choice('${only}s', '$only с')];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final ratios = _ratioChoices;
+    _ratio = ratios.contains('16:9') ? '16:9' : ratios.first;
+    final durs = _durationChoices;
+    if (durs.isNotEmpty) _duration = durs.first.id;
+    final ress = _resolutionChoices;
+    if (ress.isNotEmpty) _resolution = ress.first.id;
+  }
 
   @override
   void dispose() {
@@ -136,19 +217,28 @@ class _VideoGenInputState extends State<VideoGenInput> {
                             mainAxisSize: MainAxisSize.min,
                             children: [
                               _frameButton(p),
-                              for (final r in VideoGenMode.aspectRatios)
+                              for (final r in _ratioChoices)
                                 _chip(
-                                  label: r.label,
-                                  selected: _ratio == r.id,
+                                  label: r,
+                                  selected: _ratio == r,
                                   p: p,
-                                  onTap: () => setState(() => _ratio = r.id),
+                                  onTap: () => setState(() => _ratio = r),
                                 ),
-                              for (final d in VideoGenMode.durations)
+                              for (final d in _durationChoices)
                                 _chip(
                                   label: d.label,
                                   selected: _duration == d.id,
                                   p: p,
-                                  onTap: () => setState(() => _duration = d.id),
+                                  onTap: () =>
+                                      setState(() => _duration = d.id),
+                                ),
+                              for (final res in _resolutionChoices)
+                                _chip(
+                                  label: res.label,
+                                  selected: _resolution == res.id,
+                                  p: p,
+                                  onTap: () =>
+                                      setState(() => _resolution = res.id),
                                 ),
                             ],
                           ),
