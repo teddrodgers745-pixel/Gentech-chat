@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Minkail. All rights reserved.
+
 import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 
