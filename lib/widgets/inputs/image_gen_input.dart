@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app_state.dart';
+import '../../core/models/active_model_capabilities.dart';
 import '../../models/model_config.dart';
 import '../../theme.dart';
 
@@ -11,6 +12,9 @@ import '../../theme.dart';
 /// текстового ввода: та же карточка, радиусы, акцент и кнопка отправки.
 class ImageGenInput extends StatefulWidget {
   final ImageGenModelConfig config;
+
+  /// Возможности активной модели (параметры генерации и т.п.).
+  final ActiveModelCapabilities capabilities;
   final TextEditingController? controller;
   final bool streaming;
 
@@ -22,6 +26,7 @@ class ImageGenInput extends StatefulWidget {
   const ImageGenInput({
     super.key,
     this.config = const ImageGenModelConfig(),
+    required this.capabilities,
     this.controller,
     this.streaming = false,
     this.onAspectRatioChanged,

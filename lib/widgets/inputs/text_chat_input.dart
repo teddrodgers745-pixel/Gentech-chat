@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../app_state.dart';
+import '../../core/models/active_model_capabilities.dart';
 import '../../models/model_config.dart';
 import '../../theme.dart';
 
@@ -12,6 +13,9 @@ import '../../theme.dart';
 /// капсулами мышления и поиска, микрофоном, скрепкой и кнопкой отправки.
 class TextChatInput extends StatefulWidget {
   final TextModelConfig config;
+
+  /// Возможности активной модели (vision, reasoning, параметры генерации).
+  final ActiveModelCapabilities capabilities;
   final TextEditingController? controller;
   final bool streaming;
   final int reasoningLevel;
@@ -25,6 +29,7 @@ class TextChatInput extends StatefulWidget {
   const TextChatInput({
     super.key,
     this.config = const TextModelConfig(),
+    required this.capabilities,
     this.controller,
     this.streaming = false,
     this.reasoningLevel = 0,

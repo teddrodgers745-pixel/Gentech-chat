@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../app_state.dart';
+import '../../core/models/active_model_capabilities.dart';
 import '../../theme.dart';
 import 'video_gen_mode.dart';
 
@@ -12,6 +13,8 @@ import 'video_gen_mode.dart';
 /// прикрепления референсного кадра. Визуально повторяет капсулу
 /// генерации изображений: та же карточка, радиусы, акцент и кнопка.
 class VideoGenInput extends StatefulWidget {
+  /// Возможности активной модели (параметры генерации и т.п.).
+  final ActiveModelCapabilities capabilities;
   final TextEditingController? controller;
   final bool streaming;
   final VoidCallback? onSend;
@@ -19,6 +22,7 @@ class VideoGenInput extends StatefulWidget {
 
   const VideoGenInput({
     super.key,
+    required this.capabilities,
     this.controller,
     this.streaming = false,
     this.onSend,

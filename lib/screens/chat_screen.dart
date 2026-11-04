@@ -954,6 +954,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   listenable: _activeModel,
                   builder: (ctx, _) => AdaptiveChatInputBar(
                     config: _currentConfig,
+                    capabilities: _activeModel.current,
                     controller: _input,
                     modelType: _modelType,
                     onAspectRatioChanged: (r) => _aspectRatio = r,

@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app_state.dart';
+import '../../core/models/active_model_capabilities.dart';
 import '../../core/providers/heuristic_rules.dart';
 import '../../models/model_config.dart';
 import '../../widgets/inputs/image_gen_input.dart';
@@ -23,6 +24,10 @@ import 'video_gen_mode.dart';
 /// не меняется), голосовой — [LiveVoiceInput].
 class AdaptiveChatInputBar extends StatelessWidget {
   final ModelConfig config;
+
+  /// Возможности активной модели (вид, параметры генерации, vision,
+  /// reasoning): пробрасываются в активную панель ввода.
+  final ActiveModelCapabilities capabilities;
   final TextEditingController? controller;
   final bool streaming;
   final int reasoningLevel;
@@ -48,6 +53,7 @@ class AdaptiveChatInputBar extends StatelessWidget {
   const AdaptiveChatInputBar({
     super.key,
     required this.config,
+    required this.capabilities,
     this.controller,
     this.streaming = false,
     this.reasoningLevel = 0,
@@ -124,6 +130,7 @@ class AdaptiveChatInputBar extends StatelessWidget {
       child = ImageGenInput(
         key: const ValueKey<String>('image_gen_input'),
         config: imageCfg,
+        capabilities: capabilities,
         controller: controller,
         streaming: streaming,
         onAspectRatioChanged: onAspectRatioChanged,
@@ -133,6 +140,7 @@ class AdaptiveChatInputBar extends StatelessWidget {
     } else if (mode.id == VideoGenMode.modeId) {
       child = VideoGenInput(
         key: const ValueKey<String>('video_gen_input'),
+        capabilities: capabilities,
         controller: controller,
         streaming: streaming,
         onSend: onSend,
@@ -150,6 +158,7 @@ class AdaptiveChatInputBar extends StatelessWidget {
       child = TextChatInput(
         key: const ValueKey<String>('text_chat_input'),
         config: textCfg,
+        capabilities: capabilities,
         controller: controller,
         streaming: streaming,
         reasoningLevel: reasoningLevel,
