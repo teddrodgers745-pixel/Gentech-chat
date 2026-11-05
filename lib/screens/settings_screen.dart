@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../app_state.dart';
 import '../core/storage.dart';
+import '../core/utils/currency_format.dart';
 import '../models.dart';
 import '../services/tts_service.dart';
 import 'preset_edit_screen.dart';
@@ -218,6 +219,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Text(
                 'Озвучить конкретный ответ можно кнопкой динамика рядом с кнопкой копирования. Повторное нажатие останавливает чтение.',
                 style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+              _section(p, 'ЭКОНОМИКА'),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Показывать стоимость ответов'),
+                subtitle: Text(
+                  'Стоимость ответа под сообщением и суммы в списке чатов',
+                  style: TextStyle(color: p.muted, fontSize: 12),
+                ),
+                value: settings.showCost,
+                onChanged: (v) => settings.setShowCost(v),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: DropdownButtonFormField<String>(
+                  initialValue:
+                      CurrencyFormat.rubRates.containsKey(settings.currency)
+                          ? settings.currency
+                          : 'RUB',
+                  decoration: const InputDecoration(labelText: 'Валюта'),
+                  items: const <DropdownMenuItem<String>>[
+                    DropdownMenuItem<String>(
+                      value: 'RUB',
+                      child: Text('RUB'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'USD',
+                      child: Text('USD'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'EUR',
+                      child: Text('EUR'),
+                    ),
+                    DropdownMenuItem<String>(
+                      value: 'CNY',
+                      child: Text('CNY'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) settings.setCurrency(v);
+                  },
+                ),
               ),
               _section(p, 'ИНСТРУМЕНТЫ И API'),
               ListTile(

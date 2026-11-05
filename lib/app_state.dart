@@ -160,6 +160,12 @@ class AppSettings extends ChangeNotifier {
   String codeFont = 'JetBrains Mono';
   double lineHeight = 1.55;
 
+  /// Экономика: показывать ли стоимость ответов (по умолчанию включено).
+  bool showCost = true;
+
+  /// Валюта стоимости ('RUB', 'USD', 'EUR', 'CNY').
+  String currency = 'RUB';
+
   /// Автоозвучка новых ответов модели (TTS), по умолчанию выключена.
   bool autoTts = false;
 
@@ -211,6 +217,8 @@ class AppSettings extends ChangeNotifier {
     lineHeight = p.getDouble('lineHeight') ?? lineHeight;
     fontSizeN.value = p.getDouble('fontSize') ?? 17;
     autoTts = p.getBool('autoTts') ?? false;
+    showCost = p.getBool('showCost') ?? true;
+    currency = p.getString('currency') ?? 'RUB';
     webSearchEnabled = p.getBool('webSearchEnabled') ?? true;
     webSearchMode = p.getString('webSearchMode') ?? 'off';
     final rawSearchMode = p.getString('searchMode') ?? 'off';
@@ -237,6 +245,8 @@ class AppSettings extends ChangeNotifier {
     await p.setDouble('lineHeight', lineHeight);
     await p.setDouble('fontSize', fontSizeN.value);
     await p.setBool('autoTts', autoTts);
+    await p.setBool('showCost', showCost);
+    await p.setString('currency', currency);
     await p.setBool('webSearchEnabled', webSearchEnabled);
     await p.setString('webSearchMode', webSearchMode);
     await p.setString('searchMode', searchMode);
@@ -286,6 +296,18 @@ class AppSettings extends ChangeNotifier {
 
   void setAutoTts(bool v) {
     autoTts = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setShowCost(bool v) {
+    showCost = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setCurrency(String v) {
+    currency = v;
     _persist();
     notifyListeners();
   }

@@ -1,6 +1,9 @@
+// Copyright (c) 2026 Minkail. All rights reserved.
+
 import 'package:flutter/material.dart';
 
 import '../app_state.dart';
+import '../core/utils/currency_format.dart';
 import '../features/gallery/artifacts_gallery_screen.dart';
 
 class HistoryDrawer extends StatelessWidget {
@@ -129,8 +132,10 @@ class HistoryDrawer extends StatelessWidget {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      '${c.messages.length} сообщ. · '
-                                      '${c.totalCost.toStringAsFixed(2)} ₽',
+                                      settings.showCost
+                                          ? '${c.messages.length} сообщ. · '
+                                              '≈ ${CurrencyFormat.format(c.totalCost, settings.currency)}'
+                                          : '${c.messages.length} сообщ.',
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(

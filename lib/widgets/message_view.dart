@@ -15,6 +15,7 @@ import 'package:video_player/video_player.dart';
 
 import '../app_state.dart';
 import '../core/generation/async_job_executor.dart';
+import '../core/utils/currency_format.dart';
 import '../core/models/gen_error_mapper.dart';
 import '../core/models/message_part.dart';
 import '../features/chat/widgets/error_bubble.dart';
@@ -190,6 +191,9 @@ class MessageView extends StatelessWidget {
   /// уже завершена.
   List<Widget> _costWidgets(Palette p) {
     if (streaming) return const <Widget>[];
+    // Экономика: стоимость показывается только если включено в настройках;
+    // базовая сумма (в рублях) конвертируется в выбранную валюту.
+    if (!settings.showCost) return const <Widget>[];
     for (final part in message.parts) {
       if (part is TextPart && part.cost != null) {
         final c = part.cost!;
@@ -197,7 +201,8 @@ class MessageView extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              '≈ ${c.formatted} · ${c.totalTokens} ток.',
+              '≈ ${CurrencyFormat.format(c.cost, settings.currency)} '
+              '· ${c.totalTokens} ток.',
               style: TextStyle(fontSize: 12, color: p.muted),
             ),
           ),
