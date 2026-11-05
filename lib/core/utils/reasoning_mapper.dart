@@ -72,7 +72,7 @@ extension ReasoningLevelX on ReasoningLevel {
         ReasoningLevel.off => Colors.grey,
         ReasoningLevel.low => Colors.lightBlue,
         ReasoningLevel.medium => Colors.amber,
-        ReasoningLevel.high => Color(0xFFD99A6C), // фирменный медный
+        ReasoningLevel.high => const Color(0xFFD99A6C), // фирменный медный
         ReasoningLevel.xhigh => Colors.deepOrange,
         ReasoningLevel.max => Colors.deepPurple,
       };
