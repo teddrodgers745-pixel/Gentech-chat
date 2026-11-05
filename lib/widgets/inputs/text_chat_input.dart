@@ -228,33 +228,33 @@ class _TextChatInputState extends State<TextChatInput> {
                   ),
                   const SizedBox(height: 13.3),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      // Левая часть: капсулы «Поиск» и «Мышление».
-                      // Горизонтальный скролл — капсулы не сжимаются
-                      // и не обрезаются на узком экране.
-                      Expanded(
+                      // ЛЕВАЯ ГРУППА: «Мышление», затем «Поиск».
+                      Flexible(
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              _searchCapsule(p),
-                              const SizedBox(width: 8),
+                              // 1. Капсула «Мышление».
                               _reasoningCapsule(),
+                              const SizedBox(width: 8),
+                              // 2. Капсула «Поиск».
+                              _searchCapsule(p),
                             ],
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      // Правая часть (зафиксирована): Скрепка -> Микрофон
+                      // Распорка: раздвигает группы по краям.
+                      const Spacer(),
+                      // ПРАВАЯ ГРУППА: Скрепка -> Микрофон
                       // -> Кнопка «Отправить» (медный кружок).
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           if (widget.config.supportsAttachments) ...[
                             _attachButton(p),
-                            const SizedBox(width: 2),
+                            const SizedBox(width: 4),
                           ],
                           _micButton(p),
                           const SizedBox(width: 8),
@@ -324,9 +324,9 @@ class _TextChatInputState extends State<TextChatInput> {
     final label = level.label;
     final fill = _reasoningFills[level.index];
     final levelColor = _reasoningLevelColors[level.index];
-    // Иконка одна для всех уровней — меняется только цвет уровня.
-    final Widget leading =
-        Icon(Icons.psychology, size: 32, color: levelColor);
+    // Иконка уровня берётся из extension ReasoningLevelX (level.icon)
+    // с цветом уровня (level.color); захардкоженной Icons.psychology нет.
+    final Widget leading = Icon(level.icon, size: 32, color: level.color);
     return Tooltip(
       message:
           'Уровень размышлений: $label (тап — сменить, удержание — подробно)',

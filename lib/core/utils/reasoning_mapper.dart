@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'package:flutter/material.dart';
+
 /// Единый селектор Reasoning Effort: уровни размышлений, их подписи
 /// и перевод в поля API провайдера.
 ///
@@ -27,20 +29,39 @@ enum ReasoningLevel {
       };
 }
 
-/// Подписи и удобства уровня для интерфейса.
+/// Подписи, иконки и цвета уровня для интерфейса.
 extension ReasoningLevelX on ReasoningLevel {
   /// Стабильный строковый идентификатор (совпадает с именем enum).
   String get id => name;
 
-  /// Полная подпись для капсулы и слайдера (без сокращений:
-  /// "Medium", "X-High", а не "med").
+  /// Короткая подпись для капсулы «Мышление» и слайдера.
   String get label => switch (this) {
         ReasoningLevel.off => 'Off',
         ReasoningLevel.low => 'Low',
-        ReasoningLevel.medium => 'Medium',
+        ReasoningLevel.medium => 'Med',
         ReasoningLevel.high => 'High',
         ReasoningLevel.xhigh => 'X-High',
         ReasoningLevel.max => 'Max',
+      };
+
+  /// Иконка уровня: у каждого уровня своя.
+  IconData get icon => switch (this) {
+        ReasoningLevel.off => Icons.psychology_outlined,
+        ReasoningLevel.low => Icons.bolt,
+        ReasoningLevel.medium => Icons.balance,
+        ReasoningLevel.high => Icons.psychology,
+        ReasoningLevel.xhigh => Icons.local_fire_department,
+        ReasoningLevel.max => Icons.all_inclusive,
+      };
+
+  /// Цвет уровня для иконки капсулы.
+  Color get color => switch (this) {
+        ReasoningLevel.off => Colors.grey,
+        ReasoningLevel.low => Colors.blue,
+        ReasoningLevel.medium => Colors.orange,
+        ReasoningLevel.high => Colors.brown, // Медный
+        ReasoningLevel.xhigh => Colors.purple,
+        ReasoningLevel.max => Colors.deepPurple,
       };
 }
 
