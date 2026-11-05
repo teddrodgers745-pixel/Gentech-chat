@@ -224,7 +224,7 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
           bg: _green.withValues(alpha: 0.12),
           content: Row(
             children: [
-              Expanded(
+              const Expanded(
                 child: Text(
                   '🟢 Провайдер поддерживает веб-поиск',
                   style: TextStyle(
@@ -251,7 +251,7 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
           bg: _red.withValues(alpha: 0.10),
           content: Row(
             children: [
-              Expanded(
+              const Expanded(
                 child: Text(
                   '🔴 Текущая модель не поддерживает поиск',
                   style: TextStyle(
