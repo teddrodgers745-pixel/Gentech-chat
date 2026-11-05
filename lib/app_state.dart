@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/storage.dart';
+import 'core/utils/reasoning_mapper.dart';
 import 'models.dart';
 import 'theme.dart';
 
@@ -167,6 +168,10 @@ class AppSettings extends ChangeNotifier {
   /// Режим поиска в интернете: 'off', 'polza', 'sonar', 'deepseek'.
   String webSearchMode = 'off';
 
+  /// Уровень размышлений (Reasoning Effort): id уровня 'off'..'xhigh'
+  /// (см. ReasoningMapper). Сохраняется в SharedPreferences.
+  String reasoningLevel = 'off';
+
   /// Режим для профи (Advanced): полные настройки вместо быстрой настройки.
   bool advancedMode = true;
 
@@ -197,6 +202,9 @@ class AppSettings extends ChangeNotifier {
     autoTts = p.getBool('autoTts') ?? false;
     webSearchEnabled = p.getBool('webSearchEnabled') ?? true;
     webSearchMode = p.getString('webSearchMode') ?? 'off';
+    final rawReasoning = p.getString('reasoningLevel') ?? 'off';
+    reasoningLevel =
+        ReasoningMapper.isKnownId(rawReasoning) ? rawReasoning : 'off';
     advancedMode = p.getBool('advancedMode') ?? true;
     mcpEnabled = p.getBool('mcpEnabled') ?? true;
   }
@@ -216,6 +224,7 @@ class AppSettings extends ChangeNotifier {
     await p.setBool('autoTts', autoTts);
     await p.setBool('webSearchEnabled', webSearchEnabled);
     await p.setString('webSearchMode', webSearchMode);
+    await p.setString('reasoningLevel', reasoningLevel);
     await p.setBool('advancedMode', advancedMode);
     await p.setBool('mcpEnabled', mcpEnabled);
   }
@@ -271,6 +280,13 @@ class AppSettings extends ChangeNotifier {
 
   void setWebSearchMode(String v) {
     webSearchMode = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setReasoningLevel(String v) {
+    if (!ReasoningMapper.isKnownId(v)) return;
+    reasoningLevel = v;
     _persist();
     notifyListeners();
   }
