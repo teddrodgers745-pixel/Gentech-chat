@@ -32,6 +32,8 @@ import '../core/generation/user_param_override_store.dart';
 import '../core/models/generation_schema.dart';
 import '../core/models/param_spec.dart';
 import '../features/composer/modes/image_gen_mode.dart';
+import '../core/models/model_presets.dart';
+import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
 import '../services/chat_service.dart';
 import '../services/speech_service.dart';
@@ -152,11 +154,22 @@ class _ChatScreenState extends State<ChatScreen> {
   /// reasoning — из эвристики по идентификатору. Ошибки не роняют экран.
   Future<void> _syncActiveModel(String modelId) async {
     final id = modelId.trim();
+    // Флаг reasoning: эвристика по идентификатору плюс пресет модели
+    // (ModelPreset.reasoning из assets/model_presets.json).
+    var reasoning = _heuristicReasoning(id);
+    if (!reasoning) {
+      try {
+        final ps = await ModelPresets.load();
+        reasoning = ps.forModel(id)?.reasoning ?? false;
+      } catch (_) {
+        // Пресеты недоступны — остаётся эвристика.
+      }
+    }
     try {
       await _activeModel.setModel(
         id,
         vision: _heuristicVision(id),
-        reasoning: _heuristicReasoning(id),
+        reasoning: reasoning,
       );
     } catch (_) {
       // Каталог недоступен — контроллер останется с пустыми параметрами.
@@ -776,11 +789,12 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    final String? reasoningEffort = switch (_reasoningLevel) {
-      1 => 'medium',
-      2 => 'high',
-      _ => null,
-    };
+    // Единый селектор: уровень берётся из настроек (капсула «Мышление»
+    // сохраняет его в SharedPreferences) и переводится в payload
+    // через ReasoningMapper в ChatService.
+    final lvl = ReasoningMapper.fromId(settings.reasoningLevel);
+    final String? reasoningEffort =
+        lvl == ReasoningLevel.off ? null : lvl.name;
     final msgs = <Map<String, dynamic>>[
       if (cfg.systemPrompt.trim().isNotEmpty)
         <String, dynamic>{

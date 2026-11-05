@@ -6,6 +6,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../app_state.dart';
 import '../../core/models/active_model_capabilities.dart';
+import '../../core/utils/reasoning_mapper.dart';
+import '../../features/composer/widgets/reasoning_sheet.dart';
 import '../../models/model_config.dart';
 import '../../theme.dart';
 
@@ -51,7 +53,6 @@ class TextChatInput extends StatefulWidget {
 
 class _TextChatInputState extends State<TextChatInput> {
   TextEditingController? _internalController;
-  int _localReasoningLevel = 0;
 
   /// Фокус поля сообщения: капсула подсвечивает обводку акцентом.
   final FocusNode _focus = FocusNode();
@@ -68,28 +69,24 @@ class _TextChatInputState extends State<TextChatInput> {
 
   static const double _radius = 24;
 
-  static const List<String> _reasoningLabels = <String>[
-    'Low',
-    'Medium',
-    'High',
-    'xHigh',
-    'Max',
-  ];
-
+  /// Фоны и цвета текста капсулы для каждого из шести уровней
+  /// ([ReasoningLevel], индекс = position слайдера).
   static const List<Color> _reasoningFills = <Color>[
-    Color(0xFF71594B),
-    Color(0xFFC07650),
-    Color(0xFFB85D4B),
-    Color(0xFF9C4A34),
-    Color(0xFF7D3524),
+    Color(0xFF3A3733), // off
+    Color(0xFF71594B), // minimal
+    Color(0xFFC07650), // low
+    Color(0xFFB85D4B), // medium
+    Color(0xFF9C4A34), // high
+    Color(0xFF7D3524), // xhigh
   ];
 
   static const List<Color> _reasoningLevelColors = <Color>[
-    Color(0xFFFFC107),
-    Color(0xFFBFDBFE),
-    Color(0xFFFFF4F0),
-    Color(0xFFFFCF9E),
-    Color(0xFFFFEFD9),
+    Color(0xFFA8A096), // off
+    Color(0xFFFFC107), // minimal
+    Color(0xFFBFDBFE), // low
+    Color(0xFFFFF4F0), // medium
+    Color(0xFFFFCF9E), // high
+    Color(0xFFFFEFD9), // xhigh
   ];
 
   static const Color _searchFill = Color(0xFF3B82F6);
@@ -98,10 +95,7 @@ class _TextChatInputState extends State<TextChatInput> {
   TextEditingController get _effectiveController =>
       widget.controller ?? (_internalController ??= TextEditingController());
 
-  int get _effectiveReasoningLevel =>
-      widget.onCycleReasoning != null
-          ? widget.reasoningLevel.clamp(0, 4)
-          : _localReasoningLevel;
+
 
   @override
   void dispose() {
@@ -111,13 +105,27 @@ class _TextChatInputState extends State<TextChatInput> {
     super.dispose();
   }
 
-  void _handleCycleReasoning() {
+  /// Тап по капсуле: шторка со слайдером уровней размышлений.
+  /// Список позиций — уровни, которые разрешает активная модель
+  /// ([ActiveModelCapabilities.reasoningLevels]); выбор сохраняется
+  /// в настройках (settings.reasoningLevel).
+  void _openReasoningSheet() {
     HapticFeedback.lightImpact();
-    if (widget.onCycleReasoning != null) {
-      widget.onCycleReasoning!();
-    } else {
-      setState(() => _localReasoningLevel = (_localReasoningLevel + 1) % 5);
-    }
+    final levels = ReasoningMapper.levelsFromNames(
+      widget.capabilities.reasoningLevels,
+    );
+    showReasoningSheet(
+      context,
+      levels: levels.isEmpty
+          ? const <ReasoningLevel>[
+              ReasoningLevel.off,
+              ReasoningLevel.low,
+              ReasoningLevel.medium,
+              ReasoningLevel.high,
+            ]
+          : levels,
+      currentId: settings.reasoningLevel,
+    );
   }
 
   void _handleToggleSearch() {
@@ -288,32 +296,33 @@ class _TextChatInputState extends State<TextChatInput> {
   }
 
   Widget _reasoningCapsule() {
-    final level = _effectiveReasoningLevel;
-    final label = _reasoningLabels[level];
-    final fill = _reasoningFills[level];
-    final levelColor = _reasoningLevelColors[level];
-    final Widget leading;
-    if (level == 0) {
-      leading = Icon(Icons.speed, size: 32, color: levelColor);
-    } else if (level == 1) {
-      leading = Icon(Icons.lightbulb_outline, size: 32, color: levelColor);
-    } else if (level == 2) {
-      leading = Icon(Icons.troubleshoot, size: 32, color: levelColor);
-    } else if (level == 4) {
-      leading = Icon(Icons.biotech, size: 32, color: levelColor);
-    } else {
-      leading = Image.asset(
-        'assets/icons/brain_high.png',
-        width: 32,
-        height: 32,
-        fit: BoxFit.contain,
-      );
-    }
+    final level = ReasoningMapper.fromId(settings.reasoningLevel);
+    final label = level.label;
+    final fill = _reasoningFills[level.index];
+    final levelColor = _reasoningLevelColors[level.index];
+    final Widget leading = switch (level) {
+      ReasoningLevel.off =>
+        Icon(Icons.speed, size: 32, color: levelColor),
+      ReasoningLevel.minimal =>
+        Icon(Icons.lightbulb_outline, size: 32, color: levelColor),
+      ReasoningLevel.low =>
+        Icon(Icons.troubleshoot, size: 32, color: levelColor),
+      ReasoningLevel.medium => Image.asset(
+          'assets/icons/brain_high.png',
+          width: 32,
+          height: 32,
+          fit: BoxFit.contain,
+        ),
+      ReasoningLevel.high =>
+        Icon(Icons.biotech, size: 32, color: levelColor),
+      ReasoningLevel.xhigh =>
+        Icon(Icons.psychology, size: 32, color: levelColor),
+    };
     return Tooltip(
       message: 'Уровень размышлений: $label',
       child: InkWell(
         borderRadius: BorderRadius.circular(_radius),
-        onTap: widget.streaming ? null : _handleCycleReasoning,
+        onTap: widget.streaming ? null : _openReasoningSheet,
         child: Container(
           height: 36,
           constraints: const BoxConstraints(minWidth: 112),

@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
+import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
 import '../models/chat_message.dart';
 import '../models/tool.dart';
@@ -503,7 +504,14 @@ class ChatService {
         if (stream)
           'stream_options': <String, dynamic>{'include_usage': true},
         if (temperature != null) 'temperature': temperature,
-        if (reasoningEffort != null) 'reasoning_effort': reasoningEffort,
+        // Единый селектор Reasoning Effort: формат поля выбирает
+        // ReasoningMapper.mapToApi — 'reasoning_effort' для прямых
+        // провайдеров, 'reasoning: {effort: ...}' для идентификаторов
+        // с префиксом владельца ('vendor/model'); off — поле не уходит.
+        ...ReasoningMapper.mapToApi(
+          ReasoningMapper.fromId(reasoningEffort ?? ''),
+          model,
+        ),
         if (tools.isNotEmpty || builtin.isNotEmpty)
           'tools': <Map<String, dynamic>>[
             ...builtin,
