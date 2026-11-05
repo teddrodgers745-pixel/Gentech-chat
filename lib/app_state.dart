@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'core/search/search_strategy.dart';
 import 'core/storage.dart';
 import 'core/utils/reasoning_mapper.dart';
 import 'models.dart';
@@ -168,6 +169,16 @@ class AppSettings extends ChangeNotifier {
   /// Режим поиска в интернете: 'off', 'polza', 'sonar', 'deepseek'.
   String webSearchMode = 'off';
 
+  /// Режим поиска (SearchMode): off, native, provider, modelAsTool,
+  /// customApi. Хранится строкой (имя enum) в SharedPreferences.
+  String searchMode = 'off';
+
+  /// Ключ пользовательского поискового API (режим customApi).
+  String customSearchApiKey = '';
+
+  /// Модель-инструмент поиска (режим modelAsTool): идентификатор модели.
+  String searchToolModel = '';
+
   /// Уровень размышлений (Reasoning Effort): id уровня 'off'..'xhigh'
   /// (см. ReasoningMapper). Сохраняется в SharedPreferences.
   String reasoningLevel = 'off';
@@ -202,6 +213,10 @@ class AppSettings extends ChangeNotifier {
     autoTts = p.getBool('autoTts') ?? false;
     webSearchEnabled = p.getBool('webSearchEnabled') ?? true;
     webSearchMode = p.getString('webSearchMode') ?? 'off';
+    final rawSearchMode = p.getString('searchMode') ?? 'off';
+    searchMode = SearchModes.isKnownId(rawSearchMode) ? rawSearchMode : 'off';
+    customSearchApiKey = p.getString('customSearchApiKey') ?? '';
+    searchToolModel = p.getString('searchToolModel') ?? '';
     final rawReasoning = p.getString('reasoningLevel') ?? 'off';
     reasoningLevel =
         ReasoningMapper.isKnownId(rawReasoning) ? rawReasoning : 'off';
@@ -224,6 +239,9 @@ class AppSettings extends ChangeNotifier {
     await p.setBool('autoTts', autoTts);
     await p.setBool('webSearchEnabled', webSearchEnabled);
     await p.setString('webSearchMode', webSearchMode);
+    await p.setString('searchMode', searchMode);
+    await p.setString('customSearchApiKey', customSearchApiKey);
+    await p.setString('searchToolModel', searchToolModel);
     await p.setString('reasoningLevel', reasoningLevel);
     await p.setBool('advancedMode', advancedMode);
     await p.setBool('mcpEnabled', mcpEnabled);
@@ -282,6 +300,23 @@ class AppSettings extends ChangeNotifier {
     webSearchMode = v;
     _persist();
     notifyListeners();
+  }
+
+  void setSearchMode(String v) {
+    if (!SearchModes.isKnownId(v)) return;
+    searchMode = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setCustomSearchApiKey(String v) {
+    customSearchApiKey = v;
+    _persist();
+  }
+
+  void setSearchToolModel(String v) {
+    searchToolModel = v;
+    _persist();
   }
 
   void setReasoningLevel(String v) {
