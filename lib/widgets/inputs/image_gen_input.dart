@@ -8,8 +8,12 @@ import '../../models/model_config.dart';
 import '../../theme.dart';
 
 /// Панель ввода режима генерации изображений: большое поле промпта
-/// и выбор пропорций (1:1, 16:9, 9:16 ...). Визуально повторяет капсулу
-/// текстового ввода: та же карточка, радиусы, акцент и кнопка отправки.
+/// и выбор пропорций ИЗ ПАРАМЕТРОВ активной модели
+/// ([ActiveModelCapabilities.params]). Статические наборы пропорций
+/// удалены: если у модели нет параметров (params == null) либо она
+/// служебная (confidence == 'skip'), панель не показывается вовсе
+/// ([SizedBox.shrink]). Больше трёх вариантов пропорций — всплывающее
+/// меню ([PopupMenuButton]), иначе — [DropdownButton].
 class ImageGenInput extends StatefulWidget {
   final ImageGenModelConfig config;
 
@@ -42,30 +46,54 @@ class _ImageGenInputState extends State<ImageGenInput> {
   static const double _radius = 24;
 
   TextEditingController? _internalController;
-  late String _ratio;
+  String _ratio = '';
 
   TextEditingController get _effectiveController =>
       widget.controller ?? (_internalController ??= TextEditingController());
 
+  /// Скрывать ли панель: у модели нет параметров генерации либо она
+  /// служебная (confidence == 'skip').
+  bool get _hidden {
+    final p = widget.capabilities.params;
+    return p == null || p.confidence == 'skip';
+  }
+
+  /// Пропорции модели из capabilities.params (без статических fallback).
   List<String> get _ratios {
-    final list = widget.config.availableAspectRatios
-        .map((e) => e.trim())
-        .where((e) => e.isNotEmpty)
-        .toList();
-    return list.isEmpty ? const <String>['1:1'] : list;
+    final list =
+        widget.capabilities.params?.aspectRatios ?? const <String>[];
+    return <String>[
+      for (final r in list)
+        if (r.trim().isNotEmpty) r.trim(),
+    ];
   }
 
   @override
   void initState() {
     super.initState();
-    final list = _ratios;
-    _ratio = list.contains('1:1') ? '1:1' : list.first;
+    _syncSelection();
   }
 
   @override
-  void dispose() {
-    _internalController?.dispose();
-    super.dispose();
+  void didUpdateWidget(covariant ImageGenInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.capabilities.modelId != widget.capabilities.modelId) {
+      _syncSelection();
+    }
+  }
+
+  /// Синхронизация выбора со списком пропорций модели: прежний выбор
+  /// сохраняется, если он есть в новом списке; иначе первый вариант
+  /// ('1:1' приоритетен). Родителю сообщается актуальное значение.
+  void _syncSelection() {
+    final ratios = _ratios;
+    if (ratios.isEmpty) {
+      _ratio = '';
+      return;
+    }
+    if (ratios.contains(_ratio)) return;
+    _ratio = ratios.contains('1:1') ? '1:1' : ratios.first;
+    widget.onAspectRatioChanged?.call(_ratio);
   }
 
   void _select(String ratio) {
@@ -76,6 +104,7 @@ class _ImageGenInputState extends State<ImageGenInput> {
 
   @override
   Widget build(BuildContext context) {
+    if (_hidden) return const SizedBox.shrink();
     return ListenableBuilder(
       listenable: settings,
       builder: (context, _) {
@@ -141,13 +170,15 @@ class _ImageGenInputState extends State<ImageGenInput> {
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Icon(
-                                Icons.aspect_ratio_rounded,
-                                size: 17,
-                                color: p.muted,
-                              ),
-                              const SizedBox(width: 8),
-                              for (final r in _ratios) _ratioChip(r, p),
+                              if (_ratios.isNotEmpty) ...[
+                                Icon(
+                                  Icons.aspect_ratio_rounded,
+                                  size: 17,
+                                  color: p.muted,
+                                ),
+                                const SizedBox(width: 8),
+                                _ratioSelector(p),
+                              ],
                             ],
                           ),
                         ),
@@ -165,48 +196,76 @@ class _ImageGenInputState extends State<ImageGenInput> {
     );
   }
 
-  Widget _ratioChip(String ratio, Palette p) {
-    final selected = ratio == _ratio;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8),
-      child: InkWell(
+  /// Селектор пропорций: до трёх вариантов — DropdownButton,
+  /// больше — PopupMenuButton.
+  Widget _ratioSelector(Palette p) {
+    final ratios = _ratios;
+    if (ratios.length > 3) return _ratioPopup(p, ratios);
+    return Container(
+      height: 34,
+      padding: const EdgeInsets.symmetric(horizontal: 10),
+      decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
-        onTap: widget.streaming ? null : () => _select(ratio),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOut,
-          height: 34,
-          padding: const EdgeInsets.symmetric(horizontal: 13),
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: selected
-                ? p.accent.withValues(alpha: 0.16)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: selected ? p.accent : p.border,
-              width: selected ? 1.6 : 1,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (selected) ...[
-                Icon(Icons.check_rounded, size: 15, color: p.accent),
-                const SizedBox(width: 4),
-              ],
-              Text(
-                ratio,
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 13,
-                  height: 1.2,
-                  fontWeight: FontWeight.w600,
-                  color: selected ? p.accent : p.muted,
-                ),
+        border: Border.all(color: p.border),
+      ),
+      child: DropdownButton<String>(
+        value: _ratio,
+        underline: const SizedBox.shrink(),
+        isDense: true,
+        dropdownColor: p.card,
+        borderRadius: BorderRadius.circular(12),
+        icon: Icon(Icons.expand_more, size: 18, color: p.muted),
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: p.text,
+        ),
+        items: <DropdownMenuItem<String>>[
+          for (final r in ratios) DropdownMenuItem<String>(value: r, child: Text(r)),
+        ],
+        onChanged: widget.streaming
+            ? null
+            : (v) {
+                if (v != null) _select(v);
+              },
+      ),
+    );
+  }
+
+  /// Всплывающее меню пропорций для моделей с обширной сеткой.
+  Widget _ratioPopup(Palette p, List<String> ratios) {
+    return PopupMenuButton<String>(
+      enabled: !widget.streaming,
+      initialValue: _ratio.isEmpty ? null : _ratio,
+      color: p.card,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      onSelected: _select,
+      itemBuilder: (context) => <PopupMenuEntry<String>>[
+        for (final r in ratios)
+          PopupMenuItem<String>(value: r, child: Text(r)),
+      ],
+      child: Container(
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: p.border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _ratio.isEmpty ? '—' : _ratio,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+                color: p.text,
               ),
-            ],
-          ),
+            ),
+            Icon(Icons.expand_more, size: 18, color: p.muted),
+          ],
         ),
       ),
     );
@@ -230,4 +289,3 @@ class _ImageGenInputState extends State<ImageGenInput> {
     );
   }
 }
-
