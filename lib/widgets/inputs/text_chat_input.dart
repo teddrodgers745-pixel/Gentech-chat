@@ -93,9 +93,7 @@ class _TextChatInputState extends State<TextChatInput> {
   ];
 
   static const Color _searchFill = Color(0xFF3B82F6);
-  static const Color _searchFillPale = Color(0xFF9EC0F8);
   static const Color _searchTextOn = Color(0xFFF3F7FF);
-  static const Color _searchTextOnPale = Color(0xFF17335F);
 
   /// Локальный флаг поиска для текущего чата: включается капсулой,
   /// только если в настройках выбран режим поиска (не off).
@@ -267,7 +265,11 @@ class _TextChatInputState extends State<TextChatInput> {
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          _micButton(p),
+                          SizedBox(
+                            width: 32,
+                            height: 32,
+                            child: _micButton(p),
+                          ),
                           if (widget.config.supportsAttachments) ...[
                             const SizedBox(width: 2),
                             _attachButton(p),
@@ -306,7 +308,7 @@ class _TextChatInputState extends State<TextChatInput> {
     return IconButton(
       tooltip: 'Голосовой ввод',
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+      constraints: const BoxConstraints(),
       visualDensity: VisualDensity.compact,
       iconSize: 28,
       icon: Icon(Icons.mic, size: 28, color: p.muted),
@@ -398,16 +400,22 @@ class _TextChatInputState extends State<TextChatInput> {
     final on = available && _searchOn;
     final Color fill;
     final Color content;
+    final Color borderColor;
     if (!available) {
-      // Режим не выбран: серая приглушённая капсула.
+      // Состояние 1: режим не выбран в настройках — серая неактивная капсула.
       fill = Colors.transparent;
       content = Colors.grey;
-    } else if (on) {
+      borderColor = p.border;
+    } else if (!on) {
+      // Состояние 2: режим выбран, но поиск выключен в чате — серая/прозрачная.
+      fill = Colors.transparent;
+      content = p.muted;
+      borderColor = p.border;
+    } else {
+      // Состояние 3: режим выбран и поиск включён в чате — синяя активная.
       fill = _searchFill;
       content = _searchTextOn;
-    } else {
-      fill = _searchFillPale;
-      content = _searchTextOnPale;
+      borderColor = _searchFill;
     }
     return InkWell(
       borderRadius: BorderRadius.circular(_radius),
@@ -421,7 +429,7 @@ class _TextChatInputState extends State<TextChatInput> {
         decoration: BoxDecoration(
           color: fill,
           borderRadius: BorderRadius.circular(_radius),
-          border: Border.all(color: available ? fill : p.border),
+          border: Border.all(color: borderColor),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,

@@ -35,6 +35,9 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
   /// Текст ошибки последней проверки (сеть/таймаут); null — ошибки нет.
   String? _probeError;
 
+  /// Проверка уже выполнялась: до неё итог зелёный/красный не показывается.
+  bool _probeChecked = false;
+
   /// Идентификаторы моделей из инструментов типа «модель»
   /// (Tool.typeModel) — кандидаты для роли модели-инструмента.
   List<String> _toolModels = const <String>[];
@@ -141,8 +144,12 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
       switch (res) {
         case WebSearchProbeResult.supported:
           settings.setWebSearchSupported(true);
+          settings.setProviderSearchSupported(true);
+          _probeChecked = true;
         case WebSearchProbeResult.unsupported:
           settings.setWebSearchSupported(false);
+          settings.setProviderSearchSupported(false);
+          _probeChecked = true;
         case WebSearchProbeResult.error:
           _probeError =
               'Не удалось выполнить проверку: проверьте сеть и повторите.';
@@ -183,25 +190,43 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
         _probeError!,
         style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
       );
-    } else {
-      status = Row(
+    } else if (!_probeChecked) {
+      status = Text(
+        'Проверка ещё не выполнялась',
+        style: TextStyle(color: p.muted, fontSize: 12.5),
+      );
+    } else if (settings.providerSearchSupported) {
+      // Ответ 200: поиск поддерживается — зелёная галочка.
+      status = const Row(
         children: [
-          Icon(
-            settings.webSearchSupported
-                ? Icons.check_circle_rounded
-                : Icons.cancel_outlined,
-            size: 16,
-            color: settings.webSearchSupported ? p.accent : p.muted,
+          Icon(Icons.check_circle_rounded, size: 16, color: Color(0xFF2E7D32)),
+          SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Поиск поддерживается',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF2E7D32),
+              ),
+            ),
           ),
-          const SizedBox(width: 6),
-          Text(
-            settings.webSearchSupported
-                ? 'Поддерживается'
-                : 'Не поддерживается',
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-              color: settings.webSearchSupported ? p.accent : p.muted,
+        ],
+      );
+    } else {
+      // Ответ 400: провайдер отклонил инструмент web_search — красный крест.
+      status = const Row(
+        children: [
+          Icon(Icons.cancel_outlined, size: 16, color: Color(0xFFB3261E)),
+          SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              'Провайдер не поддерживает поиск',
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFFB3261E),
+              ),
             ),
           ),
         ],
@@ -273,6 +298,18 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
             ),
             if (mode == SearchMode.provider) ...[
               const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _checking ? null : _runProbe,
+                icon: _checking
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.network_check_rounded, size: 18),
+                label: const Text('Проверить поддержку'),
+              ),
+              const SizedBox(height: 10),
               _probeRow(p),
               const SizedBox(height: 10),
               OutlinedButton.icon(

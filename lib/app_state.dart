@@ -191,6 +191,12 @@ class AppSettings extends ChangeNotifier {
   /// в тело каждого запроса /chat/completions.
   bool webSearchSupported = false;
 
+  /// Поддерживает ли активный провайдер поиск в режиме «Провайдер»
+  /// (SearchMode.provider). Сохраняется в SharedPreferences под ключом
+  /// 'isProviderSearchSupported'; определяется кнопкой «Проверить
+  /// поддержку» в настройках поиска.
+  bool providerSearchSupported = false;
+
   /// Уровень размышлений (Reasoning Effort): id уровня 'off'..'xhigh'
   /// (см. ReasoningMapper). Сохраняется в SharedPreferences.
   String reasoningLevel = 'off';
@@ -232,6 +238,8 @@ class AppSettings extends ChangeNotifier {
     customSearchApiKey = p.getString('customSearchApiKey') ?? '';
     searchToolModel = p.getString('searchToolModel') ?? '';
     webSearchSupported = p.getBool('webSearchSupported') ?? false;
+    providerSearchSupported =
+        p.getBool('isProviderSearchSupported') ?? false;
     final rawReasoning = p.getString('reasoningLevel') ?? 'off';
     reasoningLevel =
         ReasoningMapper.isKnownId(rawReasoning) ? rawReasoning : 'off';
@@ -260,6 +268,7 @@ class AppSettings extends ChangeNotifier {
     await p.setString('customSearchApiKey', customSearchApiKey);
     await p.setString('searchToolModel', searchToolModel);
     await p.setBool('webSearchSupported', webSearchSupported);
+    await p.setBool('isProviderSearchSupported', providerSearchSupported);
     await p.setString('reasoningLevel', reasoningLevel);
     await p.setBool('advancedMode', advancedMode);
     await p.setBool('mcpEnabled', mcpEnabled);
@@ -351,6 +360,12 @@ class AppSettings extends ChangeNotifier {
 
   void setWebSearchSupported(bool v) {
     webSearchSupported = v;
+    _persist();
+    notifyListeners();
+  }
+
+  void setProviderSearchSupported(bool v) {
+    providerSearchSupported = v;
     _persist();
     notifyListeners();
   }

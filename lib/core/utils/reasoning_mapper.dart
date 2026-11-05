@@ -56,9 +56,9 @@ extension ReasoningLevelX on ReasoningLevel {
         ReasoningLevel.max => Icons.all_inclusive,
       };
 
-  /// Виджет-иконка уровня для капсулы: компактный размер, чтобы подпись
-  /// «Medium» гарантированно влезала в капсулу.
-  Widget get iconWidget => Icon(icon, size: 18, color: color);
+  /// Виджет-иконка уровня для капсулы: размер 20 — заметнее, при этом
+  /// подпись «Medium» гарантированно влезает в капсулу (minWidth 112).
+  Widget get iconWidget => Icon(icon, size: 20, color: color);
 
   /// Цвет уровня для иконки капсулы.
   Color get color => switch (this) {
