@@ -40,7 +40,7 @@ extension ReasoningLevelX on ReasoningLevel {
   String get label => switch (this) {
         ReasoningLevel.off => 'Off',
         ReasoningLevel.low => 'Low',
-        ReasoningLevel.medium => 'Med',
+        ReasoningLevel.medium => 'Medium',
         ReasoningLevel.high => 'High',
         ReasoningLevel.xhigh => 'X-High',
         ReasoningLevel.max => 'Max',
@@ -48,29 +48,26 @@ extension ReasoningLevelX on ReasoningLevel {
 
   /// Иконка уровня: у каждого уровня своя.
   IconData get icon => switch (this) {
-        ReasoningLevel.off => Icons.psychology_outlined,
+        ReasoningLevel.off => Icons.power_settings_new,
         ReasoningLevel.low => Icons.bolt,
         ReasoningLevel.medium => Icons.balance,
-        ReasoningLevel.high => Icons.psychology,
-        ReasoningLevel.xhigh => Icons.local_fire_department,
+        ReasoningLevel.high => Icons.local_fire_department,
+        ReasoningLevel.xhigh => Icons.whatshot,
         ReasoningLevel.max => Icons.all_inclusive,
       };
 
-  /// Виджет-иконка уровня: для high — пользовательская иконка мозга
-  /// из assets (SVG), для остальных — стандартные иконки Material.
-  Widget get iconWidget => switch (this) {
-        ReasoningLevel.high => Icon(icon, size: 32, color: color),
-        _ => Icon(icon, size: 32, color: color),
-      };
+  /// Виджет-иконка уровня для капсулы: компактный размер, чтобы подпись
+  /// «Medium» гарантированно влезала в капсулу.
+  Widget get iconWidget => Icon(icon, size: 18, color: color);
 
   /// Цвет уровня для иконки капсулы.
   Color get color => switch (this) {
         ReasoningLevel.off => Colors.grey,
         ReasoningLevel.low => Colors.lightBlue,
-        ReasoningLevel.medium => Colors.amber,
-        ReasoningLevel.high => const Color(0xFFD99A6C), // фирменный медный
-        ReasoningLevel.xhigh => Colors.deepOrange,
-        ReasoningLevel.max => Colors.deepPurple,
+        ReasoningLevel.medium => Colors.green,
+        ReasoningLevel.high => Colors.deepOrange,
+        ReasoningLevel.xhigh => Colors.redAccent,
+        ReasoningLevel.max => Colors.indigo,
       };
 }
 

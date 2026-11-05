@@ -10,6 +10,7 @@ import '../../core/search/search_strategy.dart';
 import '../../core/utils/reasoning_mapper.dart';
 import '../../features/composer/widgets/reasoning_sheet.dart';
 import '../../models/model_config.dart';
+import '../../screens/settings_screen.dart';
 import '../../theme.dart';
 
 /// Панель текстового ввода чата: капсула с полем сообщения,
@@ -92,7 +93,13 @@ class _TextChatInputState extends State<TextChatInput> {
   ];
 
   static const Color _searchFill = Color(0xFF3B82F6);
+  static const Color _searchFillPale = Color(0xFF9EC0F8);
   static const Color _searchTextOn = Color(0xFFF3F7FF);
+  static const Color _searchTextOnPale = Color(0xFF17335F);
+
+  /// Локальный флаг поиска для текущего чата: включается капсулой,
+  /// только если в настройках выбран режим поиска (не off).
+  bool _searchOn = false;
 
   TextEditingController get _effectiveController =>
       widget.controller ?? (_internalController ??= TextEditingController());
@@ -147,18 +154,37 @@ class _TextChatInputState extends State<TextChatInput> {
     );
   }
 
-  /// Тап по капсуле «Поиск»: показывает SnackBar с текущим режимом
-  /// поиска (off / native / provider / modelAsTool / customApi).
+  /// Тап по капсуле «Поиск». Логика по режиму из настроек
+  /// (settings.searchMode):
+  ///  - off — капсула серая, поиск НЕ включается: SnackBar с подсказкой
+  ///    и кнопкой «Настроить» (переход в экран настроек);
+  ///  - любой другой режим — переключение локального флага текущего
+  ///    чата (ярко-синяя капсула <-> бледно-синяя).
   void _handleToggleSearch() {
     HapticFeedback.lightImpact();
     final mode = SearchModes.fromId(settings.searchMode);
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(
-        content: Text('Режим поиска: ${mode.label}'),
-        duration: const Duration(seconds: 2),
-      ),
-    );
+    if (mode == SearchMode.off) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        SnackBar(
+          content: const Text('Выберите режим поиска в настройках'),
+          duration: const Duration(seconds: 3),
+          action: SnackBarAction(
+            label: 'Настроить',
+            onPressed: _openSearchSettings,
+          ),
+        ),
+      );
+      return;
+    }
+    setState(() => _searchOn = !_searchOn);
     widget.onToggleSearch?.call();
+  }
+
+  /// Переход в настройки (секция «Поиск» находится на экране настроек).
+  void _openSearchSettings() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+    );
   }
 
   @override
@@ -243,11 +269,14 @@ class _TextChatInputState extends State<TextChatInput> {
                         children: [
                           _micButton(p),
                           if (widget.config.supportsAttachments) ...[
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 2),
                             _attachButton(p),
                           ],
                           const SizedBox(width: 4),
-                          _sendButton(p),
+                          Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: _sendButton(p),
+                          ),
                         ],
                       ),
                     ],
@@ -364,7 +393,22 @@ class _TextChatInputState extends State<TextChatInput> {
   }
 
   Widget _searchCapsule(Palette p) {
-    final on = settings.webSearchEnabled;
+    final mode = SearchModes.fromId(settings.searchMode);
+    final available = mode != SearchMode.off;
+    final on = available && _searchOn;
+    final Color fill;
+    final Color content;
+    if (!available) {
+      // Режим не выбран: серая приглушённая капсула.
+      fill = Colors.transparent;
+      content = Colors.grey;
+    } else if (on) {
+      fill = _searchFill;
+      content = _searchTextOn;
+    } else {
+      fill = _searchFillPale;
+      content = _searchTextOnPale;
+    }
     return InkWell(
       borderRadius: BorderRadius.circular(_radius),
       onTap: widget.streaming ? null : _handleToggleSearch,
@@ -375,9 +419,9 @@ class _TextChatInputState extends State<TextChatInput> {
         padding: const EdgeInsets.only(left: 12, right: 24),
         alignment: Alignment.centerLeft,
         decoration: BoxDecoration(
-          color: on ? _searchFill : Colors.transparent,
+          color: fill,
           borderRadius: BorderRadius.circular(_radius),
-          border: Border.all(color: on ? _searchFill : p.border),
+          border: Border.all(color: available ? fill : p.border),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -386,10 +430,7 @@ class _TextChatInputState extends State<TextChatInput> {
               'assets/icons/search.svg',
               width: 20,
               height: 20,
-              colorFilter: ColorFilter.mode(
-                on ? _searchTextOn : p.muted,
-                BlendMode.srcIn,
-              ),
+              colorFilter: ColorFilter.mode(content, BlendMode.srcIn),
             ),
             const SizedBox(width: 6),
             Text(
@@ -399,7 +440,7 @@ class _TextChatInputState extends State<TextChatInput> {
                 fontSize: 13,
                 height: 1.2,
                 fontWeight: FontWeight.w700,
-                color: on ? _searchTextOn : p.muted,
+                color: content,
               ),
             ),
           ],

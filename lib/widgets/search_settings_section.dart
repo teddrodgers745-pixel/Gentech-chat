@@ -274,6 +274,15 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
             if (mode == SearchMode.provider) ...[
               const SizedBox(height: 12),
               _probeRow(p),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ToolsScreen()),
+                ),
+                icon: const Icon(Icons.build_outlined, size: 18),
+                label: const Text('Настроить'),
+              ),
             ],
             if (mode == SearchMode.customApi) ...[
               const SizedBox(height: 12),
