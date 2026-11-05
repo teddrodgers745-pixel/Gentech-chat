@@ -449,9 +449,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ---------- уровень размышлений ----------
 
+  /// Циклическая смена уровня размышлений: off -> low -> medium -> high
+  /// -> off. Уровень хранится в настройках (settings.reasoningLevel) —
+  /// оттуда его читают капсула «Мышление» и отправка запроса
+  /// (_runCompletion передаёт его в ChatService, где ReasoningMapper
+  /// добавляет reasoning_effort / reasoning:{effort} в тело запроса).
   void _cycleReasoning() {
     HapticFeedback.lightImpact();
-    setState(() => _reasoningLevel = (_reasoningLevel + 1) % 5);
+    settings.setReasoningLevel(
+      ReasoningMapper.fromId(settings.reasoningLevel).next().id,
+    );
   }
 
   // ---------- отправка ----------

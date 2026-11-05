@@ -69,24 +69,21 @@ class _TextChatInputState extends State<TextChatInput> {
 
   static const double _radius = 24;
 
-  /// Фоны и цвета текста капсулы для каждого из шести уровней
-  /// ([ReasoningLevel], индекс = position слайдера).
+  /// Фоны и цвета текста капсулы для каждого из четырёх уровней
+  /// ([ReasoningLevel]): off — серый, low — синий, medium — оранжевый,
+  /// high — фиолетовый.
   static const List<Color> _reasoningFills = <Color>[
-    Color(0xFF3A3733), // off
-    Color(0xFF71594B), // minimal
-    Color(0xFFC07650), // low
-    Color(0xFFB85D4B), // medium
-    Color(0xFF9C4A34), // high
-    Color(0xFF7D3524), // xhigh
+    Color(0xFF3A3733), // off — серый
+    Color(0xFF2D5A88), // low — синий
+    Color(0xFFB05A28), // medium — оранжевый
+    Color(0xFF6C3FA0), // high — фиолетовый
   ];
 
   static const List<Color> _reasoningLevelColors = <Color>[
-    Color(0xFFA8A096), // off
-    Color(0xFFFFC107), // minimal
-    Color(0xFFBFDBFE), // low
-    Color(0xFFFFF4F0), // medium
-    Color(0xFFFFCF9E), // high
-    Color(0xFFFFEFD9), // xhigh
+    Color(0xFFA8A096), // off — серый
+    Color(0xFFBFDBFE), // low — голубой
+    Color(0xFFFFD9B3), // medium — тёплый оранжевый
+    Color(0xFFE5D4FF), // high — светло-фиолетовый
   ];
 
   static const Color _searchFill = Color(0xFF3B82F6);
@@ -105,7 +102,22 @@ class _TextChatInputState extends State<TextChatInput> {
     super.dispose();
   }
 
-  /// Тап по капсуле: шторка со слайдером уровней размышлений.
+  /// Тап по капсуле: циклическая смена уровня размышлений
+  /// (off -> low -> medium -> high -> off). Выбор сохраняется в настройках
+  /// (settings.reasoningLevel) и применяется к следующим запросам.
+  void _cycleLevel() {
+    final cb = widget.onCycleReasoning;
+    if (cb != null) {
+      cb();
+      return;
+    }
+    HapticFeedback.lightImpact();
+    settings.setReasoningLevel(
+      ReasoningMapper.fromId(settings.reasoningLevel).next().id,
+    );
+  }
+
+  /// Долгое нажатие по капсуле: шторка со слайдером уровней размышлений.
   /// Список позиций — уровни, которые разрешает активная модель
   /// ([ActiveModelCapabilities.reasoningLevels]); выбор сохраняется
   /// в настройках (settings.reasoningLevel).
@@ -303,10 +315,8 @@ class _TextChatInputState extends State<TextChatInput> {
     final Widget leading = switch (level) {
       ReasoningLevel.off =>
         Icon(Icons.speed, size: 32, color: levelColor),
-      ReasoningLevel.minimal =>
-        Icon(Icons.lightbulb_outline, size: 32, color: levelColor),
       ReasoningLevel.low =>
-        Icon(Icons.troubleshoot, size: 32, color: levelColor),
+        Icon(Icons.lightbulb_outline, size: 32, color: levelColor),
       ReasoningLevel.medium => Image.asset(
           'assets/icons/brain_high.png',
           width: 32,
@@ -314,15 +324,15 @@ class _TextChatInputState extends State<TextChatInput> {
           fit: BoxFit.contain,
         ),
       ReasoningLevel.high =>
-        Icon(Icons.biotech, size: 32, color: levelColor),
-      ReasoningLevel.xhigh =>
         Icon(Icons.psychology, size: 32, color: levelColor),
     };
     return Tooltip(
-      message: 'Уровень размышлений: $label',
+      message:
+          'Уровень размышлений: $label (тап — сменить, удержание — подробно)',
       child: InkWell(
         borderRadius: BorderRadius.circular(_radius),
-        onTap: widget.streaming ? null : _openReasoningSheet,
+        onTap: widget.streaming ? null : _cycleLevel,
+        onLongPress: widget.streaming ? null : _openReasoningSheet,
         child: Container(
           height: 36,
           constraints: const BoxConstraints(minWidth: 112),

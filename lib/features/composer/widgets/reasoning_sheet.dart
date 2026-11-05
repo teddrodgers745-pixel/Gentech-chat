@@ -45,13 +45,9 @@ class _ReasoningSheetState extends State<_ReasoningSheet> {
   static String _describe(ReasoningLevel l) => switch (l) {
         ReasoningLevel.off =>
           'Размышления выключены: поле в запрос не отправляется',
-        ReasoningLevel.minimal =>
-          'Минимальные размышления — самый быстрый ответ',
         ReasoningLevel.low => 'Небольшое размышление перед ответом',
         ReasoningLevel.medium => 'Сбалансированный режим по умолчанию',
         ReasoningLevel.high => 'Глубокое размышление для сложных задач',
-        ReasoningLevel.xhigh =>
-          'Максимальное размышление — самый долгий и внимательный ответ',
       };
 
   /// Сохраняет выбранный уровень в настройках и закрывает шторку.

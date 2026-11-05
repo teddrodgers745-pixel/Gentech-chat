@@ -3,9 +3,24 @@
 /// Единый селектор Reasoning Effort: уровни размышлений, их подписи
 /// и перевод в поля API провайдера.
 ///
-/// Уровни упорядочены от выключенного к максимальному — индекс enum
-/// используется как позиция слайдера в интерфейсе.
-enum ReasoningLevel { off, minimal, low, medium, high, xhigh }
+/// Уровни образуют цикл: off -> low -> medium -> high -> off
+/// (метод [ReasoningLevel.next]). Индекс enum используется как позиция
+/// слайдера в интерфейсе.
+enum ReasoningLevel {
+  off,
+  low,
+  medium,
+  high;
+
+  /// Следующий уровень по циклу low -> medium -> high -> off
+  /// (от off — на low).
+  ReasoningLevel next() => switch (this) {
+        ReasoningLevel.off => ReasoningLevel.low,
+        ReasoningLevel.low => ReasoningLevel.medium,
+        ReasoningLevel.medium => ReasoningLevel.high,
+        ReasoningLevel.high => ReasoningLevel.off,
+      };
+}
 
 /// Подписи и удобства уровня для интерфейса.
 extension ReasoningLevelX on ReasoningLevel {
@@ -15,17 +30,16 @@ extension ReasoningLevelX on ReasoningLevel {
   /// Короткая подпись для капсулы и слайдера.
   String get label => switch (this) {
         ReasoningLevel.off => 'Off',
-        ReasoningLevel.minimal => 'Min',
         ReasoningLevel.low => 'Low',
         ReasoningLevel.medium => 'Med',
         ReasoningLevel.high => 'High',
-        ReasoningLevel.xhigh => 'Max',
       };
 }
 
 /// Перевод уровня размышлений в payload запроса к провайдеру.
 abstract final class ReasoningMapper {
-  /// Уровень по строковому идентификатору; неизвестное значение — off.
+  /// Уровень по строковому идентификатору; неизвестное значение — off
+  /// (в том числе старые сохранённые уровни 'minimal'/'xhigh').
   static ReasoningLevel fromId(String id) {
     final s = id.trim().toLowerCase();
     for (final l in ReasoningLevel.values) {
