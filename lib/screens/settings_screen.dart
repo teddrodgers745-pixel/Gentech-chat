@@ -16,6 +16,7 @@ import '../widgets/web_search_section.dart';
 import '../ui/screens/mcp_screen.dart';
 import '../ui/screens/tools_screen.dart';
 import '../widgets/message_view.dart';
+import '../widgets/theme_toggle_action.dart';
 
 const String _sampleMd = '''
 Так будет выглядеть текст ответа модели: **жирный**, *курсив* и `инлайн-код`.
@@ -191,7 +192,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       builder: (context, _) {
         final p = settings.palette;
         return Scaffold(
-          appBar: AppBar(title: const Text('Настройки')),
+          appBar: AppBar(
+            title: const Text('Настройки'),
+            actions: const [ThemeToggleAction()],
+          ),
           body: ListView(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
             children: [

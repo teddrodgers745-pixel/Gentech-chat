@@ -40,6 +40,7 @@ import '../theme.dart';
 import '../features/composer/adaptive_chat_input_bar.dart';
 import '../widgets/attachment_strip.dart';
 import '../widgets/message_view.dart';
+import '../widgets/theme_toggle_action.dart';
 import 'history_drawer.dart';
 import 'live_screen.dart';
 import 'quick_access_sheet.dart';
@@ -972,6 +973,7 @@ class _ChatScreenState extends State<ChatScreen> {
               ],
             ),
             actions: [
+              const ThemeToggleAction(),
               IconButton(
                 tooltip: 'Новый чат',
                 icon: const Icon(Icons.add_comment_outlined),

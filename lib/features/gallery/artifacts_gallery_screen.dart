@@ -6,6 +6,7 @@ import '../../app_state.dart';
 import '../../core/generation/artifact_repository.dart';
 import '../../core/models/artifact.dart';
 import '../../theme.dart';
+import '../../widgets/theme_toggle_action.dart';
 import 'artifact_viewer.dart';
 
 /// Фильтр галереи.
@@ -52,7 +53,10 @@ class _ArtifactsGalleryScreenState extends State<ArtifactsGalleryScreen> {
         final p = settings.palette;
         final items = _items();
         return Scaffold(
-          appBar: AppBar(title: const Text('Галерея')),
+          appBar: AppBar(
+            title: const Text('Галерея'),
+            actions: const [ThemeToggleAction()],
+          ),
           body: SafeArea(
             child: Column(
               children: [
