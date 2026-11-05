@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import '../app_state.dart';
 import '../core/storage.dart';
 import '../models.dart';
+import '../models/attachment_draft.dart';
 import '../models/model_config.dart';
 import '../models/tool.dart';
 import '../core/generation/active_model_controller.dart';
@@ -80,8 +81,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Подписка на восстановленные задачи (после перезапуска приложения).
   StreamSubscription<GenerationEvent>? _restoreSub;
 
-  /// Вложения, ожидающие отправки (файлы и картинки).
-  final List<PlatformFile> _pending = [];
+  /// Вложения, ожидающие отправки (файлы и картинки) со статусами
+  /// обработки: сжатие изображений выполняется в изоляте.
+  final List<AttachmentDraft> _attachments = [];
 
   ModelConfig get _currentConfig {
     final modelId = effectiveConfig().model.toLowerCase();
@@ -377,7 +379,23 @@ class _ChatScreenState extends State<ChatScreen> {
         _snack('Файлы недоступны для чтения');
         return;
       }
-      setState(() => _pending.addAll(fresh));
+      // Каждое вложение проходит обработку: изображения сжимаются
+      // в изоляте, статус виден в чипе вложения.
+      final drafts = <AttachmentDraft>[
+        for (final f in fresh) AttachmentDraft(file: File(f.path!)),
+      ];
+      setState(() => _attachments.addAll(drafts));
+      for (final d in drafts) {
+        final done = await processAttachment(d);
+        if (!mounted) return;
+        final i = _attachments.indexOf(d);
+        if (i < 0) continue; // вложение удалено пользователем
+        setState(() => _attachments[i] = done);
+        final st = done.status;
+        if (st == AttachmentStatus.failed || st == AttachmentStatus.tooLarge) {
+          _snack(done.error ?? 'Не удалось обработать файл');
+        }
+      }
     } catch (_) {
       if (mounted) _snack('Не удалось открыть выбор файлов');
     }
@@ -394,7 +412,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _send() async {
     final txt = _input.text.trim();
-    if ((txt.isEmpty && _pending.isEmpty) || _streaming) return;
+    final hasReady =
+        _attachments.any((a) => a.status == AttachmentStatus.ready);
+    if ((txt.isEmpty && !hasReady) || _streaming) return;
     if (effectiveConfig().apiKey.isEmpty) {
       _snack('Создайте и выберите профиль модели в настройках');
       return;
@@ -429,9 +449,9 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     final picked = <PickedFileRef>[
-      for (final f in _pending)
-        if (f.path != null && f.path!.isNotEmpty)
-          PickedFileRef(f.name, f.path!),
+      for (final a in _attachments)
+        if (a.status == AttachmentStatus.ready)
+          PickedFileRef(attachmentName(a.file.path), a.file.path),
     ];
     dynamic apiContent;
     try {
@@ -450,7 +470,7 @@ class _ChatScreenState extends State<ChatScreen> {
       chat.title = shown.length > 40 ? '${shown.substring(0, 40)}…' : shown;
     }
     _input.clear();
-    setState(() => _pending.clear());
+    setState(() => _attachments.clear());
     _stick = true;
     await _runCompletion(chat, userApiContent: apiContent);
   }
@@ -1104,27 +1124,44 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _attachmentActions(Palette p) {
-    if (_pending.isEmpty) return const SizedBox.shrink();
+    if (_attachments.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
       child: SizedBox(
         height: 44,
         child: ListView.builder(
           scrollDirection: Axis.horizontal,
-          itemCount: _pending.length,
+          itemCount: _attachments.length,
           itemBuilder: (context, i) {
-            final f = _pending[i];
+            final a = _attachments[i];
+            final Widget avatar;
+            if (a.isBusy) {
+              avatar = const SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              );
+            } else if (a.isReady) {
+              avatar = Icon(Icons.attach_file, size: 16, color: p.accent);
+            } else {
+              avatar = const Icon(
+                Icons.error_outline,
+                size: 16,
+                color: Color(0xFFB3261E),
+              );
+            }
             return Padding(
               padding: const EdgeInsets.only(right: 8),
               child: InputChip(
+                avatar: avatar,
                 label: Text(
-                  f.name,
+                  attachmentName(a.file.path),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 13, color: p.text),
                 ),
                 deleteIconColor: p.muted,
-                onDeleted: () => setState(() => _pending.removeAt(i)),
+                onDeleted: () => setState(() => _attachments.removeAt(i)),
               ),
             );
           },
