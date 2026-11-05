@@ -49,7 +49,7 @@ class EffectiveConfig {
 /// работают прежние настройки (совместимость со старыми данными).
 EffectiveConfig effectiveConfig() {
   final pr = presets.active;
-  if (pr != null) {
+  if (pr != null && pr.id != PresetStore.defaultPresetId) {
     return EffectiveConfig(
       baseUrl: pr.baseUrl.trim(),
       apiKey: pr.apiKey.trim(),
@@ -59,10 +59,13 @@ EffectiveConfig effectiveConfig() {
       temperature: pr.temperature,
     );
   }
+  // Системный дефолтный пресет отражает глобальные настройки: адрес, ключ
+  // и системный промпт читаются из настроек «живьём», модель — из пресета
+  // (PresetStore — единственный источник истины для модели).
   return EffectiveConfig(
     baseUrl: settings.baseUrl.trim(),
     apiKey: settings.apiKey.trim(),
-    model: settings.model.trim(),
+    model: (pr?.model ?? settings.model).trim(),
     systemPrompt: settings.systemPrompt,
     stream: true,
     temperature: null,
@@ -70,6 +73,10 @@ EffectiveConfig effectiveConfig() {
 }
 
 class PresetStore extends ChangeNotifier {
+  /// Идентификатор системного дефолтного пресета: создаётся автоматически
+  /// при смене модели без активного пресета; удалить его нельзя.
+  static const String defaultPresetId = 'system-default';
+
   final List<Preset> _items = [];
   String _activeId = '';
 
@@ -136,7 +143,47 @@ class PresetStore extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Обновляет модель активного пресета и сохраняет его в
+  /// SharedPreferences. Пресет — единственный источник истины для модели;
+  /// вызывается из ActiveModelController.setModel и из быстрых смен
+  /// модели в интерфейсе.
+  ///
+  /// Если активного пресета нет, создаётся «Системный дефолтный пресет»
+  /// ([defaultPresetId]) — его нельзя удалить, он отражает глобальные
+  /// настройки подключения, а модель хранит в себе.
+  Future<void> updateActivePresetModel(String newModelId) async {
+    final pr = active ?? _ensureDefaultPreset();
+    pr.model = newModelId;
+    await _persist();
+    notifyListeners();
+  }
+
+  /// Создаёт (при отсутствии) системный дефолтный пресет и делает его
+  /// активным. Адрес, ключ и промпт берутся из текущих настроек.
+  Preset _ensureDefaultPreset() {
+    var pr = byId(defaultPresetId);
+    if (pr == null) {
+      pr = Preset(
+        id: defaultPresetId,
+        name: 'Системный дефолтный пресет',
+        baseUrl: settings.baseUrl,
+        apiKey: settings.apiKey,
+        model: settings.model,
+        systemPrompt: settings.systemPrompt,
+        stream: true,
+      );
+      _items.add(pr);
+    }
+    if (_activeId != defaultPresetId) {
+      _activeId = defaultPresetId;
+      storage.setString('activePresetId', defaultPresetId);
+    }
+    return pr;
+  }
+
+  /// Системный дефолтный пресет удалить нельзя.
   Future<void> remove(String id) async {
+    if (id == defaultPresetId) return;
     _items.removeWhere((x) => x.id == id);
     if (_activeId == id) {
       _activeId = '';
@@ -281,6 +328,11 @@ class AppSettings extends ChangeNotifier {
     if (url != null) baseUrl = url;
     if (mdl != null) model = mdl;
     if (sys != null) systemPrompt = sys;
+    // PresetStore — единственный владелец модели: если активен системный
+    // дефолтный пресет, модель из общих настроек синхронизируется в него.
+    if (mdl != null && presets.active?.id == PresetStore.defaultPresetId) {
+      presets.updateActivePresetModel(mdl);
+    }
     _persist();
   }
 

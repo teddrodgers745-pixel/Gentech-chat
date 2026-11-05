@@ -2,6 +2,7 @@
 
 import 'package:flutter/foundation.dart';
 
+import '../../app_state.dart';
 import '../models/active_model_capabilities.dart';
 import '../models/model_id_normalizer.dart';
 import '../models/param_spec.dart';
@@ -10,32 +11,90 @@ import 'user_param_override_store.dart';
 
 /// Реактивный контроллер «что умеет активная модель».
 ///
+/// Модель принадлежит [PresetStore] (PresetController) — единственному
+/// источнику истины: контроллер не хранит собственного поля модели,
+/// геттер [currentModelId] читает модель активного пресета, а запись
+/// ([setModel]) делегирует PresetStore.updateActivePresetModel.
+///
 /// Хранит снимок возможностей активной модели ([current]): нормализованный
 /// идентификатор, вид (текст/изображение/видео/live/skip/unknown),
-/// параметры генерации и флаги vision/reasoning. При каждом изменении
-/// вызывается notifyListeners — интерфейс подписывается и перерисовывается
-/// без ручных опросов.
+/// параметры генерации и флаги vision/reasoning. Подписан на смену
+/// пресетов, поэтому чат перестраивается сразу после выбора другого
+/// пресета либо смены модели в нём.
 ///
-/// Источник параметров: пользовательский override
-/// ([UserParamOverrideStore]) имеет приоритет над курированным каталогом
-/// ([CuratedParameterCatalog]).
+/// Источник параметров: пользовательский override ([UserParamOverrideStore])
+/// имеет приоритет над курированным каталогом ([CuratedParameterCatalog]).
 class ActiveModelController extends ChangeNotifier {
-  /// [overrides] можно подменить (например, в тестах); по умолчанию
-  /// используется глобальное хранилище override.
+  /// [presetController] — владелец модели (обязателен: единственный
+  /// источник истины). [overrides] можно подменить (например, в тестах);
+  /// по умолчанию используется глобальное хранилище override.
   ///
   /// Каталог параметров отдельным параметром не принимается:
   /// [CuratedParameterCatalog] — справочник без экземпляров
   /// (abstract final class только со статическими методами), его статики
   /// вызываются напрямую.
-  ActiveModelController({UserParamOverrideStore? overrides})
-      : _overrides = overrides ?? userParamOverrideStore;
+  ActiveModelController({
+    required PresetStore presetController,
+    UserParamOverrideStore? overrides,
+  })  : _presetController = presetController,
+        _overrides = overrides ?? userParamOverrideStore {
+    _presetController.addListener(_onPresetChanged);
+  }
 
+  final PresetStore _presetController;
   final UserParamOverrideStore _overrides;
 
   ActiveModelCapabilities _current = ActiveModelCapabilities.empty;
 
+  /// Модель, для которой в последний раз разрешались возможности
+  /// (защита от повторного разрешения той же модели).
+  String _resolvedFor = '';
+
+  /// true, пока выполняется setModel: слушатель пресетов в это время
+  /// не запускает собственное разрешение (защита от рекурсии).
+  bool _resolving = false;
+
   /// Текущие возможности активной модели (никогда не null).
   ActiveModelCapabilities get current => _current;
+
+  /// Активная модель. Читается напрямую из активного пресета
+  /// (PresetStore.active.model) — единственного источника истины.
+  /// Пустая строка — активного пресета нет (режим «Без пресета»).
+  String get currentModelId => _presetController.active?.model ?? '';
+
+  /// Смена активной модели: НЕ меняет локальное состояние, а делегирует
+  /// запись владельцу — [PresetStore.updateActivePresetModel] — и затем
+  /// разрешает возможности по новой модели.
+  Future<void> setModel(
+    String modelId, {
+    bool vision = false,
+    bool reasoning = false,
+  }) async {
+    _resolving = true;
+    try {
+      final owned = (_presetController.active?.model ?? '').trim();
+      final incoming = modelId.trim();
+      if (incoming.isNotEmpty && incoming != owned) {
+        await _presetController.updateActivePresetModel(modelId);
+        notifyListeners();
+      }
+      await _resolve(modelId, vision: vision, reasoning: reasoning);
+    } finally {
+      _resolving = false;
+    }
+  }
+
+  /// Слушатель [PresetStore]: смена активного пресета либо модели внутри
+  /// пресета обновляет возможности без ручных опросов.
+  Future<void> _onPresetChanged() async {
+    if (_resolving) return;
+    final id = _presetController.active?.model ?? '';
+    if (id.trim() == _resolvedFor) {
+      notifyListeners();
+      return;
+    }
+    await _resolve(id);
+  }
 
   /// Разрешает возможности модели [modelId].
   ///
@@ -44,11 +103,12 @@ class ActiveModelController extends ChangeNotifier {
   /// [reasoning] передаёт вызывающий код — из каталога модели или из
   /// настроек. Любая ошибка хранилища/ассетов не роняет вызов: модель
   /// останется с пустыми параметрами и видом по эвристике.
-  Future<void> setModel(
+  Future<void> _resolve(
     String modelId, {
     bool vision = false,
     bool reasoning = false,
   }) async {
+    _resolvedFor = modelId.trim();
     final norm = ModelIdNormalizer.normalize(modelId);
     ModelParameters? params;
     if (norm.isNotEmpty) {
@@ -116,5 +176,11 @@ class ActiveModelController extends ChangeNotifier {
       return p.durations != null ? ActiveModelKind.video : ActiveModelKind.image;
     }
     return ActiveModelKind.text;
+  }
+
+  @override
+  void dispose() {
+    _presetController.removeListener(_onPresetChanged);
+    super.dispose();
   }
 }

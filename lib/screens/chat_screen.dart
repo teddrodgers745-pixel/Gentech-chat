@@ -145,7 +145,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _restoreSub = _genService.restorePendingJobs().listen(_onRestoredEvent);
     // Контроллер возможностей активной модели: параметры, vision, reasoning.
     _overrideStore = UserParamOverrideStore();
-    _activeModel = ActiveModelController(overrides: _overrideStore);
+    _activeModel = ActiveModelController(
+      presetController: presets,
+      overrides: _overrideStore,
+    );
     // Смена активной модели (пресет либо общие настройки) -> переопределение
     // эффективного типа модели для панели ввода.
     settings.addListener(_onConfigChanged);
@@ -215,9 +218,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   @override
   void dispose() {
-    _activeModel.dispose();
     settings.removeListener(_onConfigChanged);
     presets.removeListener(_onConfigChanged);
+    _activeModel.dispose();
     _restoreSub?.cancel();
     _uiTimer?.cancel();
     _imageExecutor?.cancel();

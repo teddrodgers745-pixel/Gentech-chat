@@ -41,9 +41,11 @@ class _QuickAccessSheetState extends State<QuickAccessSheet> {
     setState(() => _type = t);
   }
 
-  /// Выбор модели: активируется пресет с этой моделью либо модель
-  /// записывается в общие настройки. Шторка закрывается.
-  void _pickModel(String m) {
+  /// Выбор модели: активируется пресет с этой моделью, иначе модель
+  /// записывается в активный пресет — единственный источник истины
+  /// (PresetStore.updateActivePresetModel; при отсутствии активного
+  /// пресета создаётся системный дефолтный). Шторка закрывается.
+  Future<void> _pickModel(String m) async {
     Preset? matched;
     for (final pr in presets.items) {
       if (pr.model.trim() == m) {
@@ -54,8 +56,9 @@ class _QuickAccessSheetState extends State<QuickAccessSheet> {
     if (matched != null) {
       presets.setActive(matched.id);
     } else {
-      settings.setConnection(mdl: m);
+      await presets.updateActivePresetModel(m);
     }
+    if (!mounted) return;
     Navigator.pop(context);
   }
 
