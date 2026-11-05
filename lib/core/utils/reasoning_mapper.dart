@@ -3,22 +3,27 @@
 /// Единый селектор Reasoning Effort: уровни размышлений, их подписи
 /// и перевод в поля API провайдера.
 ///
-/// Уровни образуют цикл: off -> low -> medium -> high -> off
+/// Уровни образуют полный цикл из шести позиций:
+/// off -> low -> medium -> high -> xhigh -> max -> off
 /// (метод [ReasoningLevel.next]). Индекс enum используется как позиция
 /// слайдера в интерфейсе.
 enum ReasoningLevel {
   off,
   low,
   medium,
-  high;
+  high,
+  xhigh,
+  max;
 
-  /// Следующий уровень по циклу low -> medium -> high -> off
-  /// (от off — на low).
+  /// Следующий уровень по циклу low -> medium -> high -> xhigh -> max
+  /// -> off (от off — на low).
   ReasoningLevel next() => switch (this) {
         ReasoningLevel.off => ReasoningLevel.low,
         ReasoningLevel.low => ReasoningLevel.medium,
         ReasoningLevel.medium => ReasoningLevel.high,
-        ReasoningLevel.high => ReasoningLevel.off,
+        ReasoningLevel.high => ReasoningLevel.xhigh,
+        ReasoningLevel.xhigh => ReasoningLevel.max,
+        ReasoningLevel.max => ReasoningLevel.off,
       };
 }
 
@@ -27,19 +32,22 @@ extension ReasoningLevelX on ReasoningLevel {
   /// Стабильный строковый идентификатор (совпадает с именем enum).
   String get id => name;
 
-  /// Короткая подпись для капсулы и слайдера.
+  /// Полная подпись для капсулы и слайдера (без сокращений:
+  /// "Medium", "X-High", а не "med").
   String get label => switch (this) {
         ReasoningLevel.off => 'Off',
         ReasoningLevel.low => 'Low',
-        ReasoningLevel.medium => 'Med',
+        ReasoningLevel.medium => 'Medium',
         ReasoningLevel.high => 'High',
+        ReasoningLevel.xhigh => 'X-High',
+        ReasoningLevel.max => 'Max',
       };
 }
 
 /// Перевод уровня размышлений в payload запроса к провайдеру.
 abstract final class ReasoningMapper {
   /// Уровень по строковому идентификатору; неизвестное значение — off
-  /// (в том числе старые сохранённые уровни 'minimal'/'xhigh').
+  /// (в том числе старые сохранённые уровни 'minimal').
   static ReasoningLevel fromId(String id) {
     final s = id.trim().toLowerCase();
     for (final l in ReasoningLevel.values) {

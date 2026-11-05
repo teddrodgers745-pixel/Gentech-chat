@@ -48,6 +48,9 @@ class _ReasoningSheetState extends State<_ReasoningSheet> {
         ReasoningLevel.low => 'Небольшое размышление перед ответом',
         ReasoningLevel.medium => 'Сбалансированный режим по умолчанию',
         ReasoningLevel.high => 'Глубокое размышление для сложных задач',
+        ReasoningLevel.xhigh =>
+          'Расширенное размышление для очень сложных задач',
+        ReasoningLevel.max => 'Максимально глубокое размышление',
       };
 
   /// Сохраняет выбранный уровень в настройках и закрывает шторку.
