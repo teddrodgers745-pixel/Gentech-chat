@@ -20,6 +20,11 @@ Widget artifactMedia(
   Palette p, {
   BoxFit fit = BoxFit.cover,
 }) {
+  if (a.kind == Artifact.kindFile) {
+    return Center(
+      child: Icon(Icons.description_outlined, size: 40, color: p.accent),
+    );
+  }
   if (a.kind == Artifact.kindVideo) {
     return Center(
       child: Icon(Icons.movie_outlined, size: 40, color: p.accent),

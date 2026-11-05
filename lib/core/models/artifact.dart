@@ -8,6 +8,10 @@ class Artifact {
   static const String kindImage = 'image';
   static const String kindVideo = 'video';
 
+  /// Файл, созданный моделью (блок ```lang name=... в ответе),
+  /// сохранённый в Documents/GenTech/files/.
+  static const String kindFile = 'file';
+
   /// Уникальный идентификатор артефакта.
   final String id;
 
@@ -53,7 +57,11 @@ class Artifact {
   bool get isViewable => hasLocalFile || hasRemoteUrl;
 
   /// Человекочитаемая подпись вида артефакта.
-  String get kindLabel => kind == kindVideo ? 'видео' : 'изображение';
+  String get kindLabel => kind == kindVideo
+      ? 'видео'
+      : kind == kindFile
+          ? 'файл'
+          : 'изображение';
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'id': id,
@@ -66,18 +74,25 @@ class Artifact {
         'createdAt': createdAt.toIso8601String(),
       };
 
-  factory Artifact.fromJson(Map<String, dynamic> j) => Artifact(
-        id: (j['id'] as String?) ?? '',
-        kind: (j['kind'] as String?) == kindVideo ? kindVideo : kindImage,
-        localPath: (j['localPath'] as String?) ?? '',
-        remoteUrl: (j['remoteUrl'] as String?) ?? '',
-        prompt: (j['prompt'] as String?) ?? '',
-        modelId: (j['modelId'] as String?) ?? '',
-        cost: (j['cost'] as num?)?.toDouble(),
-        createdAt:
-            DateTime.tryParse((j['createdAt'] as String?) ?? '') ??
-                DateTime.now(),
-      );
+  factory Artifact.fromJson(Map<String, dynamic> j) {
+    final rawKind = ((j['kind'] as String?) ?? kindImage).trim();
+    return Artifact(
+      id: (j['id'] as String?) ?? '',
+      kind: rawKind == kindVideo
+          ? kindVideo
+          : rawKind == kindFile
+              ? kindFile
+              : kindImage,
+      localPath: (j['localPath'] as String?) ?? '',
+      remoteUrl: (j['remoteUrl'] as String?) ?? '',
+      prompt: (j['prompt'] as String?) ?? '',
+      modelId: (j['modelId'] as String?) ?? '',
+      cost: (j['cost'] as num?)?.toDouble(),
+      createdAt:
+          DateTime.tryParse((j['createdAt'] as String?) ?? '') ??
+              DateTime.now(),
+    );
+  }
 
   /// Копия с заменой отдельных полей.
   Artifact copyWith({

@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../app_state.dart';
 import '../core/storage.dart';
@@ -24,8 +25,11 @@ import '../core/models/cost_estimate.dart';
 import '../core/models/message_part.dart';
 import '../core/models/model_info.dart';
 import '../core/providers/heuristic_rules.dart';
+import '../core/generation/artifact_repository.dart';
 import '../core/generation/curated_parameter_catalog.dart';
 import '../core/generation/model_type_override_store.dart';
+import '../core/models/artifact.dart';
+import '../core/utils/file_block_extractor.dart';
 import '../core/generation/parameter_translator.dart';
 import '../core/generation/parameter_validation_exception.dart';
 import '../core/generation/user_param_override_store.dart';
@@ -681,6 +685,46 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Файлы из ответа модели: блоки ```lang name=filename.ext извлекаются
+  /// через [FileBlockExtractor], содержимое сохраняется в
+  /// Documents/GenTech/files/, каждый файл прикрепляется к сообщению
+  /// как Artifact (попадает в галерею артефактов). Ошибка сохранения
+  /// не роняет ответ: файл остаётся только в тексте сообщения.
+  Future<void> _materializeResponseFiles(
+    ChatMessage reply,
+    String modelId,
+  ) async {
+    final files = FileBlockExtractor.extract(reply.content);
+    for (final f in files) {
+      try {
+        final docs = await getApplicationDocumentsDirectory();
+        final dir = Directory('${docs.path}/GenTech/files');
+        await dir.create(recursive: true);
+        final safe = FileBlockExtractor.sanitizeFileName(f.filename);
+        if (safe.isEmpty) continue;
+        var file = File('${dir.path}/$safe');
+        if (await file.exists()) {
+          final dot = safe.lastIndexOf('.');
+          final base = dot > 0 ? safe.substring(0, dot) : safe;
+          final ext = dot > 0 ? safe.substring(dot) : '';
+          file = File(
+            '${dir.path}/${base}_${DateTime.now().millisecondsSinceEpoch}$ext',
+          );
+        }
+        await file.writeAsString(f.content, flush: true);
+        await ArtifactRepository.instance.register(Artifact(
+          id: newId(),
+          kind: Artifact.kindFile,
+          localPath: file.path,
+          prompt: safe,
+          modelId: modelId,
+        ));
+      } catch (_) {
+        // Диск недоступен — файл не сохраняется, ответ не ломается.
+      }
+    }
+  }
+
   /// Добавляет в чат сообщение-ошибку, которое рендерится ErrorBubble
   /// (код 'bad_request' -> заголовок «Некорректный запрос», текст — детали).
   Future<void> _addGenErrorBubble(String text) async {
@@ -895,6 +939,13 @@ class _ChatScreenState extends State<ChatScreen> {
         // Суммарная стоимость чата: прибавляем и сохраняем вместе с чатом.
         chat.totalCost += usageCost.cost;
       }
+    }
+    if (err == null &&
+        chat.messages.contains(reply) &&
+        reply.content.trim().isNotEmpty) {
+      // Файлы из ответа: сохраняем в Documents/GenTech/files/ и
+      // прикрепляем к сообщению как артефакты.
+      await _materializeResponseFiles(reply, cfg.model.trim());
     }
     if (!mounted) {
       await store.save();
