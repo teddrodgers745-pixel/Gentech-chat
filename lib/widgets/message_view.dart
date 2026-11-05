@@ -110,6 +110,7 @@ class MessageView extends StatelessWidget {
                 ),
               ..._partsWidgets(p),
               ..._contentWidgets(message.content),
+              ..._costWidgets(p),
               if (waiting)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
@@ -174,6 +175,29 @@ class MessageView extends StatelessWidget {
       }
     }
     return out.isEmpty ? <Widget>[RichMarkdown(content)] : out;
+  }
+
+  /// Строка стоимости под ответом: мелкая серая подпись вида
+  /// '≈ 0,42 ₽ · 1240 ток.' — только если в частях сообщения есть
+  /// TextPart с MessageCost (приходит из usage провайдера) и генерация
+  /// уже завершена.
+  List<Widget> _costWidgets(Palette p) {
+    if (streaming) return const <Widget>[];
+    for (final part in message.parts) {
+      if (part is TextPart && part.cost != null) {
+        final c = part.cost!;
+        return <Widget>[
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '≈ ${c.formatted} · ${c.totalTokens} ток.',
+              style: TextStyle(fontSize: 12, color: p.muted),
+            ),
+          ),
+        ];
+      }
+    }
+    return const <Widget>[];
   }
 
   /// Части сообщения: изображение, видео (с воспроизведением),

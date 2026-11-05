@@ -92,7 +92,11 @@ class ChatMessage {
 Map<String, dynamic> _encodePart(MessagePart part) {
   final p = part;
   if (p is TextPart) {
-    return <String, dynamic>{'type': 'text', 'text': p.text};
+    return <String, dynamic>{
+      'type': 'text',
+      'text': p.text,
+      if (p.cost != null) 'cost': p.cost!.toJson(),
+    };
   }
   if (p is ImagePart) {
     return <String, dynamic>{
@@ -161,7 +165,13 @@ MessagePart? _decodePart(Object? raw) {
         originalPrompt: (j['prompt'] as String?) ?? '',
       );
     default:
-      return TextPart((j['text'] as String?) ?? '');
+      final rawCost = j['cost'];
+      return TextPart(
+        (j['text'] as String?) ?? '',
+        cost: rawCost is Map
+            ? MessageCost.fromJson(Map<String, dynamic>.from(rawCost))
+            : null,
+      );
   }
 }
 

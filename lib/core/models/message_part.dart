@@ -13,11 +13,92 @@ sealed class MessagePart {
   String get label;
 }
 
+/// Стоимость ответа модели: сумма, валюта и счётчики токенов.
+/// Данные приходят из статистики использования (usage) провайдера,
+/// которую ChatService отдаёт в [StreamChunk.usage] при стриминге
+/// (stream_options.include_usage) и в непотоковом ответе.
+class MessageCost {
+  /// Стоимость ответа в валюте [currency].
+  final double cost;
+
+  /// Код валюты ('USD', 'RUB' ...).
+  final String currency;
+
+  /// Токены входа (промпт).
+  final int promptTokens;
+
+  /// Токены выхода (ответ модели).
+  final int completionTokens;
+
+  const MessageCost({
+    required this.cost,
+    this.currency = 'USD',
+    this.promptTokens = 0,
+    this.completionTokens = 0,
+  });
+
+  /// Символ валюты для интерфейса.
+  String get symbol => currency.trim().toUpperCase() == 'RUB' ? '₽' : r'$';
+
+  /// Сумма в формате интерфейса: '0,42 ₽' (запятая как десятичный
+  /// разделитель, как принято в русском тексте).
+  String get formatted {
+    final s = cost.toStringAsFixed(2);
+    return '${s.replaceAll('.', ',')} $symbol';
+  }
+
+  /// Всего токенов (вход + выход).
+  int get totalTokens => promptTokens + completionTokens;
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'cost': cost,
+        'currency': currency,
+        'promptTokens': promptTokens,
+        'completionTokens': completionTokens,
+      };
+
+  factory MessageCost.fromJson(Map<String, dynamic> j) => MessageCost(
+        cost: (j['cost'] as num?)?.toDouble() ?? 0,
+        currency: (j['currency'] as String?) ?? 'USD',
+        promptTokens: (j['promptTokens'] as num?)?.toInt() ?? 0,
+        completionTokens: (j['completionTokens'] as num?)?.toInt() ?? 0,
+      );
+
+  /// Разбор статистики использования провайдера (usage из ответа
+  /// /chat/completions): стоимость из полей cost/total_cost, валюта из
+  /// currency, токены из prompt_tokens/completion_tokens.
+  /// null — данных недостаточно, строку стоимости не показываем.
+  static MessageCost? fromUsage(Map<String, dynamic>? usage) {
+    final u = usage;
+    if (u == null) return null;
+    final cost = _num(u['cost']) ?? _num(u['total_cost']);
+    final prompt = _num(u['prompt_tokens'])?.toInt() ?? 0;
+    final completion = _num(u['completion_tokens'])?.toInt() ?? 0;
+    if (cost == null && prompt == 0 && completion == 0) return null;
+    final currency = (u['currency'] as String?) ?? 'USD';
+    return MessageCost(
+      cost: cost ?? 0,
+      currency: currency,
+      promptTokens: prompt,
+      completionTokens: completion,
+    );
+  }
+
+  static double? _num(Object? v) {
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v.trim().replaceAll(',', '.'));
+    return null;
+  }
+}
+
 /// Текстовая часть сообщения.
 class TextPart extends MessagePart {
   final String text;
 
-  const TextPart(this.text);
+  /// Стоимость ответа (из usage провайдера); null — стоимости нет.
+  final MessageCost? cost;
+
+  const TextPart(this.text, {this.cost});
 
   @override
   String get label => text.trim().isEmpty ? '(пустой текст)' : text;
@@ -27,10 +108,11 @@ class TextPart extends MessagePart {
 
   @override
   bool operator ==(Object other) =>
-      identical(this, other) || (other is TextPart && other.text == text);
+      identical(this, other) ||
+      (other is TextPart && other.text == text && other.cost == cost);
 
   @override
-  int get hashCode => text.hashCode;
+  int get hashCode => Object.hash(text, cost);
 }
 
 /// Изображение: либо локальный файл (путь на устройстве), либо ссылка

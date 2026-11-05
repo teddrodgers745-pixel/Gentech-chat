@@ -776,6 +776,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
     ChatMessage? toolMsg;
     GenError? genError;
+    Map<String, dynamic>? lastUsage;
     try {
       final tools = await _activeTools();
       await for (final ch in _chatService.sendMessage(
@@ -808,6 +809,7 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         reply.content += ch.content;
         reply.reasoning += ch.reasoning;
+        if (ch.usage != null) lastUsage = ch.usage;
         _scheduleUi();
       }
     } catch (e) {
@@ -826,6 +828,13 @@ class _ChatScreenState extends State<ChatScreen> {
         ..errorText = GenErrorMapper.detailsOf(err);
     } else if (reply.content.isEmpty && reply.reasoning.isEmpty) {
       chat.messages.remove(reply);
+    }
+    if (err == null && chat.messages.contains(reply)) {
+      // Стоимость ответа из usage провайдера: мелкая строка под ответом.
+      final usageCost = MessageCost.fromUsage(lastUsage);
+      if (usageCost != null) {
+        reply.parts.add(TextPart('', cost: usageCost));
+      }
     }
     if (!mounted) {
       await store.save();
