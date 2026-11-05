@@ -198,7 +198,7 @@ class _TextChatInputState extends State<TextChatInput> {
                 ],
               ),
               clipBehavior: Clip.none,
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -236,17 +236,17 @@ class _TextChatInputState extends State<TextChatInput> {
                       _searchCapsule(p),
                       // Распорка: раздвигает группы по краям.
                       const Spacer(),
-                      // ПРАВАЯ ГРУППА: Скрепка -> Микрофон
+                      // ПРАВАЯ ГРУППА: Микрофон -> Скрепка
                       // -> Кнопка «Отправить» (медный кружок).
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          if (widget.config.supportsAttachments) ...[
-                            _attachButton(p),
-                            const SizedBox(width: 4),
-                          ],
                           _micButton(p),
-                          const SizedBox(width: 8),
+                          if (widget.config.supportsAttachments) ...[
+                            const SizedBox(width: 4),
+                            _attachButton(p),
+                          ],
+                          const SizedBox(width: 4),
                           _sendButton(p),
                         ],
                       ),

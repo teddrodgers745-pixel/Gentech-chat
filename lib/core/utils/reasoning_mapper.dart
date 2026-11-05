@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'package:flutter/material.dart';
+// ignore: unused_import
 import 'package:flutter_svg/flutter_svg.dart';
 
 /// Единый селектор Reasoning Effort: уровни размышлений, их подписи
@@ -58,12 +59,7 @@ extension ReasoningLevelX on ReasoningLevel {
   /// Виджет-иконка уровня: для high — пользовательская иконка мозга
   /// из assets (SVG), для остальных — стандартные иконки Material.
   Widget get iconWidget => switch (this) {
-        ReasoningLevel.high => SvgPicture.asset(
-            'assets/icons/brain.svg',
-            width: 28,
-            height: 28,
-            fit: BoxFit.contain,
-          ),
+        ReasoningLevel.high => Icon(icon, size: 32, color: color),
         _ => Icon(icon, size: 32, color: color),
       };
 

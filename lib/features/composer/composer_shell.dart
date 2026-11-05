@@ -106,7 +106,7 @@ class _ComposerShellState extends State<ComposerShell> {
               ],
             ),
             clipBehavior: Clip.antiAlias,
-            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
