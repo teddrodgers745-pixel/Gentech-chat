@@ -10,6 +10,7 @@ import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import 'package:flutter_highlight/themes/github.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
+import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 import '../app_state.dart';
@@ -111,6 +112,7 @@ class MessageView extends StatelessWidget {
               ..._partsWidgets(p),
               ..._contentWidgets(message.content),
               ..._costWidgets(p),
+              ..._sourcesWidgets(p),
               if (waiting)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: 8),
@@ -203,6 +205,69 @@ class MessageView extends StatelessWidget {
       }
     }
     return const <Widget>[];
+  }
+
+  /// Блок «Источники» под текстом ответа: ссылки из TextPart.sources
+  /// (citations/annotations провайдера) чипами с хостом ссылки;
+  /// тап открывает ссылку во внешнем браузере. Во время стриминга
+  /// блок не показывается — источники приходят в конце генерации.
+  List<Widget> _sourcesWidgets(Palette p) {
+    if (streaming) return const <Widget>[];
+    final sources = <String>[];
+    for (final part in message.parts) {
+      if (part is TextPart) {
+        for (final s in part.sources) {
+          final t = s.trim();
+          if (t.isNotEmpty && !sources.contains(t)) sources.add(t);
+        }
+      }
+    }
+    if (sources.isEmpty) return const <Widget>[];
+    return <Widget>[
+      Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Источники:',
+              style: TextStyle(fontSize: 12, color: p.muted),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final url in sources)
+                  ActionChip(
+                    avatar: Icon(Icons.public, size: 16, color: p.accent),
+                    label: Text(
+                      Uri.tryParse(url)?.host ?? url,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, color: p.text),
+                    ),
+                    onPressed: () => _openSourceUrl(url),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    ];
+  }
+
+  /// Открывает ссылку-источник во внешнем браузере. Ошибки (нет браузера,
+  /// битая ссылка) молча игнорируются — чат не должен падать.
+  static Future<void> _openSourceUrl(String url) async {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https')) {
+      return;
+    }
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
   }
 
   /// Части сообщения: изображение, видео (с воспроизведением),
