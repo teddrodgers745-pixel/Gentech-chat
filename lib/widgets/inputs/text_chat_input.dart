@@ -197,7 +197,7 @@ class _TextChatInputState extends State<TextChatInput> {
                   ),
                 ],
               ),
-              clipBehavior: Clip.antiAlias,
+              clipBehavior: Clip.none,
               padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -229,22 +229,11 @@ class _TextChatInputState extends State<TextChatInput> {
                   const SizedBox(height: 13.3),
                   Row(
                     children: [
-                      // ЛЕВАЯ ГРУППА: «Мышление», затем «Поиск».
-                      Flexible(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // 1. Капсула «Мышление».
-                              _reasoningCapsule(),
-                              const SizedBox(width: 8),
-                              // 2. Капсула «Поиск».
-                              _searchCapsule(p),
-                            ],
-                          ),
-                        ),
-                      ),
+                      // ЛЕВАЯ ГРУППА: «Мышление», затем «Поиск» — обычный
+                      // Row без скролла и обёрток: капсулы не обрезаются.
+                      _reasoningCapsule(),
+                      const SizedBox(width: 8),
+                      _searchCapsule(p),
                       // Распорка: раздвигает группы по краям.
                       const Spacer(),
                       // ПРАВАЯ ГРУППА: Скрепка -> Микрофон
@@ -324,9 +313,10 @@ class _TextChatInputState extends State<TextChatInput> {
     final label = level.label;
     final fill = _reasoningFills[level.index];
     final levelColor = _reasoningLevelColors[level.index];
-    // Иконка уровня берётся из extension ReasoningLevelX (level.icon)
-    // с цветом уровня (level.color); захардкоженной Icons.psychology нет.
-    final Widget leading = Icon(level.icon, size: 32, color: level.color);
+    // Иконка уровня берётся из extension ReasoningLevelX (iconWidget):
+    // у high — пользовательская SVG-иконка мозга, у остальных —
+    // стандартные иконки Material с цветом уровня.
+    final Widget leading = level.iconWidget;
     return Tooltip(
       message:
           'Уровень размышлений: $label (тап — сменить, удержание — подробно)',
