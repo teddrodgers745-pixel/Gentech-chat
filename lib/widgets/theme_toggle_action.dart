@@ -5,14 +5,14 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../theme.dart';
 
-/// Кнопка переключения темы в AppBar.
+/// Кнопка луны в AppBar.
 ///
-///  - тап: быстрое переключение Светлая <-> Тёмная (в тёплой гамме);
-///  - долгое нажатие: нижняя шторка со всеми четырьмя темами
-///    (Светлая, Тёмная, Книжная, AMOLED) — чипы с цветной точкой
-///    и галочкой у выбранной, в стиле секции «Внешний вид» настроек.
-/// Иконка показывает направление переключения: луна, когда текущая
-/// тема светлая (тап приведёт к тёмной), и солнце — когда тёмная.
+/// Тап открывает нижнюю шторку ([showModalBottomSheet]) со списком всех
+/// четырёх тем (Светлая, Тёмная, Книжная, AMOLED) в виде ListView.
+/// Тема НЕ переключается сразу при нажатии: выбор происходит в шторке,
+/// чипом с цветной точкой и галочкой у выбранной (стиль секции
+/// «Внешний вид» настроек). Иконка — луна, когда текущая тема светлая,
+/// и солнце — когда тёмная.
 class ThemeToggleAction extends StatelessWidget {
   const ThemeToggleAction({super.key});
 
@@ -27,8 +27,7 @@ class ThemeToggleAction extends StatelessWidget {
           shape: const CircleBorder(),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            onTap: () => settings.setPalette(toDark ? 'dark' : 'light'),
-            onLongPress: () => _showThemeSheet(context),
+            onTap: () => _showThemeSheet(context),
             child: Padding(
               padding: const EdgeInsets.all(10),
               child: Icon(
@@ -55,7 +54,9 @@ class ThemeToggleAction extends StatelessWidget {
 }
 
 /// Шторка со списком тем: заголовок КАПСОМ акцентным цветом,
-/// чипы с точкой цвета темы и галочкой у выбранной.
+/// ListView из четырёх тем — чипы с точкой цвета темы и галочкой
+/// у выбранной. Тап по кнопке луны только открывает шторку,
+/// переключение темы выполняет выбор чипа.
 class _ThemeSheet extends StatelessWidget {
   const _ThemeSheet();
 
@@ -82,37 +83,40 @@ class _ThemeSheet extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                ListView(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
                   children: [
                     for (final x in palettes)
-                      ChoiceChip(
-                        label: Text(
-                          x.name,
-                          style: const TextStyle(
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w600,
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: ChoiceChip(
+                          label: Text(
+                            x.name,
+                            style: const TextStyle(
+                              fontSize: 15.5,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                        ),
-                        labelPadding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 4,
-                        ),
-                        visualDensity: VisualDensity.comfortable,
-                        selected: x.id == settings.paletteId,
-                        avatar: Container(
-                          width: 18,
-                          height: 18,
-                          decoration: BoxDecoration(
-                            color: x.accent,
-                            shape: BoxShape.circle,
+                          labelPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 4,
                           ),
+                          visualDensity: VisualDensity.comfortable,
+                          selected: x.id == settings.paletteId,
+                          avatar: Container(
+                            width: 18,
+                            height: 18,
+                            decoration: BoxDecoration(
+                              color: x.accent,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          onSelected: (_) {
+                            settings.setPalette(x.id);
+                            Navigator.of(context).pop();
+                          },
                         ),
-                        onSelected: (_) {
-                          settings.setPalette(x.id);
-                          Navigator.of(context).pop();
-                        },
                       ),
                   ],
                 ),

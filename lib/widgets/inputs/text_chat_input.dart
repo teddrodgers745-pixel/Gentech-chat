@@ -257,7 +257,7 @@ class _TextChatInputState extends State<TextChatInput> {
                             const SizedBox(width: 2),
                             SizedBox(width: 44, child: _attachButton(p)),
                           ],
-                          const SizedBox(width: 2),
+                          const SizedBox(width: 4),
                           _sendButton(p),
                         ],
                       ),
