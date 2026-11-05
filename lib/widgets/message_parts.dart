@@ -41,7 +41,7 @@ class PartImage extends StatelessWidget {
   }
 
   Widget _image(Palette p) {
-    final path = part.localPath.trim();
+    final path = (part.localPath ?? '').trim();
     if (path.isNotEmpty) {
       return Image.file(
         File(path),
@@ -49,7 +49,7 @@ class PartImage extends StatelessWidget {
         errorBuilder: (_, __, ___) => _fallback(p),
       );
     }
-    final url = part.remoteUrl.trim();
+    final url = (part.remoteUrl ?? '').trim();
     if (url.startsWith('data:')) {
       final idx = url.indexOf(',');
       if (idx >= 0 && idx + 1 < url.length) {
@@ -139,12 +139,12 @@ class _PartVideoState extends State<PartVideo> {
 
   Future<void> _init() async {
     final part = widget.part;
-    final path = part.localPath.trim();
+    final path = (part.localPath ?? '').trim();
     VideoPlayerController? c;
     if (path.isNotEmpty) {
       c = VideoPlayerController.file(File(path));
     } else {
-      final url = part.remoteUrl.trim();
+      final url = (part.remoteUrl ?? '').trim();
       if (!url.startsWith('http://') && !url.startsWith('https://')) {
         if (mounted) setState(() => _failed = true);
         return;
@@ -182,9 +182,9 @@ class _PartVideoState extends State<PartVideo> {
   }
 
   String _label() {
-    final src = widget.part.localPath.trim().isNotEmpty
-        ? widget.part.localPath.trim()
-        : widget.part.remoteUrl.trim();
+    final local = (widget.part.localPath ?? '').trim();
+    final remote = (widget.part.remoteUrl ?? '').trim();
+    final src = local.isNotEmpty ? local : remote;
     final clean = src.replaceFirst(RegExp(r'^file://'), '');
     final idx = clean.lastIndexOf('/');
     if (idx >= 0 && idx < clean.length - 1) return clean.substring(idx + 1);
