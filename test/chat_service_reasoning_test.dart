@@ -95,7 +95,9 @@ void main() {
         )
         .toList();
 
-    expect(chunks.single.content, 'Ответ');
+    // Пейсинг может разбить ответ на несколько чанков: собираем текст.
+    final text = chunks.map((c) => c.content).join();
+    expect(text, 'Ответ');
     expect(requests.single['reasoning_effort'], 'high');
   });
 

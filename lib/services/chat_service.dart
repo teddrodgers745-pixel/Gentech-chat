@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
+import '../core/utils/stream_pacer.dart';
 import '../models/chat_message.dart';
 import '../models/tool.dart';
 import 'model_tool.dart';
@@ -193,6 +194,12 @@ class ChatService {
   http.Client? _client;
   bool _wasCancelled = false;
 
+  /// Пейсер плавного вывода текста активной генерации; null — пейсинга нет.
+  /// UI подписывается на [StreamPacer.displayed] (ValueNotifier<String>),
+  /// чтобы получать полный показанный текст по мере «печатания».
+  StreamPacer? _activePacer;
+  StreamPacer? get activePacer => _activePacer;
+
   bool get wasCancelled => _wasCancelled;
 
   void cancel() {
@@ -220,11 +227,17 @@ class ChatService {
     final history = <Map<String, dynamic>>[
       for (final m in messages) Map<String, dynamic>.of(m),
     ];
+    // Пейсер плавного вывода (StreamPacer): создаётся один раз на вызов
+    // и переиспользуется во всех раундах, чтобы [StreamPacer.displayed]
+    // содержал полный показанный текст. Для непотокового запроса пейсинг
+    // не нужен — ответ приходит одним куском.
+    final StreamPacer? pacer = stream ? (_activePacer = StreamPacer()) : null;
 
     for (int iteration = 0; iteration < _maxToolIterations; iteration++) {
       if (_wasCancelled) return;
       final holder = _RoundHolder();
-      yield* _round(
+      yield* _pacedRound(
+        pacer: pacer,
         baseUrl: baseUrl,
         apiKey: apiKey,
         model: model,
@@ -313,7 +326,8 @@ class ChatService {
     // чтобы модель могла дать финальный ответ и не зациклиться.
     if (_wasCancelled) return;
     final holder = _RoundHolder();
-    yield* _round(
+    yield* _pacedRound(
+      pacer: pacer,
       baseUrl: baseUrl,
       apiKey: apiKey,
       model: model,
@@ -328,6 +342,94 @@ class ChatService {
     if (res != null && !stream) {
       yield StreamChunk(res.content, res.reasoning, usage: res.usage);
     }
+  }
+
+  /// Оборачивает раунд [_round] пейсером плавного вывода: куски контента
+  /// буферизуются в [StreamPacer] и выдаются порциями по тикам (60 fps);
+  /// события вызова инструментов и usage проходят без изменений.
+  /// Для непотокового запроса (pacer == null) раунд отдаётся как есть.
+  Stream<StreamChunk> _pacedRound({
+    required StreamPacer? pacer,
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+    required List<Map<String, dynamic>> history,
+    required bool stream,
+    double? temperature,
+    String? reasoningEffort,
+    required List<Tool> tools,
+    required _RoundHolder holder,
+  }) {
+    final src = _round(
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+      model: model,
+      history: history,
+      stream: stream,
+      temperature: temperature,
+      reasoningEffort: reasoningEffort,
+      tools: tools,
+      holder: holder,
+    );
+    final p = pacer;
+    if (p == null) return src;
+    return _pacedStream(p, src);
+  }
+
+  /// Поток с пейсингом: контент уходит в буфер пейсера, Ticker (60 fps)
+  /// выдаёт порции; reasoning, события инструментов и usage проходят
+  /// напрямую. При завершении источника остаток буфера выдаётся целиком
+  /// через [StreamPacer.flush], чтобы финальный текст был полным.
+  Stream<StreamChunk> _pacedStream(StreamPacer pacer, Stream<StreamChunk> src) {
+    final out = StreamController<StreamChunk>();
+    StreamSubscription<StreamChunk>? sub;
+
+    void cleanup() {
+      sub?.cancel();
+      sub = null;
+      pacer.onTick = null;
+      pacer.stop();
+      if (identical(_activePacer, pacer)) _activePacer = null;
+    }
+
+    pacer.onTick = (portion) {
+      if (!out.isClosed) out.add(StreamChunk(portion, ''));
+    };
+    _activePacer = pacer;
+    pacer.start();
+
+    sub = src.listen(
+      (chunk) {
+        if (out.isClosed) return;
+        // События инструментов и usage идут без пейсинга.
+        if (chunk.toolName != null || chunk.usage != null) {
+          out.add(chunk);
+        }
+        if (chunk.reasoning.isNotEmpty) {
+          out.add(StreamChunk('', chunk.reasoning));
+        }
+        if (chunk.content.isNotEmpty) pacer.add(chunk.content);
+      },
+      onError: (Object e) {
+        if (out.isClosed) return;
+        out.addError(e);
+        cleanup();
+        out.close();
+      },
+      onDone: () {
+        if (out.isClosed) return;
+        final rest = pacer.flush();
+        if (rest.isNotEmpty) out.add(StreamChunk(rest, ''));
+        cleanup();
+        out.close();
+      },
+      cancelOnError: false,
+    );
+
+    out.onCancel = () {
+      cleanup();
+    };
+    return out.stream;
   }
 
   /// Непотоковый запрос одним вызовом: возвращает [ChatResult] —

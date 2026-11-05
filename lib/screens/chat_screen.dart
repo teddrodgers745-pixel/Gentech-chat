@@ -30,6 +30,7 @@ import '../core/generation/user_param_override_store.dart';
 import '../core/models/generation_schema.dart';
 import '../core/models/param_spec.dart';
 import '../features/composer/modes/image_gen_mode.dart';
+import '../core/utils/stream_pacer.dart';
 import '../services/chat_service.dart';
 import '../services/speech_service.dart';
 import '../services/tts_service.dart';
@@ -777,6 +778,18 @@ class _ChatScreenState extends State<ChatScreen> {
     ChatMessage? toolMsg;
     GenError? genError;
     Map<String, dynamic>? lastUsage;
+    // Подписка UI на пейсер плавного вывода: ValueNotifier<String>
+    // ([StreamPacer.displayed]) несёт полный показанный текст ответа.
+    StreamPacer? pacer;
+    void onPaced() {
+      if (!mounted) return;
+      final shown = pacer?.shown ?? '';
+      if (shown.length > reply.content.length) {
+        reply.content = shown;
+        _scheduleUi();
+      }
+    }
+
     try {
       final tools = await _activeTools();
       await for (final ch in _chatService.sendMessage(
@@ -789,6 +802,11 @@ class _ChatScreenState extends State<ChatScreen> {
         reasoningEffort: reasoningEffort,
         tools: tools,
       )) {
+        // Пейсер появляется при первом чанке (поток запускается лениво).
+        if (pacer == null) {
+          pacer = _chatService.activePacer;
+          pacer?.displayed.addListener(onPaced);
+        }
         if (ch.toolName != null) {
           if (ch.toolStatus == toolStatusRunning) {
             toolMsg = ChatMessage(
@@ -815,6 +833,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (!_chatService.wasCancelled) genError = GenErrorMapper.fromException(e);
     }
+    pacer?.displayed.removeListener(onPaced);
 
     _uiTimer?.cancel();
     _uiTimer = null;
