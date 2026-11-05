@@ -98,7 +98,11 @@ class TextPart extends MessagePart {
   /// Стоимость ответа (из usage провайдера); null — стоимости нет.
   final MessageCost? cost;
 
-  const TextPart(this.text, {this.cost});
+  /// Ссылки-источники из ответа провайдера (citations/annotations).
+  /// Пустой список — источников нет.
+  final List<String> sources;
+
+  const TextPart(this.text, {this.cost, this.sources = const <String>[]});
 
   @override
   String get label => text.trim().isEmpty ? '(пустой текст)' : text;

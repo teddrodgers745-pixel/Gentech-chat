@@ -12,6 +12,7 @@ import '../core/utils/stream_pacer.dart';
 import '../models/chat_message.dart';
 import '../models/tool.dart';
 import 'model_tool.dart';
+import 'search_enhancer.dart';
 
 class StreamChunk {
   final String content;
@@ -27,6 +28,10 @@ class StreamChunk {
   /// (запрос со stream_options.include_usage). null — статистики нет.
   final Map<String, dynamic>? usage;
 
+  /// Ссылки-источники из полей citations/annotations ответа провайдера.
+  /// Пустой список — источников нет.
+  final List<String> sources;
+
   const StreamChunk(
     this.content,
     this.reasoning, {
@@ -35,6 +40,7 @@ class StreamChunk {
     this.toolStatus,
     this.toolResult,
     this.usage,
+    this.sources = const <String>[],
   });
 }
 
@@ -112,11 +118,15 @@ class _RoundResult {
   /// Статистика токенов раунда (usage), если провайдер её вернул.
   final Map<String, dynamic>? usage;
 
+  /// Ссылки-источники из citations/annotations ответа провайдера.
+  final List<String> sources;
+
   const _RoundResult(
     this.content,
     this.reasoning,
     this.toolCalls, {
     this.usage,
+    this.sources = const <String>[],
   });
 }
 
@@ -195,6 +205,10 @@ class ChatService {
   http.Client? _client;
   bool _wasCancelled = false;
 
+  /// Поиск (searchMode) применяется к первому раунду текущего вызова
+  /// sendMessage/sendMessageResult; сбрасывается после применения.
+  bool _searchPending = false;
+
   /// Пейсер плавного вывода текста активной генерации; null — пейсинга нет.
   /// UI подписывается на [StreamPacer.displayed] (ValueNotifier<String>),
   /// чтобы получать полный показанный текст по мере «печатания».
@@ -225,6 +239,7 @@ class ChatService {
     List<Tool> tools = const <Tool>[],
   }) async* {
     _wasCancelled = false;
+    _searchPending = true;
     final history = <Map<String, dynamic>>[
       for (final m in messages) Map<String, dynamic>.of(m),
     ];
@@ -256,7 +271,12 @@ class ChatService {
         // Обычное завершение: без стрима отдаём ответ одним куском
         // (вместе со статистикой токенов, если она пришла).
         if (!stream) {
-          yield StreamChunk(res.content, res.reasoning, usage: res.usage);
+          yield StreamChunk(
+            res.content,
+            res.reasoning,
+            usage: res.usage,
+            sources: res.sources,
+          );
         }
         return;
       }
@@ -341,7 +361,12 @@ class ChatService {
     );
     final res = holder.result;
     if (res != null && !stream) {
-      yield StreamChunk(res.content, res.reasoning, usage: res.usage);
+      yield StreamChunk(
+        res.content,
+        res.reasoning,
+        usage: res.usage,
+        sources: res.sources,
+      );
     }
   }
 
@@ -402,8 +427,10 @@ class ChatService {
     sub = src.listen(
       (chunk) {
         if (out.isClosed) return;
-        // События инструментов и usage идут без пейсинга.
-        if (chunk.toolName != null || chunk.usage != null) {
+        // События инструментов, usage и источники идут без пейсинга.
+        if (chunk.toolName != null ||
+            chunk.usage != null ||
+            chunk.sources.isNotEmpty) {
           out.add(chunk);
         }
         if (chunk.reasoning.isNotEmpty) {
@@ -445,6 +472,7 @@ class ChatService {
     String? reasoningEffort,
     List<Tool> tools = const <Tool>[],
   }) async {
+    _searchPending = true;
     final holder = _RoundHolder();
     await _round(
       baseUrl: baseUrl,
@@ -495,7 +523,7 @@ class ChatService {
         'Accept': 'text/event-stream',
       });
       final builtin = _builtinToolsPayload();
-      req.body = jsonEncode({
+      Map<String, dynamic> bodyMap = {
         'model': model,
         'messages': history,
         'stream': stream,
@@ -517,7 +545,22 @@ class ChatService {
             ...builtin,
             if (tools.isNotEmpty) ..._toolsPayload(tools),
           ],
-      });
+      };
+      // Поиск (searchMode 'provider'/'modelAsTool') применяется один раз
+      // за вызов sendMessage — в первом раунде обращения к модели. Сбой
+      // поиска не ломает отправку основного запроса.
+      if (_searchPending) {
+        _searchPending = false;
+        try {
+          bodyMap = await enhanceRequestWithSearch(
+            bodyMap,
+            _lastUserText(history),
+            settings.searchMode,
+            settings.searchToolModel,
+          );
+        } catch (_) {}
+      }
+      req.body = jsonEncode(bodyMap);
 
       final resp = await client.send(req).timeout(_apiTimeout);
       if (resp.statusCode != 200) {
@@ -531,6 +574,7 @@ class ChatService {
         String reasoning = '';
         List<_ToolCall> calls = const <_ToolCall>[];
         Map<String, dynamic>? usage;
+        final sources = <String>[];
         try {
           final j = jsonDecode(body) as Map<String, dynamic>;
           final choices = j['choices'] as List?;
@@ -541,12 +585,15 @@ class ChatService {
             calls = _parseToolCalls(msg?['tool_calls'] as List?);
           }
           usage = _usageOf(j['usage']);
+          sources.addAll(_sourcesFrom(j['citations']));
+          sources.addAll(_sourcesFrom(j['annotations']));
         } catch (_) {}
         holder.result = _RoundResult(
           content,
           reasoning,
           calls,
           usage: usage,
+          sources: sources,
         );
         return;
       }
@@ -557,6 +604,7 @@ class ChatService {
       var content = '';
       var reasoning = '';
       Map<String, dynamic>? usage;
+      final sources = <String>[];
       final builders = <int, _ToolCallBuilder>{};
       await for (final line in lines) {
         if (!line.startsWith('data:')) continue;
@@ -572,6 +620,10 @@ class ChatService {
           if (rawUsage is Map) {
             usage = _usageOf(rawUsage);
             yield StreamChunk('', '', usage: usage);
+          }
+          if (json['citations'] != null || json['annotations'] != null) {
+            sources.addAll(_sourcesFrom(json['citations']));
+            sources.addAll(_sourcesFrom(json['annotations']));
           }
           final choices = json['choices'] as List?;
           if (choices == null || choices.isEmpty) continue;
@@ -616,7 +668,11 @@ class ChatService {
             if (b.isMeaningful) b.build(),
         ],
         usage: usage,
+        sources: sources,
       );
+      if (sources.isNotEmpty) {
+        yield StreamChunk('', '', sources: sources);
+      }
     } finally {
       client.close();
       if (identical(_client, client)) _client = null;
@@ -770,6 +826,48 @@ class ChatService {
       client.close();
       if (identical(_client, client)) _client = null;
     }
+  }
+
+  /// Текст последнего пользовательского сообщения (для поискового запроса).
+  static String _lastUserText(List<Map<String, dynamic>> history) {
+    for (final m in history.reversed) {
+      if (m['role'] != 'user') continue;
+      final c = m['content'];
+      if (c is String && c.trim().isNotEmpty) return c.trim();
+      if (c is List) {
+        final buf = StringBuffer();
+        for (final p in c) {
+          if (p is Map && p['type'] == 'text') {
+            final t = p['text'];
+            if (t is String) buf.write(t);
+          }
+        }
+        final t = buf.toString().trim();
+        if (t.isNotEmpty) return t;
+      }
+    }
+    return '';
+  }
+
+  /// Ссылки-источники из полей citations/annotations ответа провайдера:
+  /// строки-URL либо объекты с полем url/uri/link. Дубликаты убираются.
+  static List<String> _sourcesFrom(Object? raw) {
+    final out = <String>[];
+    if (raw is! List) return out;
+    for (final e in raw) {
+      String? url;
+      if (e is String) {
+        url = e;
+      } else if (e is Map) {
+        final v = e['url'] ?? e['uri'] ?? e['link'];
+        if (v is String) url = v;
+      }
+      final t = (url ?? '').trim();
+      if (t.startsWith('http://') || t.startsWith('https://')) {
+        if (!out.contains(t)) out.add(t);
+      }
+    }
+    return out;
   }
 
   String _scalar(Object? v) => v?.toString() ?? '';

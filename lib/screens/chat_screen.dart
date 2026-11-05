@@ -861,6 +861,7 @@ class _ChatScreenState extends State<ChatScreen> {
     ChatMessage? toolMsg;
     GenError? genError;
     Map<String, dynamic>? lastUsage;
+    final sources = <String>[];
     // Подписка UI на пейсер плавного вывода: ValueNotifier<String>
     // ([StreamPacer.displayed]) несёт полный показанный текст ответа.
     StreamPacer? pacer;
@@ -911,6 +912,9 @@ class _ChatScreenState extends State<ChatScreen> {
         reply.content += ch.content;
         reply.reasoning += ch.reasoning;
         if (ch.usage != null) lastUsage = ch.usage;
+        for (final s in ch.sources) {
+          if (!sources.contains(s)) sources.add(s);
+        }
         _scheduleUi();
       }
     } catch (e) {
@@ -935,9 +939,16 @@ class _ChatScreenState extends State<ChatScreen> {
       // Стоимость ответа из usage провайдера: мелкая строка под ответом.
       final usageCost = MessageCost.fromUsage(lastUsage);
       if (usageCost != null) {
-        reply.parts.add(TextPart('', cost: usageCost));
+        reply.parts.add(TextPart(
+          '',
+          cost: usageCost,
+          sources: List<String>.of(sources),
+        ));
         // Суммарная стоимость чата: прибавляем и сохраняем вместе с чатом.
         chat.totalCost += usageCost.cost;
+      } else if (sources.isNotEmpty) {
+        // Источники из citations/annotations провайдера — в TextPart.sources.
+        reply.parts.add(TextPart('', sources: List<String>.of(sources)));
       }
     }
     if (err == null &&

@@ -96,6 +96,7 @@ Map<String, dynamic> _encodePart(MessagePart part) {
       'type': 'text',
       'text': p.text,
       if (p.cost != null) 'cost': p.cost!.toJson(),
+      if (p.sources.isNotEmpty) 'sources': p.sources,
     };
   }
   if (p is ImagePart) {
@@ -166,11 +167,17 @@ MessagePart? _decodePart(Object? raw) {
       );
     default:
       final rawCost = j['cost'];
+      final rawSources = j['sources'];
       return TextPart(
         (j['text'] as String?) ?? '',
         cost: rawCost is Map
             ? MessageCost.fromJson(Map<String, dynamic>.from(rawCost))
             : null,
+        sources: rawSources is List
+            ? <String>[
+                for (final e in rawSources) if (e != null) e.toString(),
+              ]
+            : const <String>[],
       );
   }
 }
