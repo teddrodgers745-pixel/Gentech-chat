@@ -43,7 +43,8 @@ class MessageView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
+    return RepaintBoundary(
+      child: ListenableBuilder(
       listenable: Listenable.merge(<Listenable>[settings, settings.fontSizeN]),
       builder: (context, _) {
         final p = settings.palette;
@@ -66,21 +67,25 @@ class MessageView extends StatelessWidget {
         }
 
         if (message.role == 'user') {
-          return Container(
-            width: double.infinity,
-            margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            decoration: BoxDecoration(
-              color: p.userBg,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Text(
-              message.content,
-              style: fontStyle(
-                settings.bodyFont,
-                size: size,
-                color: p.text,
-                height: settings.lineHeight,
+          return Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 680),
+              margin: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: p.accent.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                message.content,
+                style: fontStyle(
+                  settings.bodyFont,
+                  size: size,
+                  color: p.text,
+                  height: settings.lineHeight,
+                ),
               ),
             ),
           );
@@ -89,7 +94,9 @@ class MessageView extends StatelessWidget {
         final waiting =
             streaming && message.content.isEmpty && message.reasoning.isEmpty;
 
-        return Padding(
+        return ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -145,8 +152,10 @@ class MessageView extends StatelessWidget {
                 ),
             ],
           ),
+          ),
         );
-      },
+        },
+      ),
     );
   }
 
@@ -288,7 +297,7 @@ class RichMarkdown extends StatelessWidget {
         );
         final mono = fontStyle(
           settings.codeFont,
-          size: size * 0.86,
+          size: 13,
           color: p.text,
           height: 1.45,
         );
@@ -321,7 +330,10 @@ class RichMarkdown extends StatelessWidget {
       strong: body.copyWith(fontWeight: FontWeight.w700),
       em: body.copyWith(fontStyle: FontStyle.italic),
       a: body.copyWith(color: p.accent, decoration: TextDecoration.underline),
-      code: mono.copyWith(backgroundColor: p.codeBg, color: p.accent),
+      code: mono.copyWith(
+        backgroundColor: p.codeBg.withValues(alpha: 0.55),
+        color: p.accent,
+      ),
       codeblockPadding: EdgeInsets.zero,
       codeblockDecoration: const BoxDecoration(),
       blockquote: body.copyWith(color: p.muted),
