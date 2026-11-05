@@ -7,7 +7,6 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../core/search/search_strategy.dart';
 import '../core/storage.dart';
-import '../models/tool.dart';
 import '../theme.dart';
 
 /// Секция «ПОИСК» на экране настроек: выбор режима поиска ([SearchMode]),
