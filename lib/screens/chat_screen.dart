@@ -71,7 +71,10 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _pinching = false;
 
   bool _streaming = false;
-  bool _stick = true;
+
+  /// Пользователь у нижнего края списка: автоскролл при стриминге
+  /// разрешён, кнопка «Вниз» скрыта.
+  bool _atBottom = true;
   Timer? _uiTimer;
 
   /// Уровень размышлений: 0 = Low, 1 = Medium, 2 = High,
@@ -135,6 +138,8 @@ class _ChatScreenState extends State<ChatScreen> {
   @override
   void initState() {
     super.initState();
+    // Умный автоскролл: следим, находится ли пользователь у нижнего края.
+    _scroll.addListener(_onScroll);
     // Восстановление незавершённых видео-задач после перезапуска приложения.
     _restoreSub = _genService.restorePendingJobs().listen(_onRestoredEvent);
     // Контроллер возможностей активной модели: параметры, vision, reasoning.
@@ -219,6 +224,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _genService.cancel();
     ttsService.stop();
     _input.dispose();
+    _scroll.removeListener(_onScroll);
     _scroll.dispose();
     super.dispose();
   }
@@ -315,6 +321,20 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ---------- прокрутка ----------
 
+  /// Слушатель ScrollController: в пределах 80 пикселей от нижнего края
+  /// пользователь считается «на дне» — автоскролл разрешён; выше —
+  /// автоскролл отключается и появляется кнопка «Вниз». setState
+  /// вызывается только при изменении значения, чтобы не дёргать
+  /// интерфейс на каждый тик прокрутки.
+  void _onScroll() {
+    if (!_scroll.hasClients) return;
+    final pos = _scroll.position;
+    final atBottom = pos.pixels >= pos.maxScrollExtent - 80;
+    if (atBottom != _atBottom) {
+      setState(() => _atBottom = atBottom);
+    }
+  }
+
   void _toEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
@@ -324,7 +344,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _opened() {
-    _stick = true;
+    _atBottom = true;
     _toEnd();
   }
 
@@ -334,7 +354,13 @@ class _ChatScreenState extends State<ChatScreen> {
       _uiTimer = null;
       if (!mounted) return;
       setState(() {});
-      if (_stick) _toEnd();
+      // Приход новых токенов: если пользователь у дна — держим список
+      // прижатым к нижнему краю (после того, как кадр перестроится).
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_atBottom && _scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent);
+        }
+      });
     });
   }
 
@@ -493,7 +519,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _input.clear();
     setState(() => _attachments.clear());
-    _stick = true;
+    _atBottom = true;
     await _runCompletion(chat, userApiContent: apiContent);
   }
 
@@ -801,7 +827,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (chat.messages.last.role == 'assistant') chat.messages.removeLast();
     if (chat.messages.isEmpty) return;
-    _stick = true;
+    _atBottom = true;
     await _runCompletion(chat);
   }
 
@@ -1121,19 +1147,15 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget _messages(Chat? chat, Palette p) {
     if (chat == null || chat.messages.isEmpty) return _empty(p);
     final msgs = chat.messages;
-    return Listener(
-      onPointerDown: _down,
-      onPointerMove: _move,
-      onPointerUp: _up,
-      onPointerCancel: _up,
-      child: NotificationListener<ScrollNotification>(
-        onNotification: (n) {
-          if (n.metrics.axis == Axis.vertical) {
-            _stick = n.metrics.extentAfter < 140;
-          }
-          return false;
-        },
-        child: SelectionArea(
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: Listener(
+            onPointerDown: _down,
+            onPointerMove: _move,
+            onPointerUp: _up,
+            onPointerCancel: _up,
+            child: SelectionArea(
           child: ListView.builder(
             controller: _scroll,
             physics: _pinching
@@ -1172,7 +1194,31 @@ class _ChatScreenState extends State<ChatScreen> {
             },
           ),
         ),
-      ),
+        ),
+        if (!_atBottom)
+          Positioned(
+            right: 16,
+            bottom: 16,
+            child: FloatingActionButton(
+              tooltip: 'Вниз',
+              heroTag: 'chat_scroll_to_bottom',
+              onPressed: _scrollToBottom,
+              child: const Icon(Icons.arrow_downward),
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Кнопка «Вниз»: плавно возвращает список к нижнему краю и снова
+  /// включает автоскролл.
+  void _scrollToBottom() {
+    if (!_scroll.hasClients) return;
+    setState(() => _atBottom = true);
+    _scroll.animateTo(
+      _scroll.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
     );
   }
 
