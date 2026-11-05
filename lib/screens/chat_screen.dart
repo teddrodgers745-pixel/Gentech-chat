@@ -1195,6 +1195,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
         ),
+        ),
         if (!_atBottom)
           Positioned(
             right: 16,
