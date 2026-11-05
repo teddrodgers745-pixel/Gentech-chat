@@ -193,7 +193,7 @@ class _TextChatInputState extends State<TextChatInput> {
                   const SizedBox(height: 13.3),
                   Row(
                     children: [
-                      Expanded(
+                      Flexible(
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Row(
@@ -208,22 +208,35 @@ class _TextChatInputState extends State<TextChatInput> {
                           ),
                         ),
                       ),
-                      const SizedBox(width: 2),
-                      IconButton(
-                        tooltip: 'Голосовой ввод',
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(
-                          minWidth: 44,
-                          minHeight: 44,
-                        ),
-                        visualDensity: VisualDensity.compact,
-                        iconSize: 28,
-                        icon: Icon(Icons.mic, size: 28, color: p.muted),
-                        onPressed: widget.streaming ? null : widget.onToggleMic,
+                      const Spacer(),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          SizedBox(
+                            width: 44,
+                            child: IconButton(
+                              tooltip: 'Голосовой ввод',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 44,
+                                minHeight: 44,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                              iconSize: 28,
+                              icon: Icon(Icons.mic, size: 28, color: p.muted),
+                              onPressed: widget.streaming
+                                  ? null
+                                  : widget.onToggleMic,
+                            ),
+                          ),
+                          if (widget.config.supportsAttachments) ...[
+                            const SizedBox(width: 2),
+                            SizedBox(width: 44, child: _attachButton(p)),
+                          ],
+                          const SizedBox(width: 2),
+                          _sendButton(p),
+                        ],
                       ),
-                      if (widget.config.supportsAttachments) _attachButton(p),
-                      const SizedBox(width: 2),
-                      _sendButton(p),
                     ],
                   ),
                 ],
