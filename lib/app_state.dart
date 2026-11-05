@@ -185,6 +185,12 @@ class AppSettings extends ChangeNotifier {
   /// Модель-инструмент поиска (режим modelAsTool): идентификатор модели.
   String searchToolModel = '';
 
+  /// Поддерживает ли активный провайдер серверный инструмент веб-поиска
+  /// ('type': 'web_search'). Определяется лёгким probe-запросом при выборе
+  /// режима «Провайдер» в настройках; true — инструмент добавляется
+  /// в тело каждого запроса /chat/completions.
+  bool webSearchSupported = false;
+
   /// Уровень размышлений (Reasoning Effort): id уровня 'off'..'xhigh'
   /// (см. ReasoningMapper). Сохраняется в SharedPreferences.
   String reasoningLevel = 'off';
@@ -225,6 +231,7 @@ class AppSettings extends ChangeNotifier {
     searchMode = SearchModes.isKnownId(rawSearchMode) ? rawSearchMode : 'off';
     customSearchApiKey = p.getString('customSearchApiKey') ?? '';
     searchToolModel = p.getString('searchToolModel') ?? '';
+    webSearchSupported = p.getBool('webSearchSupported') ?? false;
     final rawReasoning = p.getString('reasoningLevel') ?? 'off';
     reasoningLevel =
         ReasoningMapper.isKnownId(rawReasoning) ? rawReasoning : 'off';
@@ -252,6 +259,7 @@ class AppSettings extends ChangeNotifier {
     await p.setString('searchMode', searchMode);
     await p.setString('customSearchApiKey', customSearchApiKey);
     await p.setString('searchToolModel', searchToolModel);
+    await p.setBool('webSearchSupported', webSearchSupported);
     await p.setString('reasoningLevel', reasoningLevel);
     await p.setBool('advancedMode', advancedMode);
     await p.setBool('mcpEnabled', mcpEnabled);
@@ -339,6 +347,12 @@ class AppSettings extends ChangeNotifier {
   void setSearchToolModel(String v) {
     searchToolModel = v;
     _persist();
+  }
+
+  void setWebSearchSupported(bool v) {
+    webSearchSupported = v;
+    _persist();
+    notifyListeners();
   }
 
   void setReasoningLevel(String v) {

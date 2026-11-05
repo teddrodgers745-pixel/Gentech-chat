@@ -7,12 +7,15 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../core/search/search_strategy.dart';
 import '../core/storage.dart';
+import '../services/search_probe.dart';
 import '../theme.dart';
+import '../ui/screens/tools_screen.dart';
 
-/// Секция «ПОИСК» на экране настроек: выбор режима поиска ([SearchMode]),
-/// поле ключа пользовательского поискового API (режим customApi) и выбор
-/// модели-инструмента (режим modelAsTool). Все значения сохраняются
-/// в SharedPreferences через [AppSettings] и переживают перезапуск.
+/// Секция «ПОИСК» на экране настроек: выпадающий список режима поиска
+/// (Выключен / Нативный / Провайдер / Инструмент), проверка поддержки
+/// серверного веб-поиска провайдера лёгким probe-запросом (режим
+/// «Провайдер») и переход к настройке инструментов (режим «Инструмент»).
+/// Все значения сохраняются в SharedPreferences через [AppSettings].
 class SearchSettingsSection extends StatefulWidget {
   const SearchSettingsSection({super.key});
 
@@ -26,9 +29,23 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
   Timer? _debounce;
   bool _showKey = false;
 
+  /// Идёт ли probe-проверка поддержки веб-поиска прямо сейчас.
+  bool _checking = false;
+
+  /// Текст ошибки последней проверки (сеть/таймаут); null — ошибки нет.
+  String? _probeError;
+
   /// Идентификаторы моделей из инструментов типа «модель»
   /// (Tool.typeModel) — кандидаты для роли модели-инструмента.
   List<String> _toolModels = const <String>[];
+
+  /// Режимы выпадающего списка: ровно четыре варианта из задания.
+  static const List<SearchMode> _modes = <SearchMode>[
+    SearchMode.off,
+    SearchMode.native,
+    SearchMode.provider,
+    SearchMode.modelAsTool,
+  ];
 
   @override
   void initState() {
@@ -71,6 +88,15 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
     });
   }
 
+  /// Подписи вариантов выпадающего списка (по заданию).
+  static String _modeLabel(SearchMode mode) => switch (mode) {
+        SearchMode.off => 'Выключен',
+        SearchMode.native => 'Нативный',
+        SearchMode.provider => 'Провайдер',
+        SearchMode.modelAsTool => 'Инструмент',
+        SearchMode.customApi => 'Свой API',
+      };
+
   static String _hintFor(SearchMode mode) => switch (mode) {
         SearchMode.off =>
           'Поиск выключен: модель отвечает только из своих знаний.',
@@ -84,6 +110,122 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
           'Запросы уходят в ваш собственный поисковый API с этим ключом.',
       };
 
+  /// Проверка поддержки серверного веб-поиска: лёгкий запрос
+  /// (model, messages: ping, max_tokens: 1, tools: web_search).
+  /// 200 -> web_search_supported = true («Поддерживается»),
+  /// 400 -> false («Не поддерживается»).
+  Future<void> _runProbe() async {
+    if (_checking) return;
+    final cfg = effectiveConfig();
+    if (cfg.baseUrl.trim().isEmpty ||
+        cfg.model.trim().isEmpty ||
+        cfg.apiKey.trim().isEmpty) {
+      setState(() {
+        _probeError =
+            'Для проверки задайте Base URL, API-ключ и модель в настройках.';
+      });
+      return;
+    }
+    setState(() {
+      _checking = true;
+      _probeError = null;
+    });
+    final res = await probeWebSearchSupport(
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey,
+      model: cfg.model,
+    );
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      switch (res) {
+        case WebSearchProbeResult.supported:
+          settings.setWebSearchSupported(true);
+        case WebSearchProbeResult.unsupported:
+          settings.setWebSearchSupported(false);
+        case WebSearchProbeResult.error:
+          _probeError =
+              'Не удалось выполнить проверку: проверьте сеть и повторите.';
+      }
+    });
+  }
+
+  /// Смена режима в выпадающем списке; при выборе «Провайдер»
+  /// сразу запускается проверка поддержки веб-поиска.
+  void _onModeChanged(SearchMode? mode) {
+    if (mode == null) return;
+    settings.setSearchMode(mode.id);
+    if (mode == SearchMode.provider) _runProbe();
+  }
+
+  /// Строка статуса проверки поддержки (режим «Провайдер»).
+  Widget _probeRow(Palette p) {
+    final Widget status;
+    if (_checking) {
+      status = Row(
+        children: [
+          const SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Проверяем поддержку веб-поиска…',
+              style: TextStyle(color: p.muted, fontSize: 12.5),
+            ),
+          ),
+        ],
+      );
+    } else if (_probeError != null) {
+      status = Text(
+        _probeError!,
+        style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
+      );
+    } else {
+      status = Row(
+        children: [
+          Icon(
+            settings.webSearchSupported
+                ? Icons.check_circle_rounded
+                : Icons.cancel_outlined,
+            size: 16,
+            color: settings.webSearchSupported ? p.accent : p.muted,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            settings.webSearchSupported
+                ? 'Поддерживается'
+                : 'Не поддерживается',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: settings.webSearchSupported ? p.accent : p.muted,
+            ),
+          ),
+        ],
+      );
+    }
+    return Row(
+      children: [
+        Expanded(child: status),
+        const SizedBox(width: 8),
+        TextButton(
+          onPressed: _checking ? null : _runProbe,
+          style: TextButton.styleFrom(
+            foregroundColor: p.accent,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            minimumSize: Size.zero,
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            textStyle: const TextStyle(fontSize: 12.5),
+          ),
+          child: Text(_probeError == null ? 'Проверить снова' : 'Проверить'),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -91,6 +233,8 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
       builder: (context, _) {
         final p = settings.palette;
         final mode = SearchModes.fromId(settings.searchMode);
+        final dropdownValue =
+            _modes.any((m) => m.id == mode.id) ? mode : SearchMode.off;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -109,18 +253,28 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
               style: TextStyle(color: p.muted, fontSize: 13),
             ),
             const SizedBox(height: 10),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final m in SearchMode.values) _modeChip(m, p),
+            DropdownButtonFormField<SearchMode>(
+              initialValue: dropdownValue,
+              isExpanded: true,
+              decoration: const InputDecoration(labelText: 'Режим поиска'),
+              items: <DropdownMenuItem<SearchMode>>[
+                for (final m in _modes)
+                  DropdownMenuItem<SearchMode>(
+                    value: m,
+                    child: Text(_modeLabel(m)),
+                  ),
               ],
+              onChanged: _onModeChanged,
             ),
             const SizedBox(height: 8),
             Text(
               _hintFor(mode),
               style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
             ),
+            if (mode == SearchMode.provider) ...[
+              const SizedBox(height: 12),
+              _probeRow(p),
+            ],
             if (mode == SearchMode.customApi) ...[
               const SizedBox(height: 12),
               TextField(
@@ -190,56 +344,19 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
                   },
                 ),
               ],
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ToolsScreen()),
+                ),
+                icon: const Icon(Icons.build_outlined, size: 18),
+                label: const Text('Настроить'),
+              ),
             ],
           ],
         );
       },
-    );
-  }
-
-  /// Чип режима в общем стиле приложения (как выбор темы и типа модели):
-  /// акцентная заливка и галочка у выбранного варианта.
-  Widget _modeChip(SearchMode mode, Palette p) {
-    final selected = SearchModes.fromId(settings.searchMode) == mode;
-    return InkWell(
-      borderRadius: BorderRadius.circular(18),
-      onTap: () => settings.setSearchMode(mode.id),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 160),
-        curve: Curves.easeOut,
-        height: 34,
-        padding: const EdgeInsets.symmetric(horizontal: 13),
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: selected
-              ? p.accent.withValues(alpha: 0.16)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: selected ? p.accent : p.border,
-            width: selected ? 1.6 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (selected) ...[
-              Icon(Icons.check_rounded, size: 15, color: p.accent),
-              const SizedBox(width: 4),
-            ],
-            Text(
-              mode.label,
-              maxLines: 1,
-              style: TextStyle(
-                fontSize: 13,
-                height: 1.2,
-                fontWeight: FontWeight.w600,
-                color: selected ? p.accent : p.muted,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

@@ -14,7 +14,6 @@ import 'preset_edit_screen.dart';
 import '../theme.dart';
 import '../widgets/global_connection_section.dart';
 import '../widgets/search_settings_section.dart';
-import '../widgets/web_search_section.dart';
 import '../ui/screens/mcp_screen.dart';
 import '../ui/screens/tools_screen.dart';
 import '../widgets/message_view.dart';
@@ -291,7 +290,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   MaterialPageRoute(builder: (_) => const McpScreen()),
                 ),
               ),
-              const WebSearchSection(),
               const SearchSettingsSection(),
               _section(p, 'МОДЕЛИ И ПРОФИЛИ'),
               Text(

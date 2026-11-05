@@ -111,7 +111,8 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     return TextModelConfig(
       supportsAttachments: true,
-      supportsWebSearch: settings.webSearchMode != 'off',
+      supportsWebSearch:
+          settings.webSearchMode != 'off' || settings.searchMode != 'off',
     );
   }
 

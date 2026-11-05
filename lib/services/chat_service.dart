@@ -560,6 +560,23 @@ class ChatService {
           );
         } catch (_) {}
       }
+      // Серверный веб-поиск провайдера: если probe-проверка показала
+      // поддержку (web_search_supported), инструмент web_search
+      // добавляется в тело запроса, если его там ещё нет.
+      if (settings.webSearchSupported) {
+        final existing = bodyMap['tools'];
+        final list = <Map<String, dynamic>>[
+          if (existing is List)
+            for (final t in existing)
+              if (t is Map) Map<String, dynamic>.from(t),
+        ];
+        var hasSearch = false;
+        for (final t in list) {
+          if ((t['type'] ?? '').toString() == 'web_search') hasSearch = true;
+        }
+        if (!hasSearch) list.add(<String, dynamic>{'type': 'web_search'});
+        bodyMap['tools'] = list;
+      }
       req.body = jsonEncode(bodyMap);
 
       final resp = await client.send(req).timeout(_apiTimeout);
