@@ -21,6 +21,10 @@ class StreamChunk {
   final String? toolStatus;
   final String? toolResult;
 
+  /// Статистика токенов раунда (usage), когда провайдер её отдал
+  /// (запрос со stream_options.include_usage). null — статистики нет.
+  final Map<String, dynamic>? usage;
+
   const StreamChunk(
     this.content,
     this.reasoning, {
@@ -28,7 +32,18 @@ class StreamChunk {
     this.toolArgs,
     this.toolStatus,
     this.toolResult,
+    this.usage,
   });
+}
+
+/// Итог непотокового запроса: текст ответа и статистика токенов (usage)
+/// раунда, когда провайдер её вернул. Возвращается методом
+/// [ChatService.sendMessageResult].
+class ChatResult {
+  final String text;
+  final Map<String, dynamic>? usage;
+
+  const ChatResult({this.text = '', this.usage});
 }
 
 /// Выбранный пользователем файл: понятное имя и путь на устройстве.
@@ -91,7 +106,16 @@ class _RoundResult {
   final String content;
   final String reasoning;
   final List<_ToolCall> toolCalls;
-  const _RoundResult(this.content, this.reasoning, this.toolCalls);
+
+  /// Статистика токенов раунда (usage), если провайдер её вернул.
+  final Map<String, dynamic>? usage;
+
+  const _RoundResult(
+    this.content,
+    this.reasoning,
+    this.toolCalls, {
+    this.usage,
+  });
 }
 
 class _RoundHolder {
@@ -215,8 +239,11 @@ class ChatService {
       if (res == null) return;
 
       if (res.toolCalls.isEmpty) {
-        // Обычное завершение: без стрима отдаём ответ одним куском.
-        if (!stream) yield StreamChunk(res.content, res.reasoning);
+        // Обычное завершение: без стрима отдаём ответ одним куском
+        // (вместе со статистикой токенов, если она пришла).
+        if (!stream) {
+          yield StreamChunk(res.content, res.reasoning, usage: res.usage);
+        }
         return;
       }
 
@@ -299,8 +326,38 @@ class ChatService {
     );
     final res = holder.result;
     if (res != null && !stream) {
-      yield StreamChunk(res.content, res.reasoning);
+      yield StreamChunk(res.content, res.reasoning, usage: res.usage);
     }
+  }
+
+  /// Непотоковый запрос одним вызовом: возвращает [ChatResult] —
+  /// текст ответа и статистику токенов (usage) раунда, если провайдер
+  /// её отдал. Удобно, когда стриминг не нужен, но нужны токены.
+  Future<ChatResult> sendMessageResult({
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+    required List<Map<String, dynamic>> messages,
+    double? temperature,
+    String? reasoningEffort,
+    List<Tool> tools = const <Tool>[],
+  }) async {
+    final holder = _RoundHolder();
+    await _round(
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+      model: model,
+      history: <Map<String, dynamic>>[
+        for (final m in messages) Map<String, dynamic>.of(m),
+      ],
+      stream: false,
+      temperature: temperature,
+      reasoningEffort: reasoningEffort,
+      tools: tools,
+      holder: holder,
+    ).toList();
+    final res = holder.result;
+    return ChatResult(text: res?.content ?? '', usage: res?.usage);
   }
 
   Tool? _findTool(List<Tool> tools, String name) {
@@ -339,6 +396,10 @@ class ChatService {
         'model': model,
         'messages': history,
         'stream': stream,
+        // Просим статистику токенов: провайдер приложит usage к финальному
+        // чанку стрима (у которого choices пуст).
+        if (stream)
+          'stream_options': <String, dynamic>{'include_usage': true},
         if (temperature != null) 'temperature': temperature,
         if (reasoningEffort != null) 'reasoning_effort': reasoningEffort,
         if (tools.isNotEmpty || builtin.isNotEmpty)
@@ -359,6 +420,7 @@ class ChatService {
         String content = '';
         String reasoning = '';
         List<_ToolCall> calls = const <_ToolCall>[];
+        Map<String, dynamic>? usage;
         try {
           final j = jsonDecode(body) as Map<String, dynamic>;
           final choices = j['choices'] as List?;
@@ -368,8 +430,14 @@ class ChatService {
             reasoning = (msg?['reasoning_content'] as String?) ?? '';
             calls = _parseToolCalls(msg?['tool_calls'] as List?);
           }
+          usage = _usageOf(j['usage']);
         } catch (_) {}
-        holder.result = _RoundResult(content, reasoning, calls);
+        holder.result = _RoundResult(
+          content,
+          reasoning,
+          calls,
+          usage: usage,
+        );
         return;
       }
 
@@ -378,6 +446,7 @@ class ChatService {
           resp.stream.transform(utf8.decoder).transform(const LineSplitter());
       var content = '';
       var reasoning = '';
+      Map<String, dynamic>? usage;
       final builders = <int, _ToolCallBuilder>{};
       await for (final line in lines) {
         if (!line.startsWith('data:')) continue;
@@ -386,6 +455,14 @@ class ChatService {
         if (data == '[DONE]') break;
         try {
           final json = jsonDecode(data) as Map<String, dynamic>;
+          // Статистика токенов раунда (stream_options.include_usage):
+          // приходит в финальном чанке, у которого choices пуст. Сохраняем
+          // в usage раунда и пробрасываем наружу пустым чанком.
+          final rawUsage = json['usage'];
+          if (rawUsage is Map) {
+            usage = _usageOf(rawUsage);
+            yield StreamChunk('', '', usage: usage);
+          }
           final choices = json['choices'] as List?;
           if (choices == null || choices.isEmpty) continue;
           final delta = (choices[0] as Map)['delta'] as Map?;
@@ -428,6 +505,7 @@ class ChatService {
           for (final b in builders.values)
             if (b.isMeaningful) b.build(),
         ],
+        usage: usage,
       );
     } finally {
       client.close();
@@ -478,6 +556,17 @@ class ChatService {
       } catch (_) {}
     }
     return <String, dynamic>{'type': 'object', 'properties': <String, dynamic>{}};
+  }
+
+  /// Приводит поле usage ответа к Map<String, dynamic>; null — это не карта
+  /// либо ключи не строки. Битые данные не роняют разбор ответа.
+  static Map<String, dynamic>? _usageOf(Object? raw) {
+    if (raw is! Map) return null;
+    try {
+      return Map<String, dynamic>.from(raw);
+    } catch (_) {
+      return null;
+    }
   }
 
   List<_ToolCall> _parseToolCalls(List? raw) {
