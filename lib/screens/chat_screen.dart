@@ -834,6 +834,8 @@ class _ChatScreenState extends State<ChatScreen> {
       final usageCost = MessageCost.fromUsage(lastUsage);
       if (usageCost != null) {
         reply.parts.add(TextPart('', cost: usageCost));
+        // Суммарная стоимость чата: прибавляем и сохраняем вместе с чатом.
+        chat.totalCost += usageCost.cost;
       }
     }
     if (!mounted) {

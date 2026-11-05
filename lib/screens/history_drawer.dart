@@ -125,9 +125,27 @@ class HistoryDrawer extends StatelessWidget {
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                 ),
-                                subtitle: Text(
-                                  _fmt(c.updatedAt),
-                                  style: TextStyle(color: p.muted, fontSize: 12),
+                                subtitle: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      '${c.messages.length} сообщ. · '
+                                      '${c.totalCost.toStringAsFixed(2)} ₽',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        color: p.muted,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    Text(
+                                      _fmt(c.updatedAt),
+                                      style: TextStyle(
+                                        color: p.muted,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ],
                                 ),
                                 onTap: enabled
                                     ? () {
