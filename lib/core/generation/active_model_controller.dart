@@ -77,7 +77,9 @@ class ActiveModelController extends ChangeNotifier {
       vision: vision,
       reasoning: reasoning,
       reasoningLevels: reasoning
-          ? const <String>['off', 'low', 'medium', 'high']
+          ? const <String>[
+              'off', 'low', 'medium', 'high', 'xhigh', 'max',
+            ]
           : const <String>[],
     );
     notifyListeners();

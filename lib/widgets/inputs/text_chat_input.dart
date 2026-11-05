@@ -6,6 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../app_state.dart';
 import '../../core/models/active_model_capabilities.dart';
+import '../../core/search/search_strategy.dart';
 import '../../core/utils/reasoning_mapper.dart';
 import '../../features/composer/widgets/reasoning_sheet.dart';
 import '../../models/model_config.dart';
@@ -69,14 +70,16 @@ class _TextChatInputState extends State<TextChatInput> {
 
   static const double _radius = 24;
 
-  /// Фоны и цвета текста капсулы для каждого из четырёх уровней
+  /// Фоны и цвета текста капсулы для каждого из шести уровней
   /// ([ReasoningLevel]): off — серый, low — синий, medium — оранжевый,
-  /// high — фиолетовый.
+  /// high — фиолетовый, xhigh — пурпурный, max — тёплый медный.
   static const List<Color> _reasoningFills = <Color>[
     Color(0xFF3A3733), // off — серый
     Color(0xFF2D5A88), // low — синий
     Color(0xFFB05A28), // medium — оранжевый
     Color(0xFF6C3FA0), // high — фиолетовый
+    Color(0xFF8E2D5E), // xhigh — пурпурный
+    Color(0xFF8A5A2B), // max — тёплый медный
   ];
 
   static const List<Color> _reasoningLevelColors = <Color>[
@@ -84,6 +87,8 @@ class _TextChatInputState extends State<TextChatInput> {
     Color(0xFFBFDBFE), // low — голубой
     Color(0xFFFFD9B3), // medium — тёплый оранжевый
     Color(0xFFE5D4FF), // high — светло-фиолетовый
+    Color(0xFFF7C7E2), // xhigh — светло-розовый
+    Color(0xFFF3DDB9), // max — тёплый песочный
   ];
 
   static const Color _searchFill = Color(0xFF3B82F6);
@@ -134,19 +139,26 @@ class _TextChatInputState extends State<TextChatInput> {
               ReasoningLevel.low,
               ReasoningLevel.medium,
               ReasoningLevel.high,
+              ReasoningLevel.xhigh,
+              ReasoningLevel.max,
             ]
           : levels,
       currentId: settings.reasoningLevel,
     );
   }
 
+  /// Тап по капсуле «Поиск»: показывает SnackBar с текущим режимом
+  /// поиска (off / native / provider / modelAsTool / customApi).
   void _handleToggleSearch() {
     HapticFeedback.lightImpact();
-    if (widget.onToggleSearch != null) {
-      widget.onToggleSearch!();
-    } else {
-      setState(() => settings.setWebSearch(!settings.webSearchEnabled));
-    }
+    final mode = SearchModes.fromId(settings.searchMode);
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      SnackBar(
+        content: Text('Режим поиска: ${mode.label}'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    widget.onToggleSearch?.call();
   }
 
   @override
@@ -216,48 +228,36 @@ class _TextChatInputState extends State<TextChatInput> {
                   ),
                   const SizedBox(height: 13.3),
                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Flexible(
+                      // Левая часть: капсулы «Поиск» и «Мышление».
+                      // Горизонтальный скролл — капсулы не сжимаются
+                      // и не обрезаются на узком экране.
+                      Expanded(
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              _searchCapsule(p),
+                              const SizedBox(width: 8),
                               _reasoningCapsule(),
-                              if (widget.config.supportsWebSearch) ...[
-                                const SizedBox(width: 8),
-                                _searchCapsule(p),
-                              ],
                             ],
                           ),
                         ),
                       ),
-                      const Spacer(),
+                      const SizedBox(width: 8),
+                      // Правая часть (зафиксирована): Скрепка -> Микрофон
+                      // -> Кнопка «Отправить» (медный кружок).
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          SizedBox(
-                            width: 44,
-                            child: IconButton(
-                              tooltip: 'Голосовой ввод',
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints(
-                                minWidth: 44,
-                                minHeight: 44,
-                              ),
-                              visualDensity: VisualDensity.compact,
-                              iconSize: 28,
-                              icon: Icon(Icons.mic, size: 28, color: p.muted),
-                              onPressed: widget.streaming
-                                  ? null
-                                  : widget.onToggleMic,
-                            ),
-                          ),
                           if (widget.config.supportsAttachments) ...[
+                            _attachButton(p),
                             const SizedBox(width: 2),
-                            SizedBox(width: 44, child: _attachButton(p)),
                           ],
-                          const SizedBox(width: 4),
+                          _micButton(p),
+                          const SizedBox(width: 8),
                           _sendButton(p),
                         ],
                       ),
@@ -281,6 +281,18 @@ class _TextChatInputState extends State<TextChatInput> {
       iconSize: 26,
       icon: Icon(Icons.attach_file, size: 26, color: p.muted),
       onPressed: widget.streaming ? null : widget.onAttach,
+    );
+  }
+
+  Widget _micButton(Palette p) {
+    return IconButton(
+      tooltip: 'Голосовой ввод',
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+      visualDensity: VisualDensity.compact,
+      iconSize: 28,
+      icon: Icon(Icons.mic, size: 28, color: p.muted),
+      onPressed: widget.streaming ? null : widget.onToggleMic,
     );
   }
 
@@ -312,20 +324,9 @@ class _TextChatInputState extends State<TextChatInput> {
     final label = level.label;
     final fill = _reasoningFills[level.index];
     final levelColor = _reasoningLevelColors[level.index];
-    final Widget leading = switch (level) {
-      ReasoningLevel.off =>
-        Icon(Icons.speed, size: 32, color: levelColor),
-      ReasoningLevel.low =>
-        Icon(Icons.lightbulb_outline, size: 32, color: levelColor),
-      ReasoningLevel.medium => Image.asset(
-          'assets/icons/brain_high.png',
-          width: 32,
-          height: 32,
-          fit: BoxFit.contain,
-        ),
-      ReasoningLevel.high =>
-        Icon(Icons.psychology, size: 32, color: levelColor),
-    };
+    // Иконка одна для всех уровней — меняется только цвет уровня.
+    final Widget leading =
+        Icon(Icons.psychology, size: 32, color: levelColor);
     return Tooltip(
       message:
           'Уровень размышлений: $label (тап — сменить, удержание — подробно)',
