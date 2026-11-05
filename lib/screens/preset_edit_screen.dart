@@ -95,7 +95,7 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
   Future<void> _delete() async {
     final existing = widget.existing;
     if (existing == null) return;
-    if (existing.id == presets.defaultPresetId) {
+    if (existing.id == PresetStore.defaultPresetId) {
       _snack('Системный дефолтный пресет удалить нельзя');
       return;
     }
