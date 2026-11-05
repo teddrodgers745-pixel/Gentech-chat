@@ -187,11 +187,11 @@ class FileCard extends StatelessWidget {
   Future<void> _save(BuildContext context) async {
     try {
       final docs = await getApplicationDocumentsDirectory();
-      final folder = Directory('${docs.path}/GenTech');
+      final folder = Directory('${docs.path}/GenTech/files');
       await folder.create(recursive: true);
-      final file = await _writeToDir(folder);
+      await _writeToDir(folder);
       if (!context.mounted) return;
-      _snack(context, 'Файл сохранён: ${file.path}');
+      _snack(context, 'Сохранено');
     } catch (_) {
       if (!context.mounted) return;
       _snack(context, 'Не удалось сохранить файл');
