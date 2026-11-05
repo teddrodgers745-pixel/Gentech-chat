@@ -12,31 +12,43 @@ import '../theme.dart';
 import '../ui/screens/tools_screen.dart';
 
 /// Секция «ПОИСК» на экране настроек: выпадающий список режима поиска
-/// (Выключен / Нативный / Провайдер / Инструмент), проверка поддержки
-/// серверного веб-поиска провайдера лёгким probe-запросом (режим
-/// «Провайдер») и переход к настройке инструментов (режим «Инструмент»).
+/// (Выключен / Нативный / Провайдер / Инструмент) и динамическая область
+/// под списком (SearchModeDetailView):
+///  - off — ничего не показывается;
+///  - native — пояснение «настройки не требуются»;
+///  - modelAsTool — кнопка «⚙️ Настроить инструмент поиска»
+///    (переход на экран инструментов) плюс выбор модели-инструмента;
+///  - provider — auto-ping: при выборе режима автоматически выполняется
+///    лёгкий probe-запрос (tools: [{'type': 'web_search'}]); ответ 200 —
+///    зелёный баннер с иконкой обновления, ответ 400 — красный баннер
+///    с кнопкой «Повторить».
 /// Все значения сохраняются в SharedPreferences через [AppSettings].
 class SearchSettingsSection extends StatefulWidget {
   const SearchSettingsSection({super.key});
 
   @override
-  State<SearchSettingsSection> createState() => _SearchSettingsSectionState();
+  State<SearchSettingsSection> createState() =>
+      _SearchSettingsSectionState();
 }
 
+/// Состояние авто-проверки поддержки веб-поиска (режим «Провайдер»).
+enum _ProbeState { idle, checking, supported, unsupported, error }
+
 class _SearchSettingsSectionState extends State<SearchSettingsSection> {
+  static const Color _green = Color(0xFF2E7D32);
+  static const Color _red = Color(0xFFB3261E);
+
   late final TextEditingController _apiKey;
   late final TextEditingController _toolModel;
   Timer? _debounce;
   bool _showKey = false;
 
-  /// Идёт ли probe-проверка поддержки веб-поиска прямо сейчас.
-  bool _checking = false;
+  /// Состояние авто-проверки поддержки веб-поиска.
+  _ProbeState _probeState = _ProbeState.idle;
 
-  /// Текст ошибки последней проверки (сеть/таймаут); null — ошибки нет.
+  /// Текст проблемы последней проверки (нет подключения, сбой сети);
+  /// null — проблемы нет.
   String? _probeError;
-
-  /// Проверка уже выполнялась: до неё итог зелёный/красный не показывается.
-  bool _probeChecked = false;
 
   /// Идентификаторы моделей из инструментов типа «модель»
   /// (Tool.typeModel) — кандидаты для роли модели-инструмента.
@@ -56,6 +68,11 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
     _apiKey = TextEditingController(text: settings.customSearchApiKey);
     _toolModel = TextEditingController(text: settings.searchToolModel);
     _loadToolModels();
+    // Auto-ping: режим «Провайдер» уже выбран при открытии настроек —
+    // проверка поддержки запускается автоматически.
+    if (SearchModes.fromId(settings.searchMode) == SearchMode.provider) {
+      unawaited(_runProbe());
+    }
   }
 
   @override
@@ -91,7 +108,7 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
     });
   }
 
-  /// Подписи вариантов выпадающего списка (по заданию).
+  /// Подписи вариантов выпадающего списка.
   static String _modeLabel(SearchMode mode) => switch (mode) {
         SearchMode.off => 'Выключен',
         SearchMode.native => 'Нативный',
@@ -100,37 +117,27 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
         SearchMode.customApi => 'Свой API',
       };
 
-  static String _hintFor(SearchMode mode) => switch (mode) {
-        SearchMode.off =>
-          'Поиск выключен: модель отвечает только из своих знаний.',
-        SearchMode.native =>
-          'Встроенный поиск самой модели, без дополнительных настроек.',
-        SearchMode.provider =>
-          'Серверный поиск, который предоставляет подключённый провайдер.',
-        SearchMode.modelAsTool =>
-          'Поиск выполняет отдельная модель, подключённая как инструмент.',
-        SearchMode.customApi =>
-          'Запросы уходят в ваш собственный поисковый API с этим ключом.',
-      };
-
-  /// Проверка поддержки серверного веб-поиска: лёгкий запрос
-  /// (model, messages: ping, max_tokens: 1, tools: web_search).
-  /// 200 -> web_search_supported = true («Поддерживается»),
-  /// 400 -> false («Не поддерживается»).
+  /// Auto-ping: лёгкая проверка поддержки серверного веб-поиска
+  /// (POST /chat/completions с tools: [{'type': 'web_search'}]).
+  /// 200 -> «Провайдер поддерживает веб-поиск», 400 -> «не поддерживает».
+  /// Итог сохраняется в настройках — от него зависит добавление
+  /// инструмента web_search в реальные запросы чата.
   Future<void> _runProbe() async {
-    if (_checking) return;
+    if (_probeState == _ProbeState.checking) return;
     final cfg = effectiveConfig();
     if (cfg.baseUrl.trim().isEmpty ||
         cfg.model.trim().isEmpty ||
         cfg.apiKey.trim().isEmpty) {
+      if (!mounted) return;
       setState(() {
+        _probeState = _ProbeState.error;
         _probeError =
             'Для проверки задайте Base URL, API-ключ и модель в настройках.';
       });
       return;
     }
     setState(() {
-      _checking = true;
+      _probeState = _ProbeState.checking;
       _probeError = null;
     });
     final res = await probeWebSearchSupport(
@@ -140,112 +147,275 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
     );
     if (!mounted) return;
     setState(() {
-      _checking = false;
       switch (res) {
         case WebSearchProbeResult.supported:
+          _probeState = _ProbeState.supported;
           settings.setWebSearchSupported(true);
           settings.setProviderSearchSupported(true);
-          _probeChecked = true;
         case WebSearchProbeResult.unsupported:
+          _probeState = _ProbeState.unsupported;
           settings.setWebSearchSupported(false);
           settings.setProviderSearchSupported(false);
-          _probeChecked = true;
         case WebSearchProbeResult.error:
+          _probeState = _ProbeState.error;
           _probeError =
-              'Не удалось выполнить проверку: проверьте сеть и повторите.';
+              'Проверка не удалась: проверьте сеть и повторите.';
       }
     });
   }
 
   /// Смена режима в выпадающем списке; при выборе «Провайдер»
-  /// сразу запускается проверка поддержки веб-поиска.
+  /// автоматически запускается проверка поддержки (auto-ping).
   void _onModeChanged(SearchMode? mode) {
     if (mode == null) return;
     settings.setSearchMode(mode.id);
-    if (mode == SearchMode.provider) _runProbe();
+    if (mode == SearchMode.provider) {
+      unawaited(_runProbe());
+    } else {
+      setState(() {
+        _probeState = _ProbeState.idle;
+        _probeError = null;
+      });
+    }
   }
 
-  /// Строка статуса проверки поддержки (режим «Провайдер»).
-  Widget _probeRow(Palette p) {
-    final Widget status;
-    if (_checking) {
-      status = Row(
-        children: [
-          const SizedBox(
-            width: 14,
-            height: 14,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Проверяем поддержку веб-поиска…',
-              style: TextStyle(color: p.muted, fontSize: 12.5),
-            ),
-          ),
-        ],
-      );
-    } else if (_probeError != null) {
-      status = Text(
-        _probeError!,
-        style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
-      );
-    } else if (!_probeChecked) {
-      status = Text(
-        'Проверка ещё не выполнялась',
-        style: TextStyle(color: p.muted, fontSize: 12.5),
-      );
-    } else if (settings.providerSearchSupported) {
-      // Ответ 200: поиск поддерживается — зелёная галочка.
-      status = const Row(
-        children: [
-          Icon(Icons.check_circle_rounded, size: 16, color: Color(0xFF2E7D32)),
-          SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              'Поиск поддерживается',
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF2E7D32),
-              ),
-            ),
-          ),
-        ],
-      );
-    } else {
-      // Ответ 400: провайдер отклонил инструмент web_search — красный крест.
-      status = const Row(
-        children: [
-          Icon(Icons.cancel_outlined, size: 16, color: Color(0xFFB3261E)),
-          SizedBox(width: 6),
-          Expanded(
-            child: Text(
-              'Провайдер не поддерживает поиск',
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFFB3261E),
-              ),
-            ),
-          ),
-        ],
-      );
+  /// Динамическая область под выпадающим списком (SearchModeDetailView).
+  Widget _detailView(Palette p, SearchMode mode) {
+    switch (mode) {
+      case SearchMode.off:
+        return const SizedBox.shrink();
+      case SearchMode.native:
+        return Text(
+          'Поиск выполняется самой моделью. Настройки не требуются.',
+          style: TextStyle(color: p.muted, fontSize: 13, height: 1.35),
+        );
+      case SearchMode.provider:
+        return _providerDetail(p);
+      case SearchMode.modelAsTool:
+        return _toolDetail(p);
+      case SearchMode.customApi:
+        return _customApiDetail(p);
     }
-    return Row(
-      children: [
-        Expanded(child: status),
-        const SizedBox(width: 8),
-        TextButton(
-          onPressed: _checking ? null : _runProbe,
-          style: TextButton.styleFrom(
-            foregroundColor: p.accent,
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            minimumSize: Size.zero,
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            textStyle: const TextStyle(fontSize: 12.5),
+  }
+
+  /// Режим «Провайдер»: auto-ping и баннеры результата.
+  Widget _providerDetail(Palette p) {
+    switch (_probeState) {
+      case _ProbeState.checking:
+        return Row(
+          children: [
+            const SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                'Проверка поддержки...',
+                style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+            ),
+          ],
+        );
+      case _ProbeState.supported:
+        return _banner(
+          border: _green,
+          bg: _green.withValues(alpha: 0.12),
+          content: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '🟢 Провайдер поддерживает веб-поиск',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: _green,
+                  ),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Проверить снова',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                padding: EdgeInsets.zero,
+                icon: Icon(Icons.refresh_rounded, size: 18, color: p.accent),
+                onPressed: _runProbe,
+              ),
+            ],
           ),
-          child: Text(_probeError == null ? 'Проверить снова' : 'Проверить'),
+        );
+      case _ProbeState.unsupported:
+        return _banner(
+          border: _red,
+          bg: _red.withValues(alpha: 0.10),
+          content: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  '🔴 Текущая модель не поддерживает поиск',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: _red,
+                  ),
+                ),
+              ),
+              TextButton(
+                onPressed: _runProbe,
+                style: TextButton.styleFrom(
+                  foregroundColor: _red,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  textStyle: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                child: const Text('Повторить'),
+              ),
+            ],
+          ),
+        );
+      case _ProbeState.error:
+        return _banner(
+          border: p.border,
+          bg: p.card,
+          content: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _probeError ?? 'Проверка не удалась.',
+                  style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
+                ),
+              ),
+              TextButton(
+                onPressed: _runProbe,
+                style: TextButton.styleFrom(
+                  foregroundColor: p.accent,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  textStyle: const TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                child: const Text('Повторить'),
+              ),
+            ],
+          ),
+        );
+      case _ProbeState.idle:
+        return const SizedBox.shrink();
+    }
+  }
+
+  /// Баннер результата проверки в тёплой гамме темы.
+  Widget _banner({
+    required Color border,
+    required Color bg,
+    required Widget content,
+  }) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: border.withValues(alpha: 0.6)),
+      ),
+      child: content,
+    );
+  }
+
+  /// Режим «Инструмент»: выбор модели-инструмента и переход к настройке
+  /// инструментов.
+  Widget _toolDetail(Palette p) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _toolModel,
+          autocorrect: false,
+          cursorColor: p.accent,
+          onChanged: (_) => _scheduleSave(),
+          decoration: const InputDecoration(
+            labelText: 'Модель-инструмент',
+            hintText: 'Идентификатор модели для поиска',
+          ),
+        ),
+        if (_toolModels.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            key: ValueKey<String>(
+              'search_tool_dd_${_toolModel.text.trim()}',
+            ),
+            initialValue: _toolModels.contains(_toolModel.text.trim())
+                ? _toolModel.text.trim()
+                : null,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Выбрать из моделей-инструментов',
+            ),
+            items: [
+              for (final m in _toolModels)
+                DropdownMenuItem<String>(
+                  value: m,
+                  child: Text(
+                    m,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              _toolModel.text = v;
+              _toolModel.selection =
+                  TextSelection.collapsed(offset: v.length);
+              settings.setSearchToolModel(v);
+              setState(() {});
+            },
+          ),
+        ],
+        const SizedBox(height: 10),
+        OutlinedButton(
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const ToolsScreen()),
+          ),
+          child: const Text('⚙️ Настроить инструмент поиска'),
+        ),
+      ],
+    );
+  }
+
+  /// Режим «Свой API»: ключ пользовательского поискового API
+  /// (прежняя работающая функциональность сохранена).
+  Widget _customApiDetail(Palette p) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        TextField(
+          controller: _apiKey,
+          obscureText: !_showKey,
+          autocorrect: false,
+          enableSuggestions: false,
+          cursorColor: p.accent,
+          onChanged: (_) => _scheduleSave(),
+          decoration: InputDecoration(
+            labelText: 'Ключ поискового API',
+            hintText: 'Ключ вашего поискового сервиса',
+            suffixIcon: IconButton(
+              tooltip: _showKey ? 'Скрыть ключ' : 'Показать ключ',
+              icon: Icon(
+                _showKey ? Icons.visibility_off : Icons.visibility,
+              ),
+              onPressed: () => setState(() => _showKey = !_showKey),
+            ),
+          ),
         ),
       ],
     );
@@ -291,115 +461,8 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
               ],
               onChanged: _onModeChanged,
             ),
-            const SizedBox(height: 8),
-            Text(
-              _hintFor(mode),
-              style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
-            ),
-            if (mode == SearchMode.provider) ...[
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _checking ? null : _runProbe,
-                icon: _checking
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.network_check_rounded, size: 18),
-                label: const Text('Проверить поддержку'),
-              ),
-              const SizedBox(height: 10),
-              _probeRow(p),
-              const SizedBox(height: 10),
-              OutlinedButton.icon(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ToolsScreen()),
-                ),
-                icon: const Icon(Icons.build_outlined, size: 18),
-                label: const Text('Настроить'),
-              ),
-            ],
-            if (mode == SearchMode.customApi) ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: _apiKey,
-                obscureText: !_showKey,
-                autocorrect: false,
-                enableSuggestions: false,
-                cursorColor: p.accent,
-                onChanged: (_) => _scheduleSave(),
-                decoration: InputDecoration(
-                  labelText: 'Ключ поискового API',
-                  hintText: 'Ключ вашего поискового сервиса',
-                  suffixIcon: IconButton(
-                    tooltip: _showKey ? 'Скрыть ключ' : 'Показать ключ',
-                    icon: Icon(
-                      _showKey ? Icons.visibility_off : Icons.visibility,
-                    ),
-                    onPressed: () => setState(() => _showKey = !_showKey),
-                  ),
-                ),
-              ),
-            ],
-            if (mode == SearchMode.modelAsTool) ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: _toolModel,
-                autocorrect: false,
-                cursorColor: p.accent,
-                onChanged: (_) => _scheduleSave(),
-                decoration: const InputDecoration(
-                  labelText: 'Модель-инструмент',
-                  hintText: 'Идентификатор модели для поиска',
-                ),
-              ),
-              if (_toolModels.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                DropdownButtonFormField<String>(
-                  key: ValueKey<String>(
-                    'search_tool_dd_${_toolModel.text.trim()}',
-                  ),
-                  initialValue: _toolModels.contains(_toolModel.text.trim())
-                      ? _toolModel.text.trim()
-                      : null,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Выбрать из моделей-инструментов',
-                  ),
-                  items: [
-                    for (final m in _toolModels)
-                      DropdownMenuItem<String>(
-                        value: m,
-                        child: Text(
-                          m,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                  onChanged: (v) {
-                    if (v == null) return;
-                    _toolModel.text = v;
-                    _toolModel.selection = TextSelection.collapsed(
-                      offset: v.length,
-                    );
-                    settings.setSearchToolModel(v);
-                    setState(() {});
-                  },
-                ),
-              ],
-              const SizedBox(height: 10),
-              OutlinedButton.icon(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const ToolsScreen()),
-                ),
-                icon: const Icon(Icons.build_outlined, size: 18),
-                label: const Text('Настроить'),
-              ),
-            ],
+            const SizedBox(height: 12),
+            _detailView(p, mode),
           ],
         );
       },
