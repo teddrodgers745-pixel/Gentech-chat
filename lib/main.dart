@@ -196,3 +196,5 @@ class _SplashScreenState extends State<SplashScreen> {
     );
   }
 }
+
+// build trigger
