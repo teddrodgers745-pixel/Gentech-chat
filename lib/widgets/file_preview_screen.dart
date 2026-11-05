@@ -11,9 +11,10 @@ import 'package:webview_flutter/webview_flutter.dart';
 
 import '../app_state.dart';
 import '../theme.dart';
+import 'rich_markdown.dart';
 
 /// Тип предпросмотра, определяемый по расширению имени файла.
-enum PreviewKind { web, image, text }
+enum PreviewKind { web, image, text, markdown }
 
 PreviewKind previewKindFor(String fileName) {
   final dot = fileName.lastIndexOf('.');
@@ -23,6 +24,9 @@ PreviewKind previewKindFor(String fileName) {
     case 'htm':
     case 'svg':
       return PreviewKind.web;
+    case 'md':
+    case 'markdown':
+      return PreviewKind.markdown;
     case 'png':
     case 'jpg':
     case 'jpeg':
@@ -151,6 +155,8 @@ class FilePreviewScreen extends StatelessWidget {
                   code: code,
                   lang: highlightLanguageFor(fileName),
                 );
+              case PreviewKind.markdown:
+                return _MarkdownPreview(code: code);
             }
           },
         ),
@@ -315,6 +321,31 @@ class _TextPreview extends StatelessWidget {
                 ),
               ),
             ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Нативный предпросмотр Markdown: рендерится тем же виджетом RichMarkdown,
+/// что и ответы модели в чате (шрифты, тема и размер текста из настроек).
+class _MarkdownPreview extends StatelessWidget {
+  final String code;
+
+  const _MarkdownPreview({required this.code});
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: settings,
+      builder: (context, _) {
+        final p = settings.palette;
+        return ColoredBox(
+          color: p.bg,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+            child: RichMarkdown(code),
           ),
         );
       },

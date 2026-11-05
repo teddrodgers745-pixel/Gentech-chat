@@ -19,13 +19,23 @@ class ContentSegment {
   final String code;
   final String lang;
 
+  /// true — файл ещё формируется (блок ```name=... не закрыт, стриминг
+  /// продолжается): карточка показывается с индикатором, без кнопок.
+  final bool forming;
+
   const ContentSegment.text(this.text)
       : fileName = '',
         code = '',
-        lang = '';
+        lang = '',
+        forming = false;
 
   const ContentSegment.file(this.fileName, this.code, this.lang)
-      : text = '';
+      : text = '',
+        forming = false;
+
+  const ContentSegment.forming(this.fileName, this.code, this.lang)
+      : text = '',
+        forming = true;
 
   bool get isFile => fileName.isNotEmpty;
 }
@@ -33,7 +43,7 @@ class ContentSegment {
 /// Разбор ответа: находим ограждённые блоки кода вида
 /// ```html name=index.html ... ``` и превращаем их в файловые сегменты.
 /// Обычный текст и код без имени файла остаются нетронутыми.
-List<ContentSegment> splitFileBlocks(String raw) {
+List<ContentSegment> splitFileBlocks(String raw, {bool streaming = false}) {
   final segments = <ContentSegment>[];
   final openRe = RegExp(r'^```[ \t]*(\S+)?(.*)$');
   final closeRe = RegExp(r'^```[ \t]*$');
@@ -76,6 +86,20 @@ List<ContentSegment> splitFileBlocks(String raw) {
         i = j + 1;
         continue;
       }
+      // Блок с именем файла ещё не закрыт (стриминг не закончен):
+      // вместо сырого кода показываем карточку «Формируется...».
+      if (streaming) {
+        if (buf.isNotEmpty) {
+          segments.add(ContentSegment.text(buf.join('\n')));
+          buf.clear();
+        }
+        segments.add(ContentSegment.forming(
+          nameMatch.group(1)!.trim(),
+          codeLines.join('\n'),
+          lang,
+        ));
+        return segments;
+      }
     }
     buf.add(lines[i]);
     i++;
@@ -91,11 +115,16 @@ class FileCard extends StatelessWidget {
   final String code;
   final String lang;
 
+  /// Файл ещё формируется (стриминг не закончен): вместо кнопок —
+  /// индикатор и надпись «Формируется...».
+  final bool forming;
+
   const FileCard({
     super.key,
     required this.fileName,
     required this.code,
     this.lang = '',
+    this.forming = false,
   });
 
   static String _safeName(String raw) {
@@ -241,7 +270,9 @@ class FileCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          '$label · ${_fmtSize(bytes)}',
+                          forming
+                              ? '$label · формируется…'
+                              : '$label · ${_fmtSize(bytes)}',
                           style: TextStyle(fontSize: 12, color: p.muted),
                         ),
                       ],
@@ -249,35 +280,56 @@ class FileCard extends StatelessWidget {
                   ),
                 ],
               ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: () => _open(context),
-                  icon: const Icon(Icons.visibility_outlined, size: 18),
-                  label: const Text('Открыть'),
+              if (forming) ...[
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: p.accent,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      'Формируется...',
+                      style: TextStyle(fontSize: 13, color: p.muted),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => _save(context),
-                      icon: const Icon(Icons.save_outlined, size: 18),
-                      label: const Text('Сохранить'),
-                    ),
+              ] else ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: () => _open(context),
+                    icon: const Icon(Icons.visibility_outlined, size: 18),
+                    label: const Text('Просмотр'),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () => _share(context),
-                      icon: const Icon(Icons.share_outlined, size: 18),
-                      label: const Text('Поделиться'),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _save(context),
+                        icon: const Icon(Icons.save_outlined, size: 18),
+                        label: const Text('Сохранить'),
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: () => _share(context),
+                        icon: const Icon(Icons.share_outlined, size: 18),
+                        label: const Text('Поделиться'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         );

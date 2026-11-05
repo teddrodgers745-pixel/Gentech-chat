@@ -165,10 +165,15 @@ class MessageView extends StatelessWidget {
   List<Widget> _contentWidgets(String content) {
     if (content.trim().isEmpty) return const <Widget>[];
     final out = <Widget>[];
-    for (final seg in splitFileBlocks(content)) {
+    for (final seg in splitFileBlocks(content, streaming: streaming)) {
       if (seg.isFile) {
         out.add(
-          FileCard(fileName: seg.fileName, code: seg.code, lang: seg.lang),
+          FileCard(
+            fileName: seg.fileName,
+            code: seg.code,
+            lang: seg.lang,
+            forming: seg.forming,
+          ),
         );
       } else if (seg.text.trim().isNotEmpty) {
         out.add(RichMarkdown(seg.text));
