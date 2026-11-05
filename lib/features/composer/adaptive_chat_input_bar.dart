@@ -54,6 +54,10 @@ class AdaptiveChatInputBar extends StatelessWidget {
   /// и skip имеют приоритет.
   final String modelType;
 
+  /// Есть ли вложения в обработке: кнопка «Отправить» неактивна, пока
+  /// хотя бы одно вложение не готово.
+  final bool attachmentsBusy;
+
   const AdaptiveChatInputBar({
     super.key,
     required this.config,
@@ -71,6 +75,7 @@ class AdaptiveChatInputBar extends StatelessWidget {
     this.onAspectRatioChanged,
     this.registry,
     this.modelType = '',
+    this.attachmentsBusy = false,
   });
 
   /// Режим по типу модели (только для text/unknown): явный override типа
@@ -232,6 +237,7 @@ class AdaptiveChatInputBar extends StatelessWidget {
       key: const ValueKey<String>('text_chat_input'),
       config: textCfg,
       capabilities: capabilities,
+      attachmentsBusy: attachmentsBusy,
       controller: controller,
       streaming: streaming,
       reasoningLevel: reasoningLevel,

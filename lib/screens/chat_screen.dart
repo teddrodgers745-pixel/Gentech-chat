@@ -38,6 +38,7 @@ import '../services/speech_service.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
 import '../features/composer/adaptive_chat_input_bar.dart';
+import '../widgets/attachment_strip.dart';
 import '../widgets/message_view.dart';
 import 'history_drawer.dart';
 import 'live_screen.dart';
@@ -416,6 +417,8 @@ class _ChatScreenState extends State<ChatScreen> {
     final hasReady =
         _attachments.any((a) => a.status == AttachmentStatus.ready);
     if ((txt.isEmpty && !hasReady) || _streaming) return;
+    // Пока хоть одно вложение обрабатывается, отправка недоступна.
+    if (_attachments.any((a) => a.isBusy)) return;
     if (effectiveConfig().apiKey.isEmpty) {
       _snack('Создайте и выберите профиль модели в настройках');
       return;
@@ -1008,6 +1011,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     capabilities: _activeModel.current,
                     controller: _input,
                     modelType: _modelType,
+                    attachmentsBusy: _attachments.any((a) => a.isBusy),
                     onAspectRatioChanged: (r) => _aspectRatio = r,
                     streaming: _streaming,
                     reasoningLevel: _reasoningLevel,
@@ -1125,49 +1129,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _attachmentActions(Palette p) {
-    if (_attachments.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 0, 8, 4),
-      child: SizedBox(
-        height: 44,
-        child: ListView.builder(
-          scrollDirection: Axis.horizontal,
-          itemCount: _attachments.length,
-          itemBuilder: (context, i) {
-            final a = _attachments[i];
-            final Widget avatar;
-            if (a.isBusy) {
-              avatar = const SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              );
-            } else if (a.isReady) {
-              avatar = Icon(Icons.attach_file, size: 16, color: p.accent);
-            } else {
-              avatar = const Icon(
-                Icons.error_outline,
-                size: 16,
-                color: Color(0xFFB3261E),
-              );
-            }
-            return Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: InputChip(
-                avatar: avatar,
-                label: Text(
-                  attachmentName(a.file.path),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(fontSize: 13, color: p.text),
-                ),
-                deleteIconColor: p.muted,
-                onDeleted: () => setState(() => _attachments.removeAt(i)),
-              ),
-            );
-          },
-        ),
-      ),
+    return AttachmentStrip(
+      attachments: _attachments,
+      onRemove: (i) => setState(() {
+        if (i >= 0 && i < _attachments.length) _attachments.removeAt(i);
+      }),
     );
   }
 }

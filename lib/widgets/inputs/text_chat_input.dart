@@ -26,6 +26,9 @@ class TextChatInput extends StatefulWidget {
   final VoidCallback? onSend;
   final VoidCallback? onStop;
 
+  /// Есть ли вложения в обработке: кнопка «Отправить» неактивна.
+  final bool attachmentsBusy;
+
   const TextChatInput({
     super.key,
     this.config = const TextModelConfig(),
@@ -39,6 +42,7 @@ class TextChatInput extends StatefulWidget {
     this.onAttach,
     this.onSend,
     this.onStop,
+    this.attachmentsBusy = false,
   });
 
   @override
@@ -261,14 +265,19 @@ class _TextChatInputState extends State<TextChatInput> {
   }
 
   Widget _sendButton(Palette p) {
+    // Отправка недоступна, пока хоть одно вложение обрабатывается.
+    final canSend = widget.onSend != null && !widget.attachmentsBusy;
     return IconButton.filled(
       tooltip: widget.streaming ? 'Остановить' : 'Отправить',
       visualDensity: VisualDensity.compact,
       constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
-      onPressed: widget.streaming ? widget.onStop : widget.onSend,
+      onPressed: widget.streaming
+          ? widget.onStop
+          : (canSend ? widget.onSend : null),
       style: IconButton.styleFrom(
         backgroundColor: p.accent,
         foregroundColor: Colors.white,
+        disabledBackgroundColor: p.accent.withValues(alpha: 0.35),
         shape: const CircleBorder(),
       ),
       icon: Icon(
