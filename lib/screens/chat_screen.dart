@@ -1289,6 +1289,33 @@ class _ChatScreenState extends State<ChatScreen> {
               textAlign: TextAlign.center,
               style: TextStyle(color: p.muted, fontSize: 13),
             ),
+            ListenableBuilder(
+              listenable: polzaAuth,
+              builder: (context, _) {
+                if (effectiveConfig().apiKey.trim().isNotEmpty ||
+                    polzaAuth.isAuthenticated) {
+                  return const SizedBox.shrink();
+                }
+                return Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: FilledButton.icon(
+                    onPressed: polzaAuth.isAuthenticating
+                        ? null
+                        : polzaAuth.startOAuthPkceFlow,
+                    icon: const Icon(Icons.bolt_rounded, size: 18),
+                    label: Text(
+                      polzaAuth.isAuthenticating
+                          ? 'Ожидание браузера…'
+                          : 'Войти через Polza AI в 1 клик',
+                    ),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: p.accent,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 20),
             Wrap(
               spacing: 8,
