@@ -186,8 +186,8 @@ class _SplashScreenState extends State<SplashScreen> {
           ),
           child: const Center(
             child: Icon(
-              Icons.auto_awesome,
-              size: 48,
+              Icons.android,
+              size: 52,
               color: Color(0xFFD99A6C),
             ),
           ),

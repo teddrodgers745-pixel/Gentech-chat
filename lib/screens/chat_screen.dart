@@ -77,10 +77,6 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _atBottom = true;
   Timer? _uiTimer;
 
-  /// Уровень размышлений: 0 = Low, 1 = Medium, 2 = High,
-  /// 3 = xHigh, 4 = Max.
-  int _reasoningLevel = 0;
-
   /// Выбранная пропорция изображения (режим генерации картинок).
   String _aspectRatio = '1:1';
 
@@ -369,7 +365,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _snack(String text) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+    messenger.hideCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(text),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   /// Шторка «Быстрый доступ»: список моделей из пресетов и общих настроек
@@ -1056,7 +1060,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.auto_awesome, size: 13, color: p.accent),
+                        Icon(Icons.speed, size: 15, color: p.accent),
                         const SizedBox(width: 5),
                         Flexible(
                           child: Text(
@@ -1129,7 +1133,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     attachmentsBusy: _attachments.any((a) => a.isBusy),
                     onAspectRatioChanged: (r) => _aspectRatio = r,
                     streaming: _streaming,
-                    reasoningLevel: _reasoningLevel,
+                    reasoningLevel:
+                        ReasoningMapper.fromId(settings.reasoningLevel).index,
                     onCycleReasoning: _cycleReasoning,
                     onToggleMic: _toggleMic,
                     onAttach: _attach,
@@ -1241,7 +1246,7 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.auto_awesome, size: 36, color: p.accent),
+            Icon(Icons.speed, size: 40, color: p.accent),
             const SizedBox(height: 16),
             Text(
               'GenTech Chat',
@@ -1252,11 +1257,38 @@ class _ChatScreenState extends State<ChatScreen> {
                 color: p.text,
               ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             Text(
               'Сведите или разведите два пальца в чате, чтобы изменить размер текста.',
               textAlign: TextAlign.center,
               style: TextStyle(color: p.muted, fontSize: 13),
+            ),
+            const SizedBox(height: 20),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                for (final prompt in const <String>[
+                  'Объясни простыми словами ',
+                  'Напиши чистый код для ',
+                  'Составь краткий план ',
+                ])
+                  ActionChip(
+                    label: Text(
+                      prompt.trim(),
+                      style: TextStyle(fontSize: 12, color: p.text),
+                    ),
+                    backgroundColor: p.surface,
+                    side: BorderSide(color: p.border),
+                    onPressed: () {
+                      _input.text = prompt;
+                      _input.selection = TextSelection.collapsed(
+                        offset: _input.text.length,
+                      );
+                    },
+                  ),
+              ],
             ),
           ],
         ),

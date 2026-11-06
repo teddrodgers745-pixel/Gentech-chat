@@ -89,6 +89,9 @@ class PresetStore extends ChangeNotifier {
     return null;
   }
 
+  /// Алиас для единообразного доступа к активному пресету.
+  Preset? get activePreset => active;
+
   Preset? byId(String id) {
     for (final p in _items) {
       if (p.id == id) return p;
@@ -328,12 +331,15 @@ class AppSettings extends ChangeNotifier {
     if (url != null) baseUrl = url;
     if (mdl != null) model = mdl;
     if (sys != null) systemPrompt = sys;
-    // PresetStore — единственный владелец модели: если активен системный
-    // дефолтный пресет, модель из общих настроек синхронизируется в него.
-    if (mdl != null && presets.active?.id == PresetStore.defaultPresetId) {
+    // PresetStore — единственный владелец модели: если активного пресета нет
+    // или активен системный дефолтный пресет, модель синхронизируется в него.
+    if (mdl != null &&
+        (presets.active == null ||
+            presets.active?.id == PresetStore.defaultPresetId)) {
       presets.updateActivePresetModel(mdl);
     }
     _persist();
+    notifyListeners();
   }
 
   void setPalette(String id) {

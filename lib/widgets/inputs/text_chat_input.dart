@@ -71,33 +71,33 @@ class _TextChatInputState extends State<TextChatInput> {
 
   static const double _radius = 24;
 
-  /// Фоны и цвета текста капсулы для каждого из шести уровней
-  /// ([ReasoningLevel]): off — серый, low — синий, medium — оранжевый,
-  /// high — фиолетовый, xhigh — пурпурный, max — тёплый медный.
+  /// Фоны и цвета иконок/текста капсулы для каждого из шести уровней
+  /// ([ReasoningLevel]): off — серый, low — голубой, medium — зелёный,
+  /// high — красно-жёлтый (огонь), xhigh — красный, max — фиолетовый.
   static const List<Color> _reasoningFills = <Color>[
     Color(0xFF3A3733), // off — серый
-    Color(0xFF2D5A88), // low — синий
-    Color(0xFFB05A28), // medium — оранжевый
-    Color(0xFF6C3FA0), // high — фиолетовый
-    Color(0xFF8E2D5E), // xhigh — пурпурный
-    Color(0xFF8A5A2B), // max — тёплый медный
+    Color(0xFF1A3A54), // low — голубой
+    Color(0xFF1B4332), // medium — зелёный
+    Color(0xFF5A2612), // high — красно-жёлтый (огонь)
+    Color(0xFF5C1922), // xhigh — красный
+    Color(0xFF3F1D6B), // max — фиолетовый
   ];
 
   static const List<Color> _reasoningLevelColors = <Color>[
-    Color(0xFFA8A096), // off — серый
-    Color(0xFFBFDBFE), // low — голубой
-    Color(0xFFFFD9B3), // medium — тёплый оранжевый
-    Color(0xFFE5D4FF), // high — светло-фиолетовый
-    Color(0xFFF7C7E2), // xhigh — светло-розовый
-    Color(0xFFF3DDB9), // max — тёплый песочный
+    Color(0xFF9E9E9E), // off — серый
+    Color(0xFF38BDF8), // low — голубой
+    Color(0xFF4ADE80), // medium — зелёный
+    Color(0xFFFFAB40), // high — красно-жёлтый (огонь)
+    Color(0xFFFF5252), // xhigh — красный
+    Color(0xFFC084FC), // max — фиолетовый
   ];
 
   static const Color _searchFill = Color(0xFF3B82F6);
   static const Color _searchTextOn = Color(0xFFF3F7FF);
 
-  /// Локальный флаг поиска для текущего чата: включается капсулой,
-  /// только если в настройках выбран режим поиска (не off).
-  bool _searchOn = false;
+  /// Локальный флаг поиска для текущего чата: при активном режиме поиска
+  /// (например, native) включён по умолчанию, чтобы капсула сразу была синей.
+  bool _searchOn = true;
 
   TextEditingController get _effectiveController =>
       widget.controller ?? (_internalController ??= TextEditingController());
@@ -162,7 +162,9 @@ class _TextChatInputState extends State<TextChatInput> {
     HapticFeedback.lightImpact();
     final mode = SearchModes.fromId(settings.searchMode);
     if (mode == SearchMode.off) {
-      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(
         SnackBar(
           content: const Text('Выберите режим поиска в настройках'),
           duration: const Duration(seconds: 3),
@@ -260,23 +262,18 @@ class _TextChatInputState extends State<TextChatInput> {
                       _searchCapsule(p),
                       // Распорка: раздвигает группы по краям.
                       const Spacer(),
-                      // ПРАВАЯ ГРУППА: Микрофон -> Скрепка
-                      // -> Кнопка «Отправить» (медный кружок).
+                      // ПРАВАЯ ГРУППА: [Скрепка] -> [Микрофон] -> [Отправить]
                       Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          SizedBox(
-                            width: 32,
-                            height: 32,
-                            child: _micButton(p),
-                          ),
                           if (widget.config.supportsAttachments) ...[
-                            const SizedBox(width: 2),
                             _attachButton(p),
+                            const SizedBox(width: 2),
                           ],
-                          const SizedBox(width: 4),
+                          _micButton(p),
+                          const SizedBox(width: 8),
                           Padding(
-                            padding: const EdgeInsets.only(right: 6),
+                            padding: const EdgeInsets.only(right: 4),
                             child: _sendButton(p),
                           ),
                         ],
@@ -296,10 +293,13 @@ class _TextChatInputState extends State<TextChatInput> {
     return IconButton(
       tooltip: 'Прикрепить файл',
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
+      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
       visualDensity: VisualDensity.compact,
-      iconSize: 26,
-      icon: Icon(Icons.attach_file, size: 26, color: p.muted),
+      iconSize: 24,
+      icon: Icon(Icons.attach_file, size: 24, color: p.muted),
       onPressed: widget.streaming ? null : widget.onAttach,
     );
   }
@@ -308,10 +308,13 @@ class _TextChatInputState extends State<TextChatInput> {
     return IconButton(
       tooltip: 'Голосовой ввод',
       padding: EdgeInsets.zero,
-      constraints: const BoxConstraints(),
+      constraints: const BoxConstraints(minWidth: 34, minHeight: 34),
+      style: IconButton.styleFrom(
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
       visualDensity: VisualDensity.compact,
-      iconSize: 28,
-      icon: Icon(Icons.mic, size: 28, color: p.muted),
+      iconSize: 24,
+      icon: Icon(Icons.mic, size: 24, color: p.muted),
       onPressed: widget.streaming ? null : widget.onToggleMic,
     );
   }
@@ -339,15 +342,59 @@ class _TextChatInputState extends State<TextChatInput> {
     );
   }
 
+  Widget _buildReasoningIcon(ReasoningLevel level, Color levelColor) {
+    final raw = level.iconWidget;
+    Widget icon;
+    if (level == ReasoningLevel.high) {
+      final baseChild = raw is Icon
+          ? Icon(
+              Icons.local_fire_department_rounded,
+              size: 24,
+              color: levelColor,
+            )
+          : SizedBox(
+              width: 24,
+              height: 24,
+              child: FittedBox(fit: BoxFit.contain, child: raw),
+            );
+      icon = ShaderMask(
+        shaderCallback: (bounds) => const LinearGradient(
+          begin: Alignment.bottomCenter,
+          end: Alignment.topCenter,
+          colors: <Color>[Color(0xFFFF3D00), Color(0xFFFFEA00)],
+        ).createShader(bounds),
+        blendMode: BlendMode.srcIn,
+        child: baseChild,
+      );
+    } else if (raw is Icon) {
+      icon = Icon(
+        raw.icon ?? Icons.psychology_outlined,
+        size: 24,
+        color: levelColor,
+      );
+    } else {
+      icon = ColorFiltered(
+        colorFilter: ColorFilter.mode(levelColor, BlendMode.srcIn),
+        child: SizedBox(
+          width: 24,
+          height: 24,
+          child: FittedBox(fit: BoxFit.contain, child: raw),
+        ),
+      );
+    }
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: Center(child: icon),
+    );
+  }
+
   Widget _reasoningCapsule() {
     final level = ReasoningMapper.fromId(settings.reasoningLevel);
     final label = level.label;
     final fill = _reasoningFills[level.index];
     final levelColor = _reasoningLevelColors[level.index];
-    // Иконка уровня берётся из extension ReasoningLevelX (iconWidget):
-    // у high — пользовательская SVG-иконка мозга, у остальных —
-    // стандартные иконки Material с цветом уровня.
-    final Widget leading = level.iconWidget;
+    final Widget leading = _buildReasoningIcon(level, levelColor);
     return Tooltip(
       message:
           'Уровень размышлений: $label (тап — сменить, удержание — подробно)',
@@ -355,14 +402,16 @@ class _TextChatInputState extends State<TextChatInput> {
         borderRadius: BorderRadius.circular(_radius),
         onTap: widget.streaming ? null : _cycleLevel,
         onLongPress: widget.streaming ? null : _openReasoningSheet,
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
           height: 36,
           constraints: const BoxConstraints(minWidth: 112),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 0),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
           decoration: BoxDecoration(
             color: fill,
             borderRadius: BorderRadius.circular(_radius),
-            border: Border.all(color: fill),
+            border: Border.all(color: levelColor.withValues(alpha: 0.35)),
             boxShadow: [
               BoxShadow(
                 color: fill.withValues(alpha: 0.35),
@@ -395,27 +444,27 @@ class _TextChatInputState extends State<TextChatInput> {
   }
 
   Widget _searchCapsule(Palette p) {
-    final mode = SearchModes.fromId(settings.searchMode);
-    final available = mode != SearchMode.off;
+    final configuredMode = SearchModes.fromId(settings.searchMode);
+    final available = configuredMode != SearchMode.off;
     final on = available && _searchOn;
     final Color fill;
     final Color content;
     final Color borderColor;
     if (!available) {
-      // Состояние 1: режим не выбран в настройках — серая неактивная капсула.
-      fill = Colors.transparent;
+      // Состояние 1: SearchMode.off — серая неактивная капсула.
+      fill = const Color(0xFF3A3733).withValues(alpha: 0.25);
       content = Colors.grey;
       borderColor = p.border;
-    } else if (!on) {
-      // Состояние 2: режим выбран, но поиск выключен в чате — серая/прозрачная.
-      fill = Colors.transparent;
-      content = p.muted;
-      borderColor = p.border;
-    } else {
-      // Состояние 3: режим выбран и поиск включён в чате — синяя активная.
+    } else if (configuredMode == SearchMode.native || on) {
+      // Состояние 2: режим native либо поиск включён в чате — синяя активная.
       fill = _searchFill;
       content = _searchTextOn;
       borderColor = _searchFill;
+    } else {
+      // Состояние 3: режим настроен, но временно отключён для чата.
+      fill = _searchFill.withValues(alpha: 0.14);
+      content = _searchFill;
+      borderColor = _searchFill.withValues(alpha: 0.45);
     }
     return InkWell(
       borderRadius: BorderRadius.circular(_radius),
@@ -424,8 +473,8 @@ class _TextChatInputState extends State<TextChatInput> {
         duration: const Duration(milliseconds: 160),
         curve: Curves.easeOut,
         height: 36,
-        padding: const EdgeInsets.only(left: 12, right: 24),
-        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        alignment: Alignment.center,
         decoration: BoxDecoration(
           color: fill,
           borderRadius: BorderRadius.circular(_radius),

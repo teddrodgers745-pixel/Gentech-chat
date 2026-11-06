@@ -58,13 +58,13 @@ class ActiveModelController extends ChangeNotifier {
   ActiveModelCapabilities get current => _current;
 
   /// Активная модель. Читается напрямую из активного пресета
-  /// (PresetStore.active.model) — единственного источника истины.
+  /// (PresetStore.activePreset.model) — единственного источника истины.
   /// Пустая строка — активного пресета нет (режим «Без пресета»).
-  String get currentModelId => _presetController.active?.model ?? '';
+  String get currentModelId => _presetController.activePreset?.model ?? '';
 
-  /// Смена активной модели: НЕ меняет локальное состояние, а делегирует
+  /// Смена активной модели: НЕ хранит дублирующее поле, а делегирует
   /// запись владельцу — [PresetStore.updateActivePresetModel] — и затем
-  /// разрешает возможности по новой модели.
+  /// разрешает возможности по модели из активного пресета.
   Future<void> setModel(
     String modelId, {
     bool vision = false,
@@ -72,13 +72,14 @@ class ActiveModelController extends ChangeNotifier {
   }) async {
     _resolving = true;
     try {
-      final owned = (_presetController.active?.model ?? '').trim();
+      final owned = currentModelId.trim();
       final incoming = modelId.trim();
       if (incoming.isNotEmpty && incoming != owned) {
-        await _presetController.updateActivePresetModel(modelId);
+        await _presetController.updateActivePresetModel(incoming);
         notifyListeners();
       }
-      await _resolve(modelId, vision: vision, reasoning: reasoning);
+      final target = currentModelId.isNotEmpty ? currentModelId : incoming;
+      await _resolve(target, vision: vision, reasoning: reasoning);
     } finally {
       _resolving = false;
     }
