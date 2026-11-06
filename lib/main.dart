@@ -5,6 +5,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'app_state.dart';
+import 'core/auth/polza_auth_service.dart';
 import 'core/storage.dart';
 import 'models/tool.dart';
 import 'screens/chat_screen.dart';
@@ -16,6 +17,7 @@ Future<void> main() async {
   await settings.load();
   await store.load();
   await presets.load();
+  await polzaAuth.load();
   await _seedDefaultTools();
   runApp(const GenTechChatApp());
 }
