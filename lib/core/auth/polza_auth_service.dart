@@ -4,7 +4,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
-import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
@@ -261,6 +260,9 @@ class PolzaAuthService extends ChangeNotifier {
   PolzaAccountInfo? get account => _account;
   String? get errorMessage => _errorMessage;
 
+  /// Refresh-токен: хранится для последующего обновления access-токена.
+  String? get refreshToken => _refreshToken;
+
   /// Маскированное представление токена для безопасного показа в UI.
   String get maskedToken {
     final t = _accessToken ?? '';
@@ -465,15 +467,17 @@ class PolzaAuthService extends ChangeNotifier {
             .trim();
         final refresh = (data['refresh_token'] ?? '').toString().trim();
         if (token.isNotEmpty) {
-          return _finalizeLogin(
+          final ok = await _finalizeLogin(
             accessToken: token,
             refreshToken: refresh.isEmpty ? null : refresh,
           );
+          return ok;
         }
       }
       // Пользователь мог вставить непосредственно ключ вида sk-...
       if (code.startsWith('sk-') || code.length >= 28) {
-        return _finalizeLogin(accessToken: code);
+        final ok = await _finalizeLogin(accessToken: code);
+        return ok;
       }
       cancelAuthFlow(
         error: 'Не удалось обменять код авторизации на токен Polza AI.',
