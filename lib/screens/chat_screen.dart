@@ -9,6 +9,8 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../app_state.dart';
+import '../core/auth/polza_auth_service.dart';
+import '../core/models/active_model_capabilities.dart';
 import '../core/storage.dart';
 import '../models.dart';
 import '../models/attachment_draft.dart';
@@ -95,14 +97,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   ModelConfig get _currentConfig {
     final modelId = effectiveConfig().model.toLowerCase();
-    if (modelId.contains('live') || modelId.contains('native-audio')) {
+    final caps = _activeModel.current;
+    if (modelId.contains('live') ||
+        modelId.contains('native-audio') ||
+        caps.kind == ActiveModelKind.live) {
       return const LiveVoiceModelConfig();
     }
-    if (_isImageModel(modelId)) {
+    if (_effectiveModelType == ModelTypes.image ||
+        caps.kind == ActiveModelKind.image ||
+        _isImageModel(modelId)) {
+      final catalogRatios = caps.params?.aspectRatios ?? const <String>[];
       return ImageGenModelConfig(
-        availableAspectRatios: <String>[
-          for (final c in ImageGenMode.aspectRatios) c.id,
-        ],
+        availableAspectRatios: catalogRatios.isNotEmpty
+            ? catalogRatios
+            : <String>[
+                for (final c in ImageGenMode.aspectRatios) c.id,
+              ],
       );
     }
     return TextModelConfig(
@@ -110,6 +120,22 @@ class _ChatScreenState extends State<ChatScreen> {
       supportsWebSearch:
           settings.webSearchMode != 'off' || settings.searchMode != 'off',
     );
+  }
+
+  /// Эффективный тип модели: ручной override пользователя, затем вид
+  /// из [ActiveModelController] (каталог параметров), затем авто.
+  String get _effectiveModelType {
+    if (_modelType.isNotEmpty && _modelType != ModelTypes.text) {
+      return _modelType;
+    }
+    switch (_activeModel.current.kind) {
+      case ActiveModelKind.image:
+        return ModelTypes.image;
+      case ActiveModelKind.video:
+        return ModelTypes.video;
+      default:
+        return _modelType;
+    }
   }
 
   /// Модель-картинка: маршрут генерации изображений по эвристике

@@ -162,9 +162,9 @@ class _TextChatInputState extends State<TextChatInput> {
     HapticFeedback.lightImpact();
     final mode = SearchModes.fromId(settings.searchMode);
     if (mode == SearchMode.off) {
-      final messenger = ScaffoldMessenger.maybeOf(context);
-      messenger?.hideCurrentSnackBar();
-      messenger?.showSnackBar(
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.clearSnackBars();
+      final controller = messenger.showSnackBar(
         SnackBar(
           content: const Text('Выберите режим поиска в настройках'),
           duration: const Duration(seconds: 3),
@@ -174,6 +174,13 @@ class _TextChatInputState extends State<TextChatInput> {
           ),
         ),
       );
+      // Страховка автоскрытия: у SnackBar с действием внутренний таймер
+      // на ряде устройств не срабатывает — закрываем принудительно.
+      Future<void>.delayed(const Duration(seconds: 3), () {
+        try {
+          controller.close();
+        } catch (_) {}
+      });
       return;
     }
     setState(() => _searchOn = !_searchOn);

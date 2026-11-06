@@ -1,126 +1,81 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../app_state.dart';
-import '../theme.dart';
 
-/// Кнопка луны в AppBar.
-///
-/// Тап открывает нижнюю шторку ([showModalBottomSheet]) со списком всех
-/// четырёх тем (Светлая, Тёмная, Книжная, AMOLED) в виде ListView.
-/// Тема НЕ переключается сразу при нажатии: выбор происходит в шторке,
-/// чипом с цветной точкой и галочкой у выбранной (стиль секции
-/// «Внешний вид» настроек). Иконка — луна, когда текущая тема светлая,
-/// и солнце — когда тёмная.
+/// Кнопка циклического переключения темы в AppBar:
+/// Светлая -> Тёмная -> Книжная -> AMOLED -> Светлая.
+/// При обычном тапе сразу меняет тему и иконку без выпадающих меню,
+/// с лёгким тактильным откликом. Идентификаторы — из lib/theme.dart
+/// ('sepia' — книжная тема).
 class ThemeToggleAction extends StatelessWidget {
   const ThemeToggleAction({super.key});
 
+  static const List<String> _cycleOrder = <String>[
+    'light',
+    'dark',
+    'sepia',
+    'amoled',
+  ];
+
+  void _cycleTheme() {
+    HapticFeedback.lightImpact();
+    final current = settings.paletteId.toLowerCase();
+    final idx = _cycleOrder.indexOf(current);
+    final nextId = _cycleOrder[(idx + 1) % _cycleOrder.length];
+    settings.setPalette(nextId);
+  }
+
+  static IconData _iconFor(String paletteId) {
+    switch (paletteId.toLowerCase()) {
+      case 'light':
+        return Icons.wb_sunny_outlined;
+      case 'dark':
+        return Icons.nightlight_round;
+      case 'sepia':
+        return Icons.menu_book_outlined;
+      case 'amoled':
+        return Icons.contrast_rounded;
+      default:
+        return Icons.wb_sunny_outlined;
+    }
+  }
+
+  static String _labelFor(String paletteId) {
+    switch (paletteId.toLowerCase()) {
+      case 'light':
+        return 'Тема: Светлая';
+      case 'dark':
+        return 'Тема: Тёмная';
+      case 'sepia':
+        return 'Тема: Книжная';
+      case 'amoled':
+        return 'Тема: AMOLED';
+      default:
+        return 'Сменить тему';
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
       listenable: settings,
       builder: (context, _) {
-        final toDark = settings.paletteId == 'light';
-        return Material(
-          color: Colors.transparent,
-          shape: const CircleBorder(),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: () => _showThemeSheet(context),
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Icon(
-                toDark ? Icons.dark_mode_outlined : Icons.light_mode_outlined,
-                size: 22,
-              ),
+        final id = settings.paletteId;
+        return IconButton(
+          tooltip: _labelFor(id),
+          onPressed: _cycleTheme,
+          icon: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 200),
+            transitionBuilder: (child, anim) => RotationTransition(
+              turns: Tween<double>(begin: 0.85, end: 1.0).animate(anim),
+              child: FadeTransition(opacity: anim, child: child),
             ),
-          ),
-        );
-      },
-    );
-  }
-
-  /// Шторка выбора темы. Смена темы уведомляет слушателей: MaterialApp
-  /// (ListenableBuilder в GenTechChatApp) перестраивается сразу,
-  /// выбор сохраняется в SharedPreferences через settings.setPalette.
-  void _showThemeSheet(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => const _ThemeSheet(),
-    );
-  }
-}
-
-/// Шторка со списком тем: заголовок КАПСОМ акцентным цветом,
-/// ListView из четырёх тем — чипы с точкой цвета темы и галочкой
-/// у выбранной. Тап по кнопке луны только открывает шторку,
-/// переключение темы выполняет выбор чипа.
-class _ThemeSheet extends StatelessWidget {
-  const _ThemeSheet();
-
-  @override
-  Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: settings,
-      builder: (context, _) {
-        final p = settings.palette;
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  'ТЕМА',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.6,
-                    color: p.accent,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                ListView(
-                  shrinkWrap: true,
-                  padding: EdgeInsets.zero,
-                  children: [
-                    for (final x in palettes)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: ChoiceChip(
-                          label: Text(
-                            x.name,
-                            style: const TextStyle(
-                              fontSize: 15.5,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          labelPadding: const EdgeInsets.symmetric(
-                            horizontal: 14,
-                            vertical: 4,
-                          ),
-                          visualDensity: VisualDensity.comfortable,
-                          selected: x.id == settings.paletteId,
-                          avatar: Container(
-                            width: 18,
-                            height: 18,
-                            decoration: BoxDecoration(
-                              color: x.accent,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          onSelected: (_) {
-                            settings.setPalette(x.id);
-                            Navigator.of(context).pop();
-                          },
-                        ),
-                      ),
-                  ],
-                ),
-              ],
+            child: Icon(
+              _iconFor(id),
+              key: ValueKey<String>(id),
             ),
           ),
         );

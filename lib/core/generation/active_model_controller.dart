@@ -5,34 +5,30 @@ import 'package:flutter/foundation.dart';
 import '../../app_state.dart';
 import '../models/active_model_capabilities.dart';
 import '../models/model_id_normalizer.dart';
+import '../models/model_info.dart';
+import '../models/model_presets.dart';
 import '../models/param_spec.dart';
+import '../providers/heuristic_rules.dart';
 import 'curated_parameter_catalog.dart';
 import 'user_param_override_store.dart';
 
 /// Реактивный контроллер «что умеет активная модель».
 ///
-/// Модель принадлежит [PresetStore] (PresetController) — единственному
-/// источнику истины: контроллер не хранит собственного поля модели,
-/// геттер [currentModelId] читает модель активного пресета, а запись
+/// Модель принадлежит [PresetStore] — единственному источнику истины:
+/// геттер [currentModelId] читает модель активного пресета, запись
 /// ([setModel]) делегирует PresetStore.updateActivePresetModel.
 ///
-/// Хранит снимок возможностей активной модели ([current]): нормализованный
-/// идентификатор, вид (текст/изображение/видео/live/skip/unknown),
-/// параметры генерации и флаги vision/reasoning. Подписан на смену
-/// пресетов, поэтому чат перестраивается сразу после выбора другого
-/// пресета либо смены модели в нём.
+/// Два способа обновления:
+///  - [setModel] — пользовательская смена модели (пишет в PresetStore
+///    и разрешает возможности);
+///  - [syncModel] — реактивная синхронизация с эффективной моделью
+///    (выбор пресета в настройках, режим «Без пресета»): НЕ мутирует
+///    PresetStore, а сразу запрашивает параметры новой модели из
+///    override / курированного каталога.
 ///
-/// Источник параметров: пользовательский override ([UserParamOverrideStore])
-/// имеет приоритет над курированным каталогом ([CuratedParameterCatalog]).
+/// Слушатель пресетов тоже вызывает полное разрешение возможностей,
+/// поэтому чипсы панели ввода всегда соответствуют активной модели.
 class ActiveModelController extends ChangeNotifier {
-  /// [presetController] — владелец модели (обязателен: единственный
-  /// источник истины). [overrides] можно подменить (например, в тестах);
-  /// по умолчанию используется глобальное хранилище override.
-  ///
-  /// Каталог параметров отдельным параметром не принимается:
-  /// [CuratedParameterCatalog] — справочник без экземпляров
-  /// (abstract final class только со статическими методами), его статики
-  /// вызываются напрямую.
   ActiveModelController({
     required PresetStore presetController,
     UserParamOverrideStore? overrides,
@@ -46,25 +42,22 @@ class ActiveModelController extends ChangeNotifier {
 
   ActiveModelCapabilities _current = ActiveModelCapabilities.empty;
 
-  /// Модель, для которой в последний раз разрешались возможности
-  /// (защита от повторного разрешения той же модели).
-  String _resolvedFor = '';
-
   /// true, пока выполняется setModel: слушатель пресетов в это время
   /// не запускает собственное разрешение (защита от рекурсии).
   bool _resolving = false;
 
+  /// Счётчик запросов разрешения для защиты от гонки асинхронных вызовов.
+  int _resolveToken = 0;
+
   /// Текущие возможности активной модели (никогда не null).
   ActiveModelCapabilities get current => _current;
 
-  /// Активная модель. Читается напрямую из активного пресета
-  /// (PresetStore.activePreset.model) — единственного источника истины.
+  /// Активная модель. Читается напрямую из активного пресета.
   /// Пустая строка — активного пресета нет (режим «Без пресета»).
   String get currentModelId => _presetController.activePreset?.model ?? '';
 
-  /// Смена активной модели: НЕ хранит дублирующее поле, а делегирует
-  /// запись владельцу — [PresetStore.updateActivePresetModel] — и затем
-  /// разрешает возможности по модели из активного пресета.
+  /// Смена активной модели пользователем: делегирует запись владельцу —
+  /// [PresetStore.updateActivePresetModel] — и разрешает возможности.
   Future<void> setModel(
     String modelId, {
     bool vision = false,
@@ -85,31 +78,68 @@ class ActiveModelController extends ChangeNotifier {
     }
   }
 
+  /// Реактивная синхронизация с эффективной моделью (при выборе пресета
+  /// в настройках либо переключении на «Без пресета»). Не мутирует
+  /// [PresetStore], а запрашивает параметры модели из override /
+  /// каталога и уведомляет слушателей.
+  Future<void> syncModel(
+    String modelId, {
+    bool? vision,
+    bool? reasoning,
+  }) async {
+    final id = modelId.trim();
+    final inferredVision = vision ?? _inferVision(id);
+    final inferredReasoning = reasoning ?? await _inferReasoning(id);
+    await _resolve(
+      id,
+      vision: inferredVision,
+      reasoning: inferredReasoning,
+    );
+  }
+
   /// Слушатель [PresetStore]: смена активного пресета либо модели внутри
-  /// пресета обновляет возможности без ручных опросов.
+  /// пресета мгновенно запрашивает параметры новой модели из каталога
+  /// и перестраивает подписанные виджеты (включая панель ввода в чате).
   Future<void> _onPresetChanged() async {
     if (_resolving) return;
-    final id = _presetController.active?.model ?? '';
-    if (id.trim() == _resolvedFor) {
-      notifyListeners();
-      return;
+    final presetModel = _presetController.active?.model.trim() ?? '';
+    final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
+    final vision = _inferVision(id);
+    final reasoning = await _inferReasoning(id);
+    await _resolve(id, vision: vision, reasoning: reasoning);
+  }
+
+  static bool _inferVision(String modelId) {
+    if (modelId.isEmpty) return false;
+    final id = HeuristicRules.normalize(modelId);
+    return HeuristicRules.inferInputModalities(id).contains(Modality.image);
+  }
+
+  static Future<bool> _inferReasoning(String modelId) async {
+    if (modelId.isEmpty) return false;
+    final norm = HeuristicRules.normalize(modelId);
+    var reasoning = HeuristicRules.inferSupportsReasoning(norm);
+    if (!reasoning) {
+      try {
+        final ps = await ModelPresets.load();
+        reasoning = ps.forModel(modelId)?.reasoning ?? false;
+      } catch (_) {}
     }
-    await _resolve(id);
+    return reasoning;
   }
 
   /// Разрешает возможности модели [modelId].
   ///
   /// Параметры: override пользователя, иначе курированный каталог
-  /// (при необходимости каталог догружается лениво). [vision] и
-  /// [reasoning] передаёт вызывающий код — из каталога модели или из
-  /// настроек. Любая ошибка хранилища/ассетов не роняет вызов: модель
-  /// останется с пустыми параметрами и видом по эвристике.
+  /// (при необходимости каталог догружается лениво). Любая ошибка
+  /// хранилища/ассетов не роняет вызов: модель останется с пустыми
+  /// параметрами и видом по эвристике.
   Future<void> _resolve(
     String modelId, {
     bool vision = false,
     bool reasoning = false,
   }) async {
-    _resolvedFor = modelId.trim();
+    final token = ++_resolveToken;
     final norm = ModelIdNormalizer.normalize(modelId);
     ModelParameters? params;
     if (norm.isNotEmpty) {
@@ -129,6 +159,7 @@ class ActiveModelController extends ChangeNotifier {
         }
       }
     }
+    if (token != _resolveToken) return;
     final kind = _resolveKind(params, reasoning);
     _current = ActiveModelCapabilities(
       modelId: modelId,
@@ -139,7 +170,12 @@ class ActiveModelController extends ChangeNotifier {
       reasoning: reasoning,
       reasoningLevels: reasoning
           ? const <String>[
-              'off', 'low', 'medium', 'high', 'xhigh', 'max',
+              'off',
+              'low',
+              'medium',
+              'high',
+              'xhigh',
+              'max',
             ]
           : const <String>[],
     );
@@ -171,10 +207,13 @@ class ActiveModelController extends ChangeNotifier {
           return ActiveModelKind.text;
       }
     }
-    final hasMedia =
-        p.aspectRatios.isNotEmpty || p.durations != null || p.resolutions.isNotEmpty;
+    final hasMedia = p.aspectRatios.isNotEmpty ||
+        p.durations != null ||
+        p.resolutions.isNotEmpty;
     if (hasMedia) {
-      return p.durations != null ? ActiveModelKind.video : ActiveModelKind.image;
+      return p.durations != null
+          ? ActiveModelKind.video
+          : ActiveModelKind.image;
     }
     return ActiveModelKind.text;
   }
