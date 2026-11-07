@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'core/auth/polza_auth_service.dart';
 import 'core/search/search_strategy.dart';
 import 'core/storage.dart';
 import 'core/utils/reasoning_mapper.dart';
@@ -45,14 +46,31 @@ class EffectiveConfig {
   });
 }
 
-/// Активный пресет имеет приоритет; если он не выбран —
-/// работают прежние настройки (совместимость со старыми данными).
+/// Активный пресет имеет приоритет; если он не выбран — работают прежние
+/// настройки (совместимость со старыми данными). Если адрес или ключ пусты,
+/// но пользователь авторизован в Polza AI, автоматически подставляются
+/// OAuth-токен и Base URL Polza — переключение пресетов больше не роняет
+/// запросы с ошибкой ключа.
 EffectiveConfig effectiveConfig() {
+  final polzaKey =
+      polzaAuth.isAuthenticated ? polzaAuth.accessToken.trim() : '';
+  final polzaUrl = PolzaAuthService.polzaBaseUrl;
+
   final pr = presets.active;
   if (pr != null && pr.id != PresetStore.defaultPresetId) {
+    final url = pr.baseUrl.trim().isNotEmpty
+        ? pr.baseUrl.trim()
+        : (settings.baseUrl.trim().isNotEmpty
+            ? settings.baseUrl.trim()
+            : (polzaKey.isNotEmpty ? polzaUrl : ''));
+    final key = pr.apiKey.trim().isNotEmpty
+        ? pr.apiKey.trim()
+        : (settings.apiKey.trim().isNotEmpty
+            ? settings.apiKey.trim()
+            : polzaKey);
     return EffectiveConfig(
-      baseUrl: pr.baseUrl.trim(),
-      apiKey: pr.apiKey.trim(),
+      baseUrl: url,
+      apiKey: key,
       model: pr.model.trim(),
       systemPrompt: pr.systemPrompt,
       stream: pr.stream,
@@ -62,9 +80,15 @@ EffectiveConfig effectiveConfig() {
   // Системный дефолтный пресет отражает глобальные настройки: адрес, ключ
   // и системный промпт читаются из настроек «живьём», модель — из пресета
   // (PresetStore — единственный источник истины для модели).
+  final url = settings.baseUrl.trim().isNotEmpty
+      ? settings.baseUrl.trim()
+      : (polzaKey.isNotEmpty ? polzaUrl : '');
+  final key = settings.apiKey.trim().isNotEmpty
+      ? settings.apiKey.trim()
+      : polzaKey;
   return EffectiveConfig(
-    baseUrl: settings.baseUrl.trim(),
-    apiKey: settings.apiKey.trim(),
+    baseUrl: url,
+    apiKey: key,
     model: (pr?.model ?? settings.model).trim(),
     systemPrompt: settings.systemPrompt,
     stream: true,
