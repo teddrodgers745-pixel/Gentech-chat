@@ -189,6 +189,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _onConfigChanged() {
     final modelId = effectiveConfig().model.trim();
+    if (_typeFor != modelId) {
+      _aspectRatio = '1:1';
+      _videoDuration = null;
+    }
     _resolveType(modelId, force: true);
     _syncActiveModel(modelId);
   }
@@ -518,16 +522,22 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ---------- уровень размышлений ----------
 
-  /// Циклическая смена уровня размышлений: off -> low -> medium -> high
-  /// -> off. Уровень хранится в настройках (settings.reasoningLevel) —
-  /// оттуда его читают капсула «Мышление» и отправка запроса
-  /// (_runCompletion передаёт его в ChatService, где ReasoningMapper
-  /// добавляет reasoning_effort / reasoning:{effort} в тело запроса).
+  /// Циклическая смена уровня размышлений только по поддерживаемым моделью
+  /// базовым уровням (off -> medium -> high -> off). Если модель не
+  /// поддерживает размышления, уровень принудительно остаётся off.
   void _cycleReasoning() {
+    final caps = _activeModel.current;
+    if (!caps.reasoning) {
+      settings.setReasoningLevel(ReasoningLevel.off.id);
+      return;
+    }
     HapticFeedback.lightImpact();
-    settings.setReasoningLevel(
-      ReasoningMapper.fromId(settings.reasoningLevel).next().id,
-    );
+    final allowed = ReasoningMapper.levelsFromNames(caps.reasoningLevels);
+    final current = ReasoningMapper.fromId(settings.reasoningLevel);
+    final next = allowed.isNotEmpty
+        ? allowed[(allowed.indexOf(current) + 1) % allowed.length]
+        : current.next();
+    settings.setReasoningLevel(next.id);
   }
 
   // ---------- отправка ----------
@@ -627,6 +637,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
+    final estimate = CostEstimator.estimate(
+      modelId: cfg.model,
+      prompt: txt,
+    );
     final executor = ImagesApiExecutor(aspectRatio: _aspectRatio);
     _imageExecutor = executor;
     final request = GenerationRequest(
@@ -637,10 +651,7 @@ class _ChatScreenState extends State<ChatScreen> {
         <String, dynamic>{'role': 'user', 'content': txt},
       ],
       stream: false,
-      estimatedUsd: CostEstimator.estimate(
-        modelId: cfg.model,
-        prompt: txt,
-      ).estimatedUsd,
+      estimatedUsd: estimate.estimatedUsd,
     );
     GenError? genError;
     try {
@@ -667,6 +678,20 @@ class _ChatScreenState extends State<ChatScreen> {
         ..errorText = GenErrorMapper.detailsOf(genError);
     } else if (reply.content.isEmpty) {
       chat.messages.remove(reply);
+    } else {
+      // Стоимость генерации под картинкой: TextPart с MessageCost,
+      // отображается той же строкой, что и у текстовых ответов.
+      final usd = estimate.estimatedUsd ?? 0.0;
+      final costRub = usd > 0 ? usd * 95.0 : 1.5;
+      final tokens = (txt.length / 4).ceil().clamp(1, 100000);
+      final imgCost = MessageCost(
+        promptTokens: tokens,
+        completionTokens: 0,
+        totalTokens: tokens,
+        cost: costRub,
+      );
+      reply.parts.add(TextPart('', cost: imgCost));
+      chat.totalCost += imgCost.cost;
     }
     if (!mounted) {
       await store.save();
@@ -951,7 +976,14 @@ class _ChatScreenState extends State<ChatScreen> {
     // Единый селектор: уровень берётся из настроек (капсула «Мышление»
     // сохраняет его в SharedPreferences) и переводится в payload
     // через ReasoningMapper в ChatService.
-    final lvl = ReasoningMapper.fromId(settings.reasoningLevel);
+    final rawLvl = ReasoningMapper.fromId(settings.reasoningLevel);
+    final lvl = !_activeModel.current.reasoning
+        ? ReasoningLevel.off
+        : (rawLvl == ReasoningLevel.low
+            ? ReasoningLevel.medium
+            : (rawLvl == ReasoningLevel.xhigh || rawLvl == ReasoningLevel.max)
+                ? ReasoningLevel.high
+                : rawLvl);
     final String? reasoningEffort =
         lvl == ReasoningLevel.off ? null : lvl.name;
     final msgs = <Map<String, dynamic>>[
@@ -1199,33 +1231,45 @@ class _ChatScreenState extends State<ChatScreen> {
                 // перестраивает композер без ручных setState.
                 ListenableBuilder(
                   listenable: _activeModel,
-                  builder: (ctx, _) => AdaptiveChatInputBar(
-                    config: _currentConfig,
-                    capabilities: _activeModel.current,
-                    controller: _input,
-                    modelType: _effectiveModelType,
-                    attachmentsBusy: _attachments.any((a) => a.isBusy),
-                    onAspectRatioChanged: (r) => _aspectRatio = r,
-                    onDurationChanged: (d) => _videoDuration = d,
-                    streaming: _streaming,
-                    reasoningLevel:
-                        ReasoningMapper.fromId(settings.reasoningLevel).index,
-                    onCycleReasoning: _cycleReasoning,
-                    onToggleMic: _toggleMic,
-                    onAttach: _attach,
-                    onSend: _send,
-                    onStop: _stop,
-                    onStartLive: () {
-                      ttsService.stop();
-                      final key = effectiveConfig().apiKey.trim();
-                      Navigator.push(
-                        ctx,
-                        MaterialPageRoute(
-                          builder: (_) => LiveScreen(apiKey: key),
-                        ),
-                      );
-                    },
-                  ),
+                  builder: (ctx, _) {
+                    final caps = _activeModel.current;
+                    final effType = _effectiveModelType;
+                    final presetId = presets.active?.id ?? 'default';
+                    final effectiveLevel = caps.reasoning
+                        ? ReasoningMapper.fromId(settings.reasoningLevel)
+                        : ReasoningLevel.off;
+                    // ValueKey пересоздаёт панель при смене модели/пресета:
+                    // внутреннее состояние режима композера не «залипает».
+                    return AdaptiveChatInputBar(
+                      key: ValueKey(
+                        'composer_${presetId}_${activeModel}_${effType}_${caps.kind.name}',
+                      ),
+                      config: _currentConfig,
+                      capabilities: caps,
+                      controller: _input,
+                      modelType: effType,
+                      attachmentsBusy: _attachments.any((a) => a.isBusy),
+                      onAspectRatioChanged: (r) => _aspectRatio = r,
+                      onDurationChanged: (d) => _videoDuration = d,
+                      streaming: _streaming,
+                      reasoningLevel: effectiveLevel.index,
+                      onCycleReasoning: _cycleReasoning,
+                      onToggleMic: _toggleMic,
+                      onAttach: _attach,
+                      onSend: _send,
+                      onStop: _stop,
+                      onStartLive: () {
+                        ttsService.stop();
+                        final key = effectiveConfig().apiKey.trim();
+                        Navigator.push(
+                          ctx,
+                          MaterialPageRoute(
+                            builder: (_) => LiveScreen(apiKey: key),
+                          ),
+                        );
+                      },
+                    );
+                  },
                 ),
               ],
             ),
@@ -1320,7 +1364,64 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Шторка «Параметры и пресеты»: все промпты-пресеты чипами в Wrap,
+  /// тап вставляет промпт в поле ввода.
+  void _showPresetsSheet(BuildContext context, Palette p, List<String> prompts) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      backgroundColor: p.surface,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Параметры и пресеты',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: p.text,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final prompt in prompts)
+                    ActionChip(
+                      label: Text(
+                        prompt.trim(),
+                        style: TextStyle(fontSize: 12, color: p.text),
+                      ),
+                      backgroundColor: p.card,
+                      side: BorderSide(color: p.border),
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _input.text = prompt;
+                        _input.selection = TextSelection.collapsed(
+                          offset: _input.text.length,
+                        );
+                      },
+                    ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _empty(Palette p) {
+    const prompts = <String>[
+      'Объясни простыми словами ',
+      'Напиши чистый код для ',
+      'Составь краткий план ',
+    ];
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -1377,11 +1478,7 @@ class _ChatScreenState extends State<ChatScreen> {
               runSpacing: 8,
               alignment: WrapAlignment.center,
               children: [
-                for (final prompt in const <String>[
-                  'Объясни простыми словами ',
-                  'Напиши чистый код для ',
-                  'Составь краткий план ',
-                ])
+                for (final prompt in prompts.take(4))
                   ActionChip(
                     label: Text(
                       prompt.trim(),
@@ -1395,6 +1492,17 @@ class _ChatScreenState extends State<ChatScreen> {
                         offset: _input.text.length,
                       );
                     },
+                  ),
+                if (prompts.length > 4)
+                  ActionChip(
+                    avatar: Icon(Icons.tune, size: 16, color: p.accent),
+                    label: Text(
+                      'Параметры',
+                      style: TextStyle(fontSize: 12, color: p.accent),
+                    ),
+                    backgroundColor: p.surface,
+                    side: BorderSide(color: p.accent.withValues(alpha: 0.4)),
+                    onPressed: () => _showPresetsSheet(context, p, prompts),
                   ),
               ],
             ),
