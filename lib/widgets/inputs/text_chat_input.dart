@@ -6,6 +6,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import '../../app_state.dart';
 import '../../core/models/active_model_capabilities.dart';
+import '../../core/search/search_controller.dart';
 import '../../core/search/search_strategy.dart';
 import '../../core/utils/reasoning_mapper.dart';
 import '../../features/composer/widgets/reasoning_sheet.dart';
@@ -94,10 +95,6 @@ class _TextChatInputState extends State<TextChatInput> {
 
   static const Color _searchFill = Color(0xFF3B82F6);
   static const Color _searchTextOn = Color(0xFFF3F7FF);
-
-  /// Локальный флаг поиска для текущего чата: при активном режиме поиска
-  /// (например, native) включён по умолчанию, чтобы капсула сразу была синей.
-  bool _searchOn = true;
 
   TextEditingController get _effectiveController =>
       widget.controller ?? (_internalController ??= TextEditingController());
@@ -209,8 +206,14 @@ class _TextChatInputState extends State<TextChatInput> {
   ///    чата (ярко-синяя капсула <-> бледно-синяя).
   void _handleToggleSearch() {
     HapticFeedback.lightImpact();
+    final nativeSupported = widget.capabilities.supportsNativeSearch;
     final mode = SearchModes.fromId(settings.searchMode);
-    if (mode == SearchMode.off) {
+    // Модель умеет нативный поиск, а режим в настройках выключен:
+    // автоматически включаем режим native — капсула сразу активна.
+    if (nativeSupported && mode == SearchMode.off) {
+      settings.setSearchMode(SearchMode.native.id);
+    }
+    if (mode == SearchMode.off && !nativeSupported) {
       final messenger = ScaffoldMessenger.of(context);
       messenger.clearSnackBars();
       final controller = messenger.showSnackBar(
@@ -232,7 +235,8 @@ class _TextChatInputState extends State<TextChatInput> {
       });
       return;
     }
-    setState(() => _searchOn = !_searchOn);
+    chatSearch.setEnabled(!chatSearch.enabled);
+    if (mounted) setState(() {});
     widget.onToggleSearch?.call();
   }
 
@@ -505,9 +509,12 @@ class _TextChatInputState extends State<TextChatInput> {
   }
 
   Widget _searchCapsule(Palette p) {
+    final nativeSupported = widget.capabilities.supportsNativeSearch;
     final configuredMode = SearchModes.fromId(settings.searchMode);
-    final available = configuredMode != SearchMode.off;
-    final on = available && _searchOn;
+    // Модель с нативным поиском: капсула активна, даже если в настройках
+    // режим не выбран — при тапе режим native включается автоматически.
+    final available = configuredMode != SearchMode.off || nativeSupported;
+    final on = available && chatSearch.enabled;
     final Color fill;
     final Color content;
     final Color borderColor;
@@ -516,7 +523,8 @@ class _TextChatInputState extends State<TextChatInput> {
       fill = const Color(0xFF3A3733).withValues(alpha: 0.25);
       content = Colors.grey;
       borderColor = p.border;
-    } else if (configuredMode == SearchMode.native || on) {
+    } else if (configuredMode == SearchMode.native ||
+        (nativeSupported && on)) {
       // Состояние 2: режим native либо поиск включён в чате — синяя активная.
       fill = _searchFill;
       content = _searchTextOn;
@@ -552,7 +560,7 @@ class _TextChatInputState extends State<TextChatInput> {
             ),
             const SizedBox(width: 6),
             Text(
-              'Поиск',
+              nativeSupported ? 'Встроенный поиск' : 'Поиск',
               maxLines: 1,
               style: TextStyle(
                 fontSize: 13,

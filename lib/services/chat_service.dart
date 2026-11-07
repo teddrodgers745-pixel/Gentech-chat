@@ -7,7 +7,9 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
+import '../core/generation/search_capability_resolver.dart';
 import '../core/providers/heuristic_rules.dart';
+import '../core/search/search_controller.dart';
 import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
 import '../models/chat_message.dart';
@@ -569,10 +571,14 @@ class ChatService {
           );
         } catch (_) {}
       }
-      // Серверный веб-поиск провайдера: если probe-проверка показала
-      // поддержку (web_search_supported), инструмент web_search
-      // добавляется в тело запроса, если его там ещё нет.
-      if (settings.webSearchSupported) {
+      // Серверный веб-поиск: инструмент web_search добавляется, когда
+      // probe-проверка подтвердила поддержку провайдера
+      // (web_search_supported) ИЛИ когда поиск включён в чате
+      // (chatSearch.enabled), а активная модель поддерживает нативный
+      // веб-поиск. Моделям без поддержки поиска параметр не добавляется.
+      final nativeSearchActive = chatSearch.enabled &&
+          SearchCapabilityResolver.supportsNativeSearch(model);
+      if (settings.webSearchSupported || nativeSearchActive) {
         final existing = bodyMap['tools'];
         final list = <Map<String, dynamic>>[
           if (existing is List)
