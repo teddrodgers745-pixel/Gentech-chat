@@ -79,8 +79,11 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _atBottom = true;
   Timer? _uiTimer;
 
-  /// Выбранная пропорция изображения (режим генерации картинок).
+  /// Выбранная пропорция изображения/видео.
   String _aspectRatio = '1:1';
+
+  /// Выбранная длительность видео в секундах (режим генерации видео).
+  int? _videoDuration;
 
   /// Активный исполнитель генерации изображений (для кнопки «стоп»).
   ImagesApiExecutor? _imageExecutor;
@@ -180,17 +183,15 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _onConfigChanged() {
     final modelId = effectiveConfig().model.trim();
-    _resolveType(modelId);
+    _resolveType(modelId, force: true);
     _syncActiveModel(modelId);
   }
 
-  /// Инициализация контроллера текущей моделью: параметры берутся из
-  /// override пользователя либо курированного каталога, флаги vision и
-  /// reasoning — из эвристики по идентификатору. Ошибки не роняют экран.
+  /// Реактивная синхронизация контроллера текущей моделью без мутации
+  /// PresetStore: при переключении пресета подтягиваются параметры
+  /// (aspectRatios, durations) именно модели выбранного пресета.
   Future<void> _syncActiveModel(String modelId) async {
     final id = modelId.trim();
-    // Флаг reasoning: эвристика по идентификатору плюс пресет модели
-    // (ModelPreset.reasoning из assets/model_presets.json).
     var reasoning = _heuristicReasoning(id);
     if (!reasoning) {
       try {
@@ -201,7 +202,7 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     try {
-      await _activeModel.setModel(
+      await _activeModel.syncModel(
         id,
         vision: _heuristicVision(id),
         reasoning: reasoning,
@@ -209,6 +210,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       // Каталог недоступен — контроллер останется с пустыми параметрами.
     }
+    if (mounted) setState(() {});
   }
 
   /// Принимает ли модель изображения на вход (по эвристике).
@@ -224,9 +226,9 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Эффективный тип активной модели для панели ввода: ручной override
   /// типа имеет приоритет, затем эвристика и каталог параметров
   /// (см. ModelTypeOverrideStore.effectiveType).
-  Future<void> _resolveType(String modelId) async {
+  Future<void> _resolveType(String modelId, {bool force = false}) async {
     final id = modelId.trim();
-    if (id == _typeFor) return;
+    if (!force && id == _typeFor) return;
     _typeFor = id;
     String t;
     try {
@@ -531,7 +533,12 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     if (genType == ModelTypes.video) {
-      if (!await _validateGenParams(modelId, isVideo: true)) {
+      if (!await _validateGenParams(
+        modelId,
+        isVideo: true,
+        aspectRatio: _aspectRatio,
+        duration: _videoDuration,
+      )) {
         return;
       }
       await _sendVideo(txt);
@@ -672,6 +679,10 @@ class _ChatScreenState extends State<ChatScreen> {
         <String, dynamic>{'role': 'user', 'content': txt},
       ],
       stream: false,
+      parameters: <String, dynamic>{
+        ParamKeys.aspectRatio: _aspectRatio,
+        if (_videoDuration != null) ParamKeys.duration: _videoDuration!,
+      },
       estimatedUsd: CostEstimator.estimate(
         modelId: cfg.model,
         prompt: txt,
@@ -817,6 +828,7 @@ class _ChatScreenState extends State<ChatScreen> {
     String modelId, {
     required bool isVideo,
     String? aspectRatio,
+    int? duration,
   }) async {
     try {
       if (!CuratedParameterCatalog.isLoaded) {
@@ -846,6 +858,7 @@ class _ChatScreenState extends State<ChatScreen> {
       final p = UniversalParams.fromRaw(<String, dynamic>{
         if (aspectRatio != null && aspectRatio.isNotEmpty)
           ParamKeys.aspectRatio: aspectRatio,
+        if (duration != null) ParamKeys.duration: duration,
       });
       if (isVideo) {
         ParameterTranslator.toVideoBody(p, spec);
@@ -1155,9 +1168,10 @@ class _ChatScreenState extends State<ChatScreen> {
                     config: _currentConfig,
                     capabilities: _activeModel.current,
                     controller: _input,
-                    modelType: _modelType,
+                    modelType: _effectiveModelType,
                     attachmentsBusy: _attachments.any((a) => a.isBusy),
                     onAspectRatioChanged: (r) => _aspectRatio = r,
+                    onDurationChanged: (d) => _videoDuration = d,
                     streaming: _streaming,
                     reasoningLevel:
                         ReasoningMapper.fromId(settings.reasoningLevel).index,

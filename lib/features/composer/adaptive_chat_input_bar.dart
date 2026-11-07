@@ -1,39 +1,40 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../app_state.dart';
+import '../../core/generation/model_type_override_store.dart' show ModelTypes;
+import '../../core/generation/user_param_override_store.dart';
 import '../../core/models/active_model_capabilities.dart';
-import '../../core/providers/heuristic_rules.dart';
+import '../../core/models/param_spec.dart';
 import '../../models/model_config.dart';
-import '../../widgets/inputs/image_gen_input.dart';
+import '../../theme.dart';
 import '../../widgets/inputs/live_voice_input.dart';
 import '../../widgets/inputs/text_chat_input.dart';
-import 'composer_mode.dart';
 import 'modes/image_gen_mode.dart';
-import 'composer_registry.dart';
-import 'modes/live_mode.dart';
-import 'video_gen_input.dart';
-import 'video_gen_mode.dart';
 
-/// Адаптивная нижняя панель чата: активный режим ввода выбирается строго
-/// по виду активной модели ([ActiveModelCapabilities.kind]):
-///  - image -> только [ImageGenInput] (пропорции, без длительностей);
-///  - video -> только [VideoGenInput] (пропорции, длительности, разрешения);
-///  - live  -> [LiveVoiceInput];
-///  - skip  -> панель ввода не показывается ([SizedBox.shrink]);
-///  - text/unknown -> [TextChatInput] (с учётом ручного override типа).
-/// Ключи [ValueKey] содержат capabilities.modelId: при смене модели
-/// Flutter полностью пересоздаёт виджет и сбрасывает прежний State.
-class AdaptiveChatInputBar extends StatelessWidget {
+/// Адаптивная панель ввода чата. Мгновенно перестраивается при смене
+/// пресета или модели:
+///  - Live -> панель голосового режима;
+///  - Video / Image -> композитор промпта с интерактивными чипсами
+///    пропорций, длительности и разрешения из каталога активной модели;
+///  - Text (и любые остальные по умолчанию) -> полный [TextChatInput]
+///    с капсулами «Мышление», «Поиск», скрепкой, микрофоном и отправкой.
+/// Поле ввода никогда не исчезает: у каждой рабочей модели есть панель.
+class AdaptiveChatInputBar extends StatefulWidget {
   final ModelConfig config;
-
-  /// Возможности активной модели (вид, параметры генерации, vision,
-  /// reasoning): пробрасываются в активную панель ввода.
   final ActiveModelCapabilities capabilities;
   final TextEditingController? controller;
+
+  /// Эффективный тип модели ('text', 'image', 'video').
+  final String modelType;
   final bool streaming;
+  final bool attachmentsBusy;
   final int reasoningLevel;
+
+  final ValueChanged<String>? onAspectRatioChanged;
+  final ValueChanged<int>? onDurationChanged;
   final VoidCallback? onCycleReasoning;
   final VoidCallback? onToggleSearch;
   final VoidCallback? onToggleMic;
@@ -42,29 +43,17 @@ class AdaptiveChatInputBar extends StatelessWidget {
   final VoidCallback? onStop;
   final VoidCallback? onStartLive;
 
-  /// Смена выбранной пропорции в режиме генерации изображений.
-  final ValueChanged<String>? onAspectRatioChanged;
-
-  /// Реестр режимов композера; null — стандартный реестр
-  /// (текстовый и голосовой режимы).
-  final ComposerModeRegistry? registry;
-
-  /// Ручной override типа модели: '' (авто), 'text', 'image' либо 'video'.
-  /// Учитывается только для text/unknown-моделей: явные виды image/video
-  /// и skip имеют приоритет.
-  final String modelType;
-
-  /// Есть ли вложения в обработке: кнопка «Отправить» неактивна, пока
-  /// хотя бы одно вложение не готово.
-  final bool attachmentsBusy;
-
   const AdaptiveChatInputBar({
     super.key,
     required this.config,
-    required this.capabilities,
+    this.capabilities = ActiveModelCapabilities.empty,
     this.controller,
+    this.modelType = '',
     this.streaming = false,
+    this.attachmentsBusy = false,
     this.reasoningLevel = 0,
+    this.onAspectRatioChanged,
+    this.onDurationChanged,
     this.onCycleReasoning,
     this.onToggleSearch,
     this.onToggleMic,
@@ -72,181 +61,588 @@ class AdaptiveChatInputBar extends StatelessWidget {
     this.onSend,
     this.onStop,
     this.onStartLive,
-    this.onAspectRatioChanged,
-    this.registry,
-    this.modelType = '',
-    this.attachmentsBusy = false,
   });
 
-  /// Режим по типу модели (только для text/unknown): явный override типа
-  /// имеет приоритет, затем live-модель — голосовой режим из реестра,
-  /// модель-картинка — режим генерации изображений, видео-модель
-  /// (kling, veo, sora ...) — режим генерации видео, всё остальное —
-  /// режим по умолчанию (текстовый).
-  static ComposerMode _resolveMode(
-    ModelConfig config,
-    ComposerModeRegistry reg,
-    String modelId,
-    String modelType,
-  ) {
-    if (config is LiveVoiceModelConfig) {
-      final live = reg.byId(LiveMode.modeId);
-      if (live != null) return live;
+  @override
+  State<AdaptiveChatInputBar> createState() => _AdaptiveChatInputBarState();
+}
+
+class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
+  TextEditingController? _internalController;
+  final FocusNode _focus = FocusNode();
+
+  String _selectedRatio = '1:1';
+  int? _selectedDuration;
+  String? _selectedResolution;
+
+  /// Локальная копия сохранённого override параметров: чипсы обновляются
+  /// сразу после сохранения, не дожидаясь пересборки контроллера модели.
+  ModelParameters? _override;
+
+  TextEditingController get _effectiveController =>
+      widget.controller ?? (_internalController ??= TextEditingController());
+
+  @override
+  void initState() {
+    super.initState();
+    _focus.addListener(_onFocusChange);
+    _syncDefaultParams();
+  }
+
+  @override
+  void didUpdateWidget(covariant AdaptiveChatInputBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final modelChanged = oldWidget.capabilities.normalizedId !=
+        widget.capabilities.normalizedId;
+    if (modelChanged) _override = null;
+    if (modelChanged ||
+        oldWidget.capabilities.params != widget.capabilities.params ||
+        oldWidget.modelType != widget.modelType ||
+        oldWidget.config != widget.config) {
+      _syncDefaultParams();
     }
-    if (modelType == 'image') {
-      final image = reg.byId(ImageGenMode.modeId);
-      if (image != null) return image;
+  }
+
+  void _onFocusChange() {
+    if (mounted) setState(() {});
+  }
+
+  List<String> _availableAspectRatios() {
+    final ov = _override?.aspectRatios;
+    if (ov != null && ov.isNotEmpty) return ov;
+    final fromCaps =
+        widget.capabilities.params?.aspectRatios ?? const <String>[];
+    if (fromCaps.isNotEmpty) return fromCaps;
+    final cfg = widget.config;
+    if (cfg is ImageGenModelConfig && cfg.availableAspectRatios.isNotEmpty) {
+      return cfg.availableAspectRatios;
     }
-    if (modelType == 'video') {
-      final video = reg.byId(VideoGenMode.modeId);
-      if (video != null) return video;
+    return <String>[for (final r in ImageGenMode.aspectRatios) r.id];
+  }
+
+  List<int> _availableDurations() {
+    final ov = _override?.durations;
+    if (ov != null && !ov.isEmpty) return _durationList(ov);
+    final d = widget.capabilities.params?.durations;
+    if (d == null || d.isEmpty) return const <int>[];
+    return _durationList(d);
+  }
+
+  /// Длительности из диапазона/списка: дискретный список либо шаг 5 с
+  /// внутри min..max (не более 10 вариантов), иначе [5, 10].
+  static List<int> _durationList(DurationRange d) {
+    final disc = d.discrete;
+    if (disc != null && disc.isNotEmpty) return List<int>.of(disc);
+    final min = d.min;
+    final max = d.max;
+    if (min != null && max != null && max >= min) {
+      final list = <int>[];
+      for (int v = min; v <= max && list.length < 10; v += 5) {
+        list.add(v);
+      }
+      if (list.isNotEmpty) return list;
     }
-    if (modelType == 'text') return reg.defaultMode;
-    if (config is ImageGenModelConfig) {
-      final image = reg.byId(ImageGenMode.modeId);
-      if (image != null) return image;
+    final only = min ?? max;
+    if (only != null) return <int>[only];
+    return const <int>[5, 10];
+  }
+
+  List<String> _availableResolutions() =>
+      widget.capabilities.params?.resolutions ?? const <String>[];
+
+  void _syncDefaultParams() {
+    final ratios = _availableAspectRatios();
+    if (ratios.isNotEmpty && !ratios.contains(_selectedRatio)) {
+      _selectedRatio = ratios.first;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) widget.onAspectRatioChanged?.call(_selectedRatio);
+      });
     }
-    final video = reg.byId(VideoGenMode.modeId);
-    if (video != null &&
-        video.supportsModel(HeuristicRules.build(modelId).outputModalities)) {
-      return video;
+    final durations = _availableDurations();
+    if (durations.isNotEmpty) {
+      if (_selectedDuration == null ||
+          !durations.contains(_selectedDuration)) {
+        _selectedDuration = durations.first;
+        final d = _selectedDuration!;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onDurationChanged?.call(d);
+        });
+      }
+    } else {
+      _selectedDuration = null;
     }
-    return reg.defaultMode;
+    final resolutions = _availableResolutions();
+    if (resolutions.isNotEmpty) {
+      if (_selectedResolution == null ||
+          !resolutions.contains(_selectedResolution)) {
+        _selectedResolution = resolutions.first;
+      }
+    } else {
+      _selectedResolution = null;
+    }
+  }
+
+  bool get _isLiveMode =>
+      widget.config is LiveVoiceModelConfig ||
+      widget.capabilities.kind == ActiveModelKind.live;
+
+  bool get _isVideoMode =>
+      widget.modelType == ModelTypes.video ||
+      widget.capabilities.kind == ActiveModelKind.video;
+
+  bool get _isImageMode =>
+      !_isVideoMode &&
+      (widget.modelType == ModelTypes.image ||
+          widget.capabilities.kind == ActiveModelKind.image ||
+          widget.config is ImageGenModelConfig);
+
+  @override
+  void dispose() {
+    _focus.removeListener(_onFocusChange);
+    _focus.dispose();
+    _internalController?.dispose();
+    super.dispose();
+  }
+
+  /// Диалог ручного ввода параметров (когда модель неизвестна каталогу):
+  /// пропорции и длительности сохраняются как override пользователя.
+  Future<void> _openManualParamsDialog() async {
+    final normId = widget.capabilities.normalizedId;
+    if (normId.isEmpty) return;
+    final isVideo = _isVideoMode;
+    final ratiosCtrl = TextEditingController(
+      text: _availableAspectRatios().join(', '),
+    );
+    final durationsCtrl = TextEditingController(
+      text: _availableDurations().join(', '),
+    );
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          isVideo ? 'Параметры видео-модели' : 'Параметры модели изображений',
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ratiosCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Пропорции (через запятую)',
+                hintText: '16:9, 9:16, 1:1',
+              ),
+            ),
+            if (isVideo) ...[
+              const SizedBox(height: 12),
+              TextField(
+                controller: durationsCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Длительность в секундах (через запятую)',
+                  hintText: '5, 10',
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Сохранить'),
+          ),
+        ],
+      ),
+    );
+
+    if (saved != true) {
+      ratiosCtrl.dispose();
+      durationsCtrl.dispose();
+      return;
+    }
+    final ratios = ratiosCtrl.text
+        .split(',')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    final durs = durationsCtrl.text
+        .split(',')
+        .map((s) => int.tryParse(s.trim()))
+        .whereType<int>()
+        .toList();
+    ratiosCtrl.dispose();
+    durationsCtrl.dispose();
+
+    final spec = ModelParameters(
+      type: isVideo ? 'video' : 'image',
+      aspectRatios:
+          ratios.isEmpty ? const <String>['1:1', '16:9', '9:16'] : ratios,
+      durations: isVideo && durs.isNotEmpty
+          ? DurationRange(discrete: durs)
+          : null,
+      confidence: 'manual',
+    );
+    await userParamOverrideStore.save(normId, spec);
+    if (!mounted) return;
+    setState(() {
+      _override = spec;
+      if (spec.aspectRatios.isNotEmpty) {
+        _selectedRatio = spec.aspectRatios.first;
+        widget.onAspectRatioChanged?.call(_selectedRatio);
+      }
+      final list = _availableDurations();
+      if (list.isNotEmpty) {
+        _selectedDuration = list.first;
+        widget.onDurationChanged?.call(_selectedDuration!);
+      }
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final reg = registry ?? ComposerModeRegistry();
-    final kind = capabilities.kind;
-
-    Widget child;
-    if (kind == ActiveModelKind.skip) {
-      // Служебная модель (озвучка, апскейл и т.п.): панель ввода не нужна.
-      return const SizedBox.shrink();
-    } else if (kind == ActiveModelKind.image) {
-      // Генератор изображений: ТОЛЬКО ImageGenInput (пропорции,
-      // размеры и качество — без длительностей и слайдеров).
-      final cfg = config;
-      final imageCfg = cfg is ImageGenModelConfig
-          ? cfg
-          : const ImageGenModelConfig(
-              availableAspectRatios: <String>['1:1', '16:9', '9:16'],
-            );
-      child = ImageGenInput(
-        key: ValueKey<String>('image_gen_${capabilities.modelId}'),
-        config: imageCfg,
-        capabilities: capabilities,
-        controller: controller,
-        streaming: streaming,
-        onAspectRatioChanged: onAspectRatioChanged,
-        onSend: onSend,
-        onStop: onStop,
-      );
-    } else if (kind == ActiveModelKind.video) {
-      // Генератор видео: ТОЛЬКО VideoGenInput (пропорции, длительности,
-      // разрешения). Рендерится, только если у модели есть видеопараметры:
-      // kind==video присваивается лишь при известных длительностях либо
-      // явном типе 'video'.
-      child = VideoGenInput(
-        key: ValueKey<String>('video_gen_${capabilities.modelId}'),
-        capabilities: capabilities,
-        controller: controller,
-        streaming: streaming,
-        onSend: onSend,
-        onStop: onStop,
-      );
-    } else if (kind == ActiveModelKind.live) {
-      // Голосовой realtime-режим.
-      final cfg = config;
-      final liveCfg =
-          cfg is LiveVoiceModelConfig ? cfg : const LiveVoiceModelConfig();
-      child = LiveVoiceInput(
-        key: const ValueKey<String>('live_voice_input'),
-        config: liveCfg,
-        onStartLive: onStartLive,
-      );
-    } else {
-      // Текстовая либо неизвестная модель: прежняя цепочка выбора
-      // (для обычных моделей даёт TextChatInput, ручной override типа
-      // пользователя сохранён).
-      child = _buildTextLike(reg);
+    if (_isLiveMode) {
+      return LiveVoiceInput(onStartLive: widget.onStartLive);
     }
-
-    return AnimatedSwitcher(
-      duration: const Duration(milliseconds: 220),
-      switchInCurve: Curves.easeOutCubic,
-      switchOutCurve: Curves.easeInCubic,
-      child: child,
+    if (_isVideoMode || _isImageMode) {
+      return _buildMediaComposer(context, isVideo: _isVideoMode);
+    }
+    final textConfig = widget.config is TextModelConfig
+        ? widget.config as TextModelConfig
+        : const TextModelConfig(
+            supportsAttachments: true,
+            supportsWebSearch: true,
+          );
+    return TextChatInput(
+      config: textConfig,
+      capabilities: widget.capabilities,
+      controller: _effectiveController,
+      streaming: widget.streaming,
+      reasoningLevel: widget.reasoningLevel,
+      attachmentsBusy: widget.attachmentsBusy,
+      onCycleReasoning: widget.onCycleReasoning,
+      onToggleSearch: widget.onToggleSearch,
+      onToggleMic: widget.onToggleMic,
+      onAttach: widget.onAttach,
+      onSend: widget.onSend,
+      onStop: widget.onStop,
     );
   }
 
-  /// Панель ввода для text/unknown-моделей: прежнее поведение с выбором
-  /// режима по конфигу и ручному override типа.
-  Widget _buildTextLike(ComposerModeRegistry reg) {
-    final cfg = config;
-    final mode =
-        _resolveMode(cfg, reg, effectiveConfig().model, modelType);
+  /// Композитор медиа-генерации (изображение/видео): чипсы параметров
+  /// из каталога модели, поле промпта, голосовой ввод и кнопка отправки.
+  Widget _buildMediaComposer(BuildContext context, {required bool isVideo}) {
+    return ListenableBuilder(
+      listenable: settings,
+      builder: (context, _) {
+        final p = settings.palette;
+        final ratios = _availableAspectRatios();
+        final durations = isVideo ? _availableDurations() : const <int>[];
+        final resolutions = _availableResolutions();
+        final hasSpec =
+            _override != null || widget.capabilities.params != null;
 
-    if (mode.id == LiveMode.modeId) {
-      final liveCfg = cfg is LiveVoiceModelConfig
-          ? cfg
-          : const LiveVoiceModelConfig();
-      return LiveVoiceInput(
-        key: const ValueKey<String>('live_voice_input'),
-        config: liveCfg,
-        onStartLive: onStartLive,
-      );
-    }
-    if (mode.id == ImageGenMode.modeId) {
-      final imageCfg = cfg is ImageGenModelConfig
-          ? cfg
-          : const ImageGenModelConfig(
-              availableAspectRatios: <String>['1:1', '16:9', '9:16'],
-            );
-      return ImageGenInput(
-        key: ValueKey<String>('image_gen_${capabilities.modelId}'),
-        config: imageCfg,
-        capabilities: capabilities,
-        controller: controller,
-        streaming: streaming,
-        onAspectRatioChanged: onAspectRatioChanged,
-        onSend: onSend,
-        onStop: onStop,
-      );
-    }
-    if (mode.id == VideoGenMode.modeId) {
-      return VideoGenInput(
-        key: ValueKey<String>('video_gen_${capabilities.modelId}'),
-        capabilities: capabilities,
-        controller: controller,
-        streaming: streaming,
-        onSend: onSend,
-        onStop: onStop,
-      );
-    }
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(8, 4, 8, 12),
+          child: AnimatedSize(
+            duration: const Duration(milliseconds: 180),
+            alignment: Alignment.bottomCenter,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              curve: Curves.easeOut,
+              decoration: BoxDecoration(
+                color: p.surface,
+                borderRadius: BorderRadius.circular(24),
+                border: Border.all(
+                  color: _focus.hasFocus
+                      ? p.accent.withValues(alpha: 0.45)
+                      : p.border,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.08),
+                    blurRadius: 15,
+                    spreadRadius: 1,
+                  ),
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.10),
+                    blurRadius: 14,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 5,
+                          ),
+                          decoration: BoxDecoration(
+                            color: p.accent.withValues(alpha: 0.14),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                isVideo
+                                    ? Icons.videocam_rounded
+                                    : Icons.image_rounded,
+                                size: 15,
+                                color: p.accent,
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                isVideo ? 'Видео' : 'Изображение',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: p.accent,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        for (final ratio in ratios) ...[
+                          _paramChip(
+                            p: p,
+                            icon: Icons.crop_rounded,
+                            label: ratio,
+                            selected: _selectedRatio == ratio,
+                            onTap: widget.streaming
+                                ? null
+                                : () {
+                                    HapticFeedback.selectionClick();
+                                    setState(() => _selectedRatio = ratio);
+                                    widget.onAspectRatioChanged
+                                        ?.call(ratio);
+                                  },
+                          ),
+                          const SizedBox(width: 6),
+                        ],
+                        if (isVideo && durations.isNotEmpty) ...[
+                          const SizedBox(width: 4),
+                          for (final sec in durations) ...[
+                            _paramChip(
+                              p: p,
+                              icon: Icons.timer_outlined,
+                              label: '${sec}с',
+                              selected: _selectedDuration == sec,
+                              onTap: widget.streaming
+                                  ? null
+                                  : () {
+                                      HapticFeedback.selectionClick();
+                                      setState(
+                                          () => _selectedDuration = sec);
+                                      widget.onDurationChanged?.call(sec);
+                                    },
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                        ],
+                        if (resolutions.isNotEmpty) ...[
+                          const SizedBox(width: 4),
+                          for (final res in resolutions) ...[
+                            _paramChip(
+                              p: p,
+                              icon: Icons.high_quality_outlined,
+                              label: res,
+                              selected: _selectedResolution == res,
+                              onTap: widget.streaming
+                                  ? null
+                                  : () {
+                                      HapticFeedback.selectionClick();
+                                      setState(
+                                          () => _selectedResolution = res);
+                                    },
+                            ),
+                            const SizedBox(width: 6),
+                          ],
+                        ],
+                        if (!hasSpec)
+                          ActionChip(
+                            visualDensity: VisualDensity.compact,
+                            avatar: Icon(
+                              Icons.tune_rounded,
+                              size: 15,
+                              color: p.accent,
+                            ),
+                            label: Text(
+                              'Указать параметры вручную',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: p.accent,
+                              ),
+                            ),
+                            backgroundColor: p.accent.withValues(alpha: 0.10),
+                            side: BorderSide(
+                              color: p.accent.withValues(alpha: 0.35),
+                            ),
+                            onPressed: _openManualParamsDialog,
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  TextField(
+                    controller: _effectiveController,
+                    focusNode: _focus,
+                    keyboardType: TextInputType.multiline,
+                    textCapitalization: TextCapitalization.sentences,
+                    cursorColor: p.accent,
+                    style: fontStyle(
+                      settings.bodyFont,
+                      size: 16,
+                      color: p.text,
+                    ),
+                    decoration: InputDecoration(
+                      isDense: true,
+                      filled: false,
+                      hintText: isVideo
+                          ? 'Опишите видео для генерации…'
+                          : 'Опишите изображение для генерации…',
+                      hintStyle: const TextStyle(color: Color(0xFFA8A096)),
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding:
+                          const EdgeInsets.fromLTRB(12, 4, 12, 8),
+                    ),
+                    minLines: 1,
+                    maxLines: 5,
+                  ),
+                  Row(
+                    children: [
+                      TextButton.icon(
+                        style: TextButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 10),
+                        ),
+                        onPressed: widget.streaming
+                            ? null
+                            : _openManualParamsDialog,
+                        icon: Icon(
+                          Icons.tune_rounded,
+                          size: 16,
+                          color: p.muted,
+                        ),
+                        label: Text(
+                          'Параметры',
+                          style: TextStyle(fontSize: 12.5, color: p.muted),
+                        ),
+                      ),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: 'Голосовой ввод',
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(
+                          minWidth: 34,
+                          minHeight: 34,
+                        ),
+                        style: IconButton.styleFrom(
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        visualDensity: VisualDensity.compact,
+                        iconSize: 24,
+                        icon: Icon(Icons.mic, size: 24, color: p.muted),
+                        onPressed:
+                            widget.streaming ? null : widget.onToggleMic,
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filled(
+                        tooltip: widget.streaming
+                            ? 'Остановить'
+                            : (isVideo
+                                ? 'Создать видео'
+                                : 'Создать изображение'),
+                        visualDensity: VisualDensity.compact,
+                        constraints: const BoxConstraints(
+                          minWidth: 48,
+                          minHeight: 48,
+                        ),
+                        onPressed: widget.streaming
+                            ? widget.onStop
+                            : (!widget.attachmentsBusy
+                                ? widget.onSend
+                                : null),
+                        style: IconButton.styleFrom(
+                          backgroundColor: p.accent,
+                          foregroundColor: Colors.white,
+                          disabledBackgroundColor:
+                              p.accent.withValues(alpha: 0.35),
+                          shape: const CircleBorder(),
+                        ),
+                        icon: Icon(
+                          widget.streaming
+                              ? Icons.stop_rounded
+                              : Icons.auto_awesome_rounded,
+                          size: 24,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
-    // Текстовый режим (а также генерация изображений: текстовый ввод
-    // без вложений и поиска — прежнее поведение панели).
-    final textCfg = cfg is TextModelConfig
-        ? cfg
-        : const TextModelConfig(
-            supportsAttachments: false,
-            supportsWebSearch: false,
-          );
-    return TextChatInput(
-      key: const ValueKey<String>('text_chat_input'),
-      config: textCfg,
-      capabilities: capabilities,
-      attachmentsBusy: attachmentsBusy,
-      controller: controller,
-      streaming: streaming,
-      reasoningLevel: reasoningLevel,
-      onCycleReasoning: onCycleReasoning,
-      onToggleSearch: onToggleSearch,
-      onToggleMic: onToggleMic,
-      onAttach: onAttach,
-      onSend: onSend,
-      onStop: onStop,
+  Widget _paramChip({
+    required Palette p,
+    required IconData icon,
+    required String label,
+    required bool selected,
+    required VoidCallback? onTap,
+  }) {
+    final bg = selected
+        ? p.accent.withValues(alpha: 0.18)
+        : p.bg.withValues(alpha: 0.55);
+    final fg = selected ? p.accent : p.text;
+    final border = selected ? p.accent : p.border;
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 140),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: border),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: fg),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                color: fg,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
