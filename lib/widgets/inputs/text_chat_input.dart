@@ -112,9 +112,11 @@ class _TextChatInputState extends State<TextChatInput> {
     super.dispose();
   }
 
-  /// Тап по капсуле: циклическая смена уровня размышлений
-  /// (off -> low -> medium -> high -> off). Выбор сохраняется в настройках
-  /// (settings.reasoningLevel) и применяется к следующим запросам.
+  /// Тап по капсуле: циклическая смена уровня размышлений ТОЛЬКО по
+  /// разрешённым модели уровням ([ActiveModelCapabilities.reasoningLevels]).
+  /// Дошли до конца списка — возвращаемся к первому элементу.
+  /// Выбор сохраняется в настройках (settings.reasoningLevel) и применяется
+  /// к следующим запросам.
   void _cycleLevel() {
     final cb = widget.onCycleReasoning;
     if (cb != null) {
@@ -122,9 +124,56 @@ class _TextChatInputState extends State<TextChatInput> {
       return;
     }
     HapticFeedback.lightImpact();
-    settings.setReasoningLevel(
-      ReasoningMapper.fromId(settings.reasoningLevel).next().id,
-    );
+    final allowed = widget.capabilities.reasoningLevels;
+    if (allowed.isEmpty) return;
+    final current = settings.reasoningLevel.trim().toLowerCase();
+    var idx = -1;
+    for (var i = 0; i < allowed.length; i++) {
+      if (allowed[i].trim().toLowerCase() == current) {
+        idx = i;
+        break;
+      }
+    }
+    final nextRaw = allowed[(idx + 1) % allowed.length];
+    // 'none' не является сохраняемым идентификатором настроек: приводим
+    // через ReasoningMapper ('none' -> 'off', xhigh/max остаются как есть).
+    settings.setReasoningLevel(ReasoningMapper.fromId(nextRaw).id);
+  }
+
+  /// Эффективный уровень для показа в капсуле: сохранённый в настройках,
+  /// если он разрешён модели; иначе первый разрешённый. Если модель
+  /// требует размышления (mandatory: true, в списке нет 'none'/'off'),
+  /// 'Off' показан не будет — выключить размышления нельзя.
+  String _effectiveReasoningId(List<String> allowed) {
+    final current = settings.reasoningLevel.trim().toLowerCase();
+    for (final l in allowed) {
+      if (l.trim().toLowerCase() == current) return l;
+    }
+    return allowed.first;
+  }
+
+  /// Форматирование идентификатора уровня для текста капсулы:
+  /// 'off'/'none' -> 'Off', 'xhigh' -> 'X-High', 'max' -> 'Max';
+  /// неизвестные значения — с заглавной первой буквы.
+  static String formatReasoningLabel(String id) {
+    switch (id.trim().toLowerCase()) {
+      case 'off':
+      case 'none':
+        return 'Off';
+      case 'low':
+        return 'Low';
+      case 'medium':
+        return 'Medium';
+      case 'high':
+        return 'High';
+      case 'xhigh':
+        return 'X-High';
+      case 'max':
+        return 'Max';
+    }
+    final t = id.trim();
+    if (t.isEmpty) return 'Off';
+    return '${t[0].toUpperCase()}${t.substring(1)}';
   }
 
   /// Долгое нажатие по капсуле: шторка со слайдером уровней размышлений.
@@ -397,8 +446,13 @@ class _TextChatInputState extends State<TextChatInput> {
   }
 
   Widget _reasoningCapsule() {
-    final level = ReasoningMapper.fromId(settings.reasoningLevel);
-    final label = level.label;
+    // Модель не поддерживает reasoning (список уровней пуст):
+    // капсула «Мышление» полностью скрывается.
+    final allowed = widget.capabilities.reasoningLevels;
+    if (allowed.isEmpty) return const SizedBox.shrink();
+    final effectiveId = _effectiveReasoningId(allowed);
+    final label = formatReasoningLabel(effectiveId);
+    final level = ReasoningMapper.fromId(effectiveId);
     final fill = _reasoningFills[level.index];
     final levelColor = _reasoningLevelColors[level.index];
     final Widget leading = _buildReasoningIcon(level, levelColor);
