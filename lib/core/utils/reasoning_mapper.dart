@@ -19,14 +19,14 @@ enum ReasoningLevel {
   xhigh,
   max;
 
-  /// Следующий уровень по циклу low -> medium -> high -> xhigh -> max
-  /// -> off (от off — на low).
+  /// Следующий базовый уровень по циклу off -> medium -> high -> off.
+  /// Уровни low/xhigh/max возвращаются к ближайшему базовому уровню.
   ReasoningLevel next() => switch (this) {
-        ReasoningLevel.off => ReasoningLevel.low,
+        ReasoningLevel.off => ReasoningLevel.medium,
         ReasoningLevel.low => ReasoningLevel.medium,
         ReasoningLevel.medium => ReasoningLevel.high,
-        ReasoningLevel.high => ReasoningLevel.xhigh,
-        ReasoningLevel.xhigh => ReasoningLevel.max,
+        ReasoningLevel.high => ReasoningLevel.off,
+        ReasoningLevel.xhigh => ReasoningLevel.off,
         ReasoningLevel.max => ReasoningLevel.off,
       };
 }
@@ -115,12 +115,20 @@ abstract final class ReasoningMapper {
     String modelId,
   ) {
     if (level == ReasoningLevel.off) return const <String, dynamic>{};
+    // Провайдеры понимают три базовых усилия: низкий/расширенные уровни
+    // нормализуются к medium/high, чтобы reasoning_effort всегда был валиден.
+    final effort = switch (level) {
+      ReasoningLevel.low => 'medium',
+      ReasoningLevel.xhigh || ReasoningLevel.max => 'high',
+      _ => level.name,
+    };
     final id = modelId.trim().toLowerCase();
     if (id.contains('/')) {
       return <String, dynamic>{
-        'reasoning': <String, dynamic>{'effort': level.name},
+        'reasoning_effort': effort,
+        'reasoning': <String, dynamic>{'effort': effort},
       };
     }
-    return <String, dynamic>{'reasoning_effort': level.name};
+    return <String, dynamic>{'reasoning_effort': effort};
   }
 }

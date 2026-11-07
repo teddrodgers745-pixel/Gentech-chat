@@ -14,6 +14,11 @@ class ModelPreset {
   final List<int> durations;
   final List<String> resolutions;
 
+  /// Доступные уровни размышлений для модели: 3 базовых уровня, если
+  /// модель поддерживает reasoning, иначе только ['off'].
+  List<String> get reasoningLevels =>
+      reasoning ? const <String>['off', 'medium', 'high'] : const <String>['off'];
+
   const ModelPreset({
     required this.id,
     required this.type,
@@ -58,9 +63,16 @@ class ModelPresets {
     });
   }
 
-  /// Ищет пресет; суффикс провайдера (@provider=...) отбрасывается.
-  ModelPreset? forModel(String modelId) =>
-      _byId[modelId.split('@').first.trim()];
+  /// Ищет пресет; суффикс провайдера (@provider=...) и префикс models/
+  /// отбрасываются, регистр не учитывается.
+  ModelPreset? forModel(String modelId) {
+    final clean = modelId
+        .split('@')
+        .first
+        .trim()
+        .replaceFirst(RegExp(r'^models/', caseSensitive: false), '');
+    return _byId[clean] ?? _byId[clean.toLowerCase()];
+  }
 
   Iterable<ModelPreset> get all => _byId.values;
   Iterable<ModelPreset> ofType(String t) => all.where((m) => m.type == t);
