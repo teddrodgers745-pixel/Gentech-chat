@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
+import '../core/providers/heuristic_rules.dart';
 import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
 import '../models/chat_message.dart';
@@ -240,6 +241,13 @@ class ChatService {
   }) async* {
     _wasCancelled = false;
     _searchPending = true;
+    // Принудительное отключение стриминга: флаг пресета
+    // (presets.active.stream) уже учтён вызывающим кодом через
+    // effectiveConfig; здесь дополнительно защищаем модели, которые
+    // по эвристике не поддерживают SSE-стриминг (изображения,
+    // видео-задачи и т.п.) — тело запроса всегда получает stream: false.
+    final effectiveStream = stream &&
+        HeuristicRules.inferRoute(HeuristicRules.normalize(model)).isChat;
     final history = <Map<String, dynamic>>[
       for (final m in messages) Map<String, dynamic>.of(m),
     ];
@@ -247,7 +255,8 @@ class ChatService {
     // и переиспользуется во всех раундах, чтобы [StreamPacer.displayed]
     // содержал полный показанный текст. Для непотокового запроса пейсинг
     // не нужен — ответ приходит одним куском.
-    final StreamPacer? pacer = stream ? (_activePacer = StreamPacer()) : null;
+    final StreamPacer? pacer =
+        effectiveStream ? (_activePacer = StreamPacer()) : null;
 
     for (int iteration = 0; iteration < _maxToolIterations; iteration++) {
       if (_wasCancelled) return;
@@ -258,7 +267,7 @@ class ChatService {
         apiKey: apiKey,
         model: model,
         history: history,
-        stream: stream,
+        stream: effectiveStream,
         temperature: temperature,
         reasoningEffort: reasoningEffort,
         tools: tools,
@@ -270,7 +279,7 @@ class ChatService {
       if (res.toolCalls.isEmpty) {
         // Обычное завершение: без стрима отдаём ответ одним куском
         // (вместе со статистикой токенов, если она пришла).
-        if (!stream) {
+        if (!effectiveStream) {
           yield StreamChunk(
             res.content,
             res.reasoning,
@@ -353,14 +362,14 @@ class ChatService {
       apiKey: apiKey,
       model: model,
       history: history,
-      stream: stream,
+      stream: effectiveStream,
       temperature: temperature,
       reasoningEffort: reasoningEffort,
       tools: const <Tool>[],
       holder: holder,
     );
     final res = holder.result;
-    if (res != null && !stream) {
+    if (res != null && !effectiveStream) {
       yield StreamChunk(
         res.content,
         res.reasoning,

@@ -13,12 +13,17 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+
 import '../app_state.dart';
 import '../core/generation/async_job_executor.dart';
 import '../core/utils/currency_format.dart';
 import '../core/models/gen_error_mapper.dart';
 import '../core/models/message_part.dart';
 import '../features/chat/widgets/error_bubble.dart';
+import '../features/gallery/artifacts_gallery_screen.dart';
 import '../models.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
@@ -611,12 +616,17 @@ class _MarkdownImage extends StatelessWidget {
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(14),
-            child: Container(
-              width: double.infinity,
-              constraints: const BoxConstraints(maxHeight: 420),
-              alignment: Alignment.center,
-              color: p.codeBg,
-              child: image,
+            child: Stack(
+              children: [
+                Container(
+                  width: double.infinity,
+                  constraints: const BoxConstraints(maxHeight: 420),
+                  alignment: Alignment.center,
+                  color: p.codeBg,
+                  child: image,
+                ),
+                _ImageActions(source: uri.toString(), p: p),
+              ],
             ),
           ),
         );
@@ -647,16 +657,22 @@ class _PartImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final src = part.isLocal ? (part.localPath ?? '') : (part.remoteUrl ?? '');
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(14),
-        child: Container(
-          width: double.infinity,
-          constraints: const BoxConstraints(maxHeight: 420),
-          alignment: Alignment.center,
-          color: p.codeBg,
-          child: _image(),
+        child: Stack(
+          children: [
+            Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(maxHeight: 420),
+              alignment: Alignment.center,
+              color: p.codeBg,
+              child: _image(),
+            ),
+            _ImageActions(source: src, p: p),
+          ],
         ),
       ),
     );
@@ -703,6 +719,137 @@ class _PartImage extends StatelessWidget {
           style: TextStyle(color: p.muted, fontSize: 13),
         ),
       );
+}
+
+/// Оверлей-кнопки изображения в чате: «Скачать» (share_plus: системный
+/// диалог позволяет сохранить файл в «Загрузки») и «В галерею».
+class _ImageActions extends StatelessWidget {
+  final String source;
+  final Palette p;
+
+  const _ImageActions({required this.source, required this.p});
+
+  void _openGallery(BuildContext context) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const ArtifactsGalleryScreen(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      top: 6,
+      right: 6,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (source.trim().isNotEmpty)
+            _circleButton(
+              tooltip: 'Скачать',
+              icon: Icons.download,
+              onTap: () => _saveChatImage(context, source),
+            ),
+          const SizedBox(width: 6),
+          _circleButton(
+            tooltip: 'В галерею',
+            icon: Icons.photo_library,
+            onTap: () => _openGallery(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _circleButton({
+    required String tooltip,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.black.withValues(alpha: 0.55),
+      shape: const CircleBorder(
+        side: BorderSide(color: Colors.white24, width: 1),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Tooltip(
+          message: tooltip,
+          child: Padding(
+            padding: const EdgeInsets.all(6),
+            child: Icon(icon, size: 20, color: Colors.white),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Сохраняет изображение из чата: локальный файл, data URL либо сетевая
+/// ссылка. Готовый файл передаётся в системный шеринг; по завершении —
+/// SnackBar «Сохранено», при сбое — понятное сообщение.
+Future<void> _saveChatImage(BuildContext context, String source) async {
+  final messenger = ScaffoldMessenger.maybeOf(context);
+  void snack(String text) {
+    messenger?.hideCurrentSnackBar();
+    messenger?.showSnackBar(
+      SnackBar(content: Text(text), duration: const Duration(seconds: 2)),
+    );
+  }
+
+  try {
+    final s = source.trim();
+    final List<int> bytes;
+    if (s.startsWith('data:')) {
+      final idx = s.indexOf(',');
+      if (idx < 0) throw const FormatException('bad data url');
+      bytes = base64Decode(s.substring(idx + 1));
+    } else if (s.startsWith('http://') || s.startsWith('https://')) {
+      final resp = await http
+          .get(Uri.parse(s))
+          .timeout(const Duration(seconds: 60));
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw Exception('HTTP ${resp.statusCode}');
+      }
+      bytes = resp.bodyBytes;
+    } else {
+      final path = s.replaceFirst(RegExp(r'^file://'), '');
+      bytes = await File(path).readAsBytes();
+    }
+    if (bytes.isEmpty) throw Exception('Пустой файл');
+    final tmp = await getTemporaryDirectory();
+    final dir = Directory('${tmp.path}/GenTech/share');
+    await dir.create(recursive: true);
+    final file = File(
+      '${dir.path}/img_${DateTime.now().millisecondsSinceEpoch}'
+      '${_imageExtFor(s)}',
+    );
+    await file.writeAsBytes(bytes, flush: true);
+    await Share.shareXFiles(<XFile>[XFile(file.path)]);
+    snack('Сохранено');
+  } catch (_) {
+    snack('Не удалось сохранить изображение');
+  }
+}
+
+/// Расширение файла по источнику (data URL, путь либо ссылка).
+String _imageExtFor(String source) {
+  final clean = source.split('?').first.toLowerCase();
+  for (final e in const ['.png', '.jpg', '.jpeg', '.webp', '.gif']) {
+    if (clean.endsWith(e)) return e == '.jpeg' ? '.jpg' : e;
+  }
+  if (source.startsWith('data:image/')) {
+    final mime = source
+        .substring('data:image/'.length)
+        .split(';')
+        .first;
+    if (mime.contains('jpeg')) return '.jpg';
+    if (mime.contains('webp')) return '.webp';
+    if (mime.contains('gif')) return '.gif';
+  }
+  return '.png';
 }
 
 /// Видео из части сообщения: карточка с воспроизведением (video_player).

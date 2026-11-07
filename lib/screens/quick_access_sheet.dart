@@ -149,6 +149,7 @@ class _QuickAccessSheetState extends State<QuickAccessSheet> {
                             onTap: () => _pickModel(m),
                           ),
                       _typeSection(p),
+                      _streamSection(p),
                     ],
                   ),
                 ),
@@ -157,6 +158,43 @@ class _QuickAccessSheetState extends State<QuickAccessSheet> {
           ),
         );
       },
+    );
+  }
+
+  /// Секция «ГЕНЕРАЦИЯ»: тумблер «Поток (Stream)», привязанный к
+  /// presets.active.stream (сохраняется через PresetStore). Если активного
+  /// пресета нет, создаётся системный дефолтный.
+  Widget _streamSection(Palette p) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Divider(height: 1),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text(
+            'ГЕНЕРАЦИЯ',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.6,
+              color: p.accent,
+            ),
+          ),
+        ),
+        SwitchListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          title: const Text('Поток (Stream)'),
+          subtitle: Text(
+            'Ответ приходит по частям по мере генерации. '
+            'Модели без поддержки стриминга получают stream: false '
+            'автоматически.',
+            style: TextStyle(color: p.muted, fontSize: 12, height: 1.35),
+          ),
+          value: presets.active?.stream ?? true,
+          onChanged: (v) => presets.updateActivePresetStream(v),
+        ),
+      ],
     );
   }
 

@@ -91,7 +91,9 @@ EffectiveConfig effectiveConfig() {
     apiKey: key,
     model: (pr?.model ?? settings.model).trim(),
     systemPrompt: settings.systemPrompt,
-    stream: true,
+    // Тумблер «Поток (Stream)» активного (в т.ч. дефолтного) пресета
+    // управляет стримингом; без пресета — прежнее поведение (stream: true).
+    stream: pr?.stream ?? true,
     temperature: null,
   );
 }
@@ -181,6 +183,16 @@ class PresetStore extends ChangeNotifier {
   Future<void> updateActivePresetModel(String newModelId) async {
     final pr = active ?? _ensureDefaultPreset();
     pr.model = newModelId;
+    await _persist();
+    notifyListeners();
+  }
+
+  /// Обновляет тумблер «Поток (Stream)» активного пресета и сохраняет
+  /// его в SharedPreferences. Если активного пресета нет, создаётся
+  /// системный дефолтный — как у updateActivePresetModel.
+  Future<void> updateActivePresetStream(bool value) async {
+    final pr = active ?? _ensureDefaultPreset();
+    pr.stream = value;
     await _persist();
     notifyListeners();
   }
