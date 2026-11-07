@@ -29,6 +29,11 @@ import '../storage.dart';
 abstract final class ReasoningCapabilityResolver {
   static const String _endpoint = 'https://openrouter.ai/api/v1/models';
   static const String _cacheKey = 'reasoning_capabilities_v1';
+
+  /// Метка последней успешной синхронизации (SharedPreferences):
+  /// TTL-кэш 7 дней — повторный запрос не чаще раза в неделю.
+  static const String _lastSyncKey = 'reasoning_caps_last_sync';
+  static const Duration _ttl = Duration(days: 7);
   static const Duration _timeout = Duration(seconds: 20);
 
   /// Fallback для моделей без данных.
@@ -75,6 +80,19 @@ abstract final class ReasoningCapabilityResolver {
   /// кэш (либо fallback) в силе.
   static Future<void> syncCapabilities() async {
     if (_syncing) return;
+    // Проверка TTL: если последняя успешная синхронизация моложе 7 дней —
+    // запрос не выполняется, работаем с сохранённым кэшем.
+    try {
+      final last = await storage.getString(_lastSyncKey);
+      if (last != null && last.isNotEmpty) {
+        final dt = DateTime.tryParse(last);
+        if (dt != null && DateTime.now().difference(dt) < _ttl) {
+          return;
+        }
+      }
+    } catch (_) {
+      // Хранилище недоступно — считаем, что синхронизация нужна.
+    }
     _syncing = true;
     final client = http.Client();
     try {
@@ -90,6 +108,12 @@ abstract final class ReasoningCapabilityResolver {
       if (caps.isEmpty) return;
       _cache = caps;
       await _persist(caps);
+      // Метка TTL обновляется только при успешном получении каталога:
+      // при сбое сети попытка повторится при следующем старте.
+      await storage.setString(
+        _lastSyncKey,
+        DateTime.now().toIso8601String(),
+      );
     } on TimeoutException {
       // Эндпоинт не ответил вовремя: работаем с прежним кэшем/фоллбэком.
     } catch (_) {
