@@ -253,6 +253,11 @@ class PolzaAuthService extends ChangeNotifier {
   Timer? _timeoutTimer;
 
   PolzaAuthStatus get status => _status;
+
+  /// Токен доступа: используется EffectiveConfig и секциями настроек
+  /// как ключ по умолчанию при активной сессии Polza AI.
+  String get accessToken => _accessToken ?? '';
+
   bool get isAuthenticated =>
       _status == PolzaAuthStatus.authenticated &&
       (_accessToken != null && _accessToken!.isNotEmpty);

@@ -10,6 +10,7 @@ import '../models/model_presets.dart';
 import '../models/param_spec.dart';
 import '../providers/heuristic_rules.dart';
 import 'curated_parameter_catalog.dart';
+import 'model_type_override_store.dart';
 import 'user_param_override_store.dart';
 
 /// Реактивный контроллер «что умеет активная модель».
@@ -159,44 +160,56 @@ class ActiveModelController extends ChangeNotifier {
         }
       }
     }
+    String? typeOverride;
+    try {
+      typeOverride =
+          await ModelTypeOverrideStore.instance.loadOverride(modelId);
+    } catch (_) {
+      typeOverride = null;
+    }
     if (token != _resolveToken) return;
-    final kind = _resolveKind(params, reasoning);
+    final kind = _resolveKind(norm, params, typeOverride);
+    final isText = kind == ActiveModelKind.text;
     _current = ActiveModelCapabilities(
       modelId: modelId,
       normalizedId: norm,
       kind: kind,
       params: params,
-      vision: vision,
-      reasoning: reasoning,
-      reasoningLevels: reasoning
-          ? const <String>[
-              'off',
-              'low',
-              'medium',
-              'high',
-              'xhigh',
-              'max',
-            ]
-          : const <String>[],
+      vision: vision || isText,
+      reasoning: reasoning || isText,
+      reasoningLevels: const <String>[
+        'off',
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ],
     );
     notifyListeners();
   }
 
-  /// Вид модели по её параметрам:
-  ///  1. параметров нет — текстовая (если известен reasoning), иначе unknown;
-  ///  2. confidence 'skip' — служебная модель;
-  ///  3. явный тип в параметрах ('image', 'video', 'live', 'text');
-  ///  4. эвристика по наличию медиа-параметров: длительности — видео,
-  ///     иначе пропорции/разрешения — изображение;
-  ///  5. остальное — текстовая модель.
-  ActiveModelKind _resolveKind(ModelParameters? p, bool reasoning) {
-    if (p == null) {
-      return reasoning ? ActiveModelKind.text : ActiveModelKind.unknown;
+  /// Вид модели: override типа пользователя -> явный тип из параметров ->
+  /// медиа-эвристика по параметрам -> эвристика маршрута по идентификатору.
+  /// По умолчанию любая рабочая модель считается текстовой: kind unknown
+  /// для рабочих моделей больше не возвращается, поэтому панель ввода
+  /// никогда не теряет капсулы, скрепку и микрофон.
+  ActiveModelKind _resolveKind(
+    String normalizedId,
+    ModelParameters? p,
+    String? typeOverride,
+  ) {
+    if (p != null && p.confidence == 'skip') return ActiveModelKind.skip;
+    switch (typeOverride) {
+      case 'image':
+        return ActiveModelKind.image;
+      case 'video':
+        return ActiveModelKind.video;
+      case 'text':
+        return ActiveModelKind.text;
     }
-    if (p.confidence == 'skip') return ActiveModelKind.skip;
-    final type = p.type;
-    if (type != null) {
-      switch (type) {
+    if (p != null) {
+      switch (p.type) {
         case 'image':
           return ActiveModelKind.image;
         case 'video':
@@ -206,14 +219,29 @@ class ActiveModelController extends ChangeNotifier {
         case 'text':
           return ActiveModelKind.text;
       }
+      final hasMedia = p.aspectRatios.isNotEmpty ||
+          p.durations != null ||
+          p.resolutions.isNotEmpty;
+      if (hasMedia) {
+        return p.durations != null
+            ? ActiveModelKind.video
+            : ActiveModelKind.image;
+      }
     }
-    final hasMedia = p.aspectRatios.isNotEmpty ||
-        p.durations != null ||
-        p.resolutions.isNotEmpty;
-    if (hasMedia) {
-      return p.durations != null
-          ? ActiveModelKind.video
-          : ActiveModelKind.image;
+    if (normalizedId.isNotEmpty) {
+      final lower = normalizedId.toLowerCase();
+      if (lower.contains('live') || lower.contains('native-audio')) {
+        return ActiveModelKind.live;
+      }
+      final route = HeuristicRules.inferRoute(
+        HeuristicRules.normalize(normalizedId),
+      );
+      if (route == GenerationRoute.asyncJob) {
+        return ActiveModelKind.video;
+      }
+      if (route == GenerationRoute.imageGeneration) {
+        return ActiveModelKind.image;
+      }
     }
     return ActiveModelKind.text;
   }
