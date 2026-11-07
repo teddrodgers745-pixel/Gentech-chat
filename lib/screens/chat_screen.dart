@@ -687,7 +687,6 @@ class _ChatScreenState extends State<ChatScreen> {
       final imgCost = MessageCost(
         promptTokens: tokens,
         completionTokens: 0,
-        totalTokens: tokens,
         cost: costRub,
       );
       reply.parts.add(TextPart('', cost: imgCost));
