@@ -224,12 +224,13 @@ class SecureTokenStore {
 /// -> сохранение в SecureTokenStore и применение к настройкам чата.
 class PolzaAuthService extends ChangeNotifier {
   static const String polzaBaseUrl = 'https://api.polza.ai/api/v1';
-  static const String polzaAuthEndpoint = 'https://polza.ai/auth/oauth';
-  static const String polzaTokenEndpoint =
-      'https://api.polza.ai/api/v1/auth/token';
+  static const String polzaAuthEndpoint = 'https://polza.ai/api/auth/authorize';
+  static const String polzaTokenEndpoint = 'https://polza.ai/api/auth/token';
   static const String polzaBillingUrl = 'https://polza.ai/dashboard/billing';
   static const String defaultModel = 'deepseek/deepseek-chat';
-  static const String clientId = 'gentech_chat';
+
+  /// Имя приложения, которое Polza ожидает в параметре app_name.
+  static const String appName = 'GenTech Chat';
 
   final SecureTokenStore _tokenStore = SecureTokenStore();
   final Dio _dio = Dio(
@@ -324,14 +325,12 @@ class PolzaAuthService extends ChangeNotifier {
 
     final authUri = Uri.parse(polzaAuthEndpoint).replace(
       queryParameters: <String, String>{
-        'client_id': clientId,
+        'app_name': appName,
         'response_type': 'code',
-        'redirect_uri': redirectUri,
         'code_challenge': pkce.codeChallenge,
         'code_challenge_method': 'S256',
         'state': pkce.state,
         'callback_url': redirectUri,
-        'scope': 'models:read chat:write billing:read',
       },
     );
 
@@ -443,10 +442,9 @@ class PolzaAuthService extends ChangeNotifier {
         polzaTokenEndpoint,
         data: <String, dynamic>{
           'grant_type': 'authorization_code',
-          'client_id': clientId,
           'code': code,
           'code_verifier': pkce?.codeVerifier ?? '',
-          'redirect_uri': redirectUri,
+          'callback_url': redirectUri,
         },
         options: Options(
           headers: const <String, String>{
@@ -458,9 +456,9 @@ class PolzaAuthService extends ChangeNotifier {
       );
       final data = response.data;
       if (response.statusCode == 200 && data is Map) {
-        final token = (data['access_token'] ??
+        final token = (data['key'] ??
+                data['access_token'] ??
                 data['api_key'] ??
-                data['key'] ??
                 data['token'] ??
                 '')
             .toString()
