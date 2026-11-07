@@ -10,6 +10,7 @@ import '../models/model_presets.dart';
 import '../models/param_spec.dart';
 import '../providers/heuristic_rules.dart';
 import 'curated_parameter_catalog.dart';
+import 'generation_capability_resolver.dart';
 import 'model_type_override_store.dart';
 import 'reasoning_capability_resolver.dart';
 import 'user_param_override_store.dart';
@@ -288,7 +289,23 @@ class ActiveModelController extends ChangeNotifier {
   }) async {
     final token = ++_resolveToken;
     final norm = ModelIdNormalizer.normalize(modelId);
-    ModelParameters? params = await _lookupCatalogParams(modelId, norm);
+    // Приоритет 1: кэш GenerationCapabilityResolver (каталог OpenRouter:
+    // медиа-параметры видео и изображений). Данные помечаются
+    // confidence='openrouter'; если модели в кэше нет —
+    // приоритет 2: пользовательские override, курированный каталог
+    // и пресеты моделей (_lookupCatalogParams).
+    ModelParameters? params;
+    try {
+      // Догрузка дискового кэша: no-op, если уже загружен в main.dart.
+      await GenerationCapabilityResolver.loadCache();
+    } catch (_) {
+      // Кэш недоступен — продолжаем с каталогом/пресетами.
+    }
+    final genCap = GenerationCapabilityResolver.getCapability(norm);
+    if (genCap != null) {
+      params = _withConfidence(genCap, 'openrouter');
+    }
+    params ??= await _lookupCatalogParams(modelId, norm);
 
     String? typeOverride;
     try {
@@ -371,6 +388,36 @@ class ActiveModelController extends ChangeNotifier {
     return const <String>['off', 'medium', 'high'];
   }
 
+  /// Копия [ModelParameters] с заменённой достоверностью данных.
+  /// Кэш Generation сохраняет записи с confidence='high'; контроллер
+  /// помечает использованные из него данные как 'openrouter'.
+  static ModelParameters _withConfidence(
+    ModelParameters p,
+    String confidence,
+  ) {
+    return ModelParameters(
+      aspectRatios: List<String>.of(p.aspectRatios),
+      durations: p.durations,
+      resolutions: List<String>.of(p.resolutions),
+      sizes: List<String>.of(p.sizes),
+      qualities: List<String>.of(p.qualities),
+      constraints: List<String>.of(p.constraints),
+      type: p.type,
+      confidence: confidence,
+      isUserDefined: p.isUserDefined,
+    );
+  }
+
+  /// Данные кэша Generation для модели; null — записи нет либо резолвер
+  /// недоступен. Ошибки не роняют разрешение модели.
+  static ModelParameters? _genCapabilityQuietly(String normId) {
+    try {
+      return GenerationCapabilityResolver.getCapability(normId);
+    } catch (_) {
+      return null;
+    }
+  }
+
   ActiveModelKind _resolveKind(
     String normalizedId,
     ModelParameters? p,
@@ -384,6 +431,14 @@ class ActiveModelController extends ChangeNotifier {
         return ActiveModelKind.video;
       case 'text':
         return ActiveModelKind.text;
+    }
+    // Кэш Generation (OpenRouter): если для модели известны длительности
+    // видео — это видео-модель. Ручной override типа (выше) всё ещё
+    // имеет приоритет над кэшем.
+    final genCap = _genCapabilityQuietly(normalizedId);
+    if (genCap != null) {
+      final d = genCap.durations;
+      if (d != null && !d.isEmpty) return ActiveModelKind.video;
     }
     if (p != null) {
       switch (p.type) {
