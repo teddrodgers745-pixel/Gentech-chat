@@ -148,11 +148,11 @@ class _ImageGenInputState extends State<ImageGenInput> {
                       size: 16,
                       color: p.text,
                     ),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       isDense: true,
                       filled: false,
                       hintText: 'Опишите изображение...',
-                      hintStyle: TextStyle(color: Color(0xFFA8A096)),
+                      hintStyle: TextStyle(color: p.muted),
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,

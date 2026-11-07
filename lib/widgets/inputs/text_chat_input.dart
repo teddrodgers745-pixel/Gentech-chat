@@ -246,11 +246,11 @@ class _TextChatInputState extends State<TextChatInput> {
                       size: 16,
                       color: p.text,
                     ),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       isDense: true,
                       filled: false,
                       hintText: 'Сообщение',
-                      hintStyle: TextStyle(color: Color(0xFFA8A096)),
+                      hintStyle: TextStyle(color: p.muted),
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,

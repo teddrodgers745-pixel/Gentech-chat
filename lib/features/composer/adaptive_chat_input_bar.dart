@@ -514,7 +514,7 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                       hintText: isVideo
                           ? 'Опишите видео для генерации…'
                           : 'Опишите изображение для генерации…',
-                      hintStyle: const TextStyle(color: Color(0xFFA8A096)),
+                      hintStyle: TextStyle(color: p.muted),
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,
