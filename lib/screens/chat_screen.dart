@@ -18,6 +18,7 @@ import '../models/attachment_draft.dart';
 import '../models/model_config.dart';
 import '../models/tool.dart';
 import '../core/generation/active_model_controller.dart';
+import '../core/generation/search_capability_resolver.dart';
 import '../core/generation/generation_event.dart';
 import '../core/models/gen_error.dart';
 import '../core/models/gen_error_mapper.dart';
@@ -188,6 +189,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _activeModel = ActiveModelController(
       presetController: presets,
       overrides: _overrideStore,
+      supportsNativeSearch: SearchCapabilityResolver.supportsNativeSearch,
     );
     // Смена активной модели (пресет либо общие настройки) -> переопределение
     // эффективного типа модели для панели ввода.

@@ -13,6 +13,7 @@ import 'curated_parameter_catalog.dart';
 import 'generation_capability_resolver.dart';
 import 'model_type_override_store.dart';
 import 'reasoning_capability_resolver.dart';
+import 'search_capability_resolver.dart';
 import 'user_param_override_store.dart';
 
 /// Реактивный контроллер «что умеет активная модель».
@@ -21,11 +22,16 @@ import 'user_param_override_store.dart';
 /// геттер [currentModelId] читает модель активного пресета, запись
 /// ([setModel]) делегирует PresetStore.updateActivePresetModel.
 class ActiveModelController extends ChangeNotifier {
+  /// [SearchCapabilityResolver] пробрасывается снаружи (main.dart /
+  /// место создания контроллера); по умолчанию — статический резолвер.
   ActiveModelController({
     required PresetStore presetController,
     UserParamOverrideStore? overrides,
+    bool Function(String modelId)? supportsNativeSearch,
   })  : _presetController = presetController,
-        _overrides = overrides ?? userParamOverrideStore {
+        _overrides = overrides ?? userParamOverrideStore,
+        _supportsNativeSearch =
+            supportsNativeSearch ?? SearchCapabilityResolver.supportsNativeSearch {
     _presetController.addListener(_onPresetChanged);
   }
 
@@ -50,6 +56,10 @@ class ActiveModelController extends ChangeNotifier {
 
   final PresetStore _presetController;
   final UserParamOverrideStore _overrides;
+
+  /// Проверка поддержки нативного веб-поиска (по умолчанию —
+  /// [SearchCapabilityResolver.supportsNativeSearch]).
+  final bool Function(String modelId) _supportsNativeSearch;
 
   ActiveModelCapabilities _current = ActiveModelCapabilities.empty;
 
@@ -336,6 +346,15 @@ class ActiveModelController extends ChangeNotifier {
       settings.setSearchMode('native');
     }
 
+    // Поддержка нативного веб-поиска: кэш резолвера догружается (no-op,
+    // если уже загружен в main.dart), затем синхронная проверка модели.
+    try {
+      await SearchCapabilityResolver.loadCache();
+    } catch (_) {
+      // Кэш недоступен — проверка работает по fallback-префиксу.
+    }
+    final nativeSearch = _supportsNativeSearch(norm);
+
     final isText = kind == ActiveModelKind.text;
     final supportsReasoning = isText && reasoning;
     final reasoningLevels = supportsReasoning
@@ -351,6 +370,7 @@ class ActiveModelController extends ChangeNotifier {
       vision: vision || isText,
       reasoning: supportsReasoning,
       reasoningLevels: reasoningLevels,
+      supportsNativeSearch: nativeSearch,
     );
     notifyListeners();
   }

@@ -43,6 +43,11 @@ class ActiveModelCapabilities {
   /// пустой список — размышления не поддерживаются.
   final List<String> reasoningLevels;
 
+  /// Умеет ли модель искать в интернете сама (нативный веб-поиск
+  /// провайдера/модели). Определяется [SearchCapabilityResolver]
+  /// по каталогу и fallback-префиксу; false — нативного поиска нет.
+  final bool supportsNativeSearch;
+
   const ActiveModelCapabilities({
     required this.modelId,
     required this.normalizedId,
@@ -51,6 +56,7 @@ class ActiveModelCapabilities {
     this.vision = false,
     this.reasoning = false,
     this.reasoningLevels = const [],
+    this.supportsNativeSearch = false,
   });
 
   /// Пустое состояние: модель ещё не выбрана.
