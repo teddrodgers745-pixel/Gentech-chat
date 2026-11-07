@@ -20,6 +20,7 @@ import 'package:share_plus/share_plus.dart';
 import '../app_state.dart';
 import '../core/generation/async_job_executor.dart';
 import '../core/utils/currency_format.dart';
+import '../core/utils/reasoning_mapper.dart';
 import '../core/models/gen_error_mapper.dart';
 import '../core/models/message_part.dart';
 import '../features/chat/widgets/error_bubble.dart';
@@ -28,6 +29,7 @@ import '../models.dart';
 import '../services/tts_service.dart';
 import '../theme.dart';
 import 'file_card.dart';
+import 'thinking_indicator.dart';
 import 'tool_call_card.dart';
 
 /// Одно сообщение: пользовательское или ответ модели.
@@ -98,8 +100,13 @@ class MessageView extends StatelessWidget {
           );
         }
 
-        final waiting =
-            streaming && message.content.isEmpty && message.reasoning.isEmpty;
+        // Плашка «Думает...»: стриминг идёт, текст ответа ещё пуст, а
+        // уровень размышлений не выключен — reasoning-модели думают
+        // 10-20 секунд до первого токена, показываем счётчик секунд.
+        final thinking = streaming &&
+            message.content.isEmpty &&
+            ReasoningMapper.fromId(settings.reasoningLevel) !=
+                ReasoningLevel.off;
 
         return ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 680),
@@ -119,15 +126,7 @@ class MessageView extends StatelessWidget {
               ..._contentWidgets(message.content),
               ..._costWidgets(p),
               ..._sourcesWidgets(p),
-              if (waiting)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 8),
-                  child: SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
+              if (thinking) ThinkingIndicator(p: p),
               if (!streaming && message.content.isNotEmpty)
                 Row(
                   children: [
