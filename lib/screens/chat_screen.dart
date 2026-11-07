@@ -132,27 +132,36 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Эффективный тип модели: ручной override пользователя, затем вид
-  /// из [ActiveModelController] (каталог параметров), затем авто.
+  /// из [ActiveModelController] (каталог параметров и эвристики), затем авто.
   String get _effectiveModelType {
-    if (_modelType.isNotEmpty && _modelType != ModelTypes.text) {
+    if (_modelType == ModelTypes.video || _modelType == ModelTypes.image) {
       return _modelType;
     }
     switch (_activeModel.current.kind) {
-      case ActiveModelKind.image:
-        return ModelTypes.image;
       case ActiveModelKind.video:
         return ModelTypes.video;
+      case ActiveModelKind.image:
+        return ModelTypes.image;
       default:
-        return _modelType;
+        break;
     }
+    final rawId = effectiveConfig().model.trim();
+    if (ActiveModelController.isHeuristicVideo(rawId)) {
+      return ModelTypes.video;
+    }
+    if (ActiveModelController.isHeuristicImage(rawId)) {
+      return ModelTypes.image;
+    }
+    return _modelType.isNotEmpty ? _modelType : ModelTypes.text;
   }
 
   /// Модель-картинка: маршрут генерации изображений по эвристике
   /// (dall-e, flux, imagen и т.п.). Каталог провайдера имеет приоритет,
   /// но здесь он недоступен — эвристика консервативна и безопасна.
   static bool _isImageModel(String modelId) =>
+      ActiveModelController.isHeuristicImage(modelId) ||
       HeuristicRules.inferRoute(HeuristicRules.normalize(modelId)) ==
-      GenerationRoute.imageGeneration;
+          GenerationRoute.imageGeneration;
 
   /// Эффективный тип активной модели ('text'/'image'/'video') для панели
   /// ввода; '' — ещё не разрешён. Обновляется при смене модели и override.
@@ -190,8 +199,13 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onConfigChanged() {
     final modelId = effectiveConfig().model.trim();
     if (_typeFor != modelId) {
-      _aspectRatio = '1:1';
+      _aspectRatio =
+          ActiveModelController.isHeuristicVideo(modelId) ? '16:9' : '1:1';
       _videoDuration = null;
+    }
+    if (ActiveModelController.isHeuristicSearch(modelId) &&
+        settings.searchMode == 'off') {
+      settings.setSearchMode('native');
     }
     _resolveType(modelId, force: true);
     _syncActiveModel(modelId);
@@ -448,7 +462,11 @@ class _ChatScreenState extends State<ChatScreen> {
       context: context,
       showDragHandle: true,
       builder: (_) => QuickAccessSheet(
-        onTypeChanged: (_) => _resolveType(effectiveConfig().model.trim()),
+        onTypeChanged: (_) {
+          final id = effectiveConfig().model.trim();
+          _resolveType(id, force: true);
+          _syncActiveModel(id);
+        },
       ),
     );
   }
@@ -561,6 +579,11 @@ class _ChatScreenState extends State<ChatScreen> {
       genType = await ModelTypeOverrideStore.instance.effectiveType(modelId);
     } catch (_) {
       genType = ModelTypes.text;
+    }
+    if (genType == ModelTypes.text &&
+        (_effectiveModelType == ModelTypes.video ||
+            _effectiveModelType == ModelTypes.image)) {
+      genType = _effectiveModelType;
     }
     if (genType == ModelTypes.image) {
       // Валидация перед отправкой: без спецификации параметров отправка
@@ -905,13 +928,12 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (_) {
       spec = null;
     }
-    if (spec == null) {
-      await _addGenErrorBubble(
-        'Для этой модели не указаны параметры. '
-        'Нажмите «Указать параметры вручную» в панели ввода.',
-      );
-      return false;
-    }
+    spec ??= _activeModel.current.params;
+    spec ??= ActiveModelController.defaultMediaParams(
+      isVideo ? ActiveModelKind.video : ActiveModelKind.image,
+      HeuristicRules.normalize(modelId),
+      null,
+    );
     try {
       final p = UniversalParams.fromRaw(<String, dynamic>{
         if (aspectRatio != null && aspectRatio.isNotEmpty)

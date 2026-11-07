@@ -92,9 +92,37 @@ class ModelTypeOverrideStore {
   Future<String> effectiveType(String modelId) async {
     final id = modelId.trim();
     if (id.isEmpty) return ModelTypes.text;
-    final ov = await loadOverride(id);
+    final norm = HeuristicRules.normalize(id);
+    final ov = await loadOverride(id) ??
+        (norm.isNotEmpty && norm != id ? await loadOverride(norm) : null);
     if (ov != null) return ov;
-    final route = HeuristicRules.inferRoute(HeuristicRules.normalize(id));
+    final lower = norm.toLowerCase();
+    const videoHints = <String>[
+      'seedance',
+      'kling',
+      'sora',
+      'veo',
+      'runway',
+      'wan',
+      'hailuo',
+    ];
+    const imageHints = <String>[
+      'flux',
+      'dall-e',
+      'dalle',
+      'midjourney',
+      'stable-diffusion',
+      'stablediffusion',
+    ];
+    if (!lower.contains('wanx')) {
+      for (final h in videoHints) {
+        if (lower.contains(h)) return ModelTypes.video;
+      }
+    }
+    for (final h in imageHints) {
+      if (lower.contains(h)) return ModelTypes.image;
+    }
+    final route = HeuristicRules.inferRoute(norm);
     if (route == GenerationRoute.imageGeneration) return ModelTypes.image;
     if (route == GenerationRoute.asyncJob) return ModelTypes.video;
     if (!CuratedParameterCatalog.isLoaded) {
@@ -104,12 +132,18 @@ class ModelTypeOverrideStore {
         // Каталог недоступен — считаем модель текстовой ниже.
       }
     }
-    var spec = CuratedParameterCatalog.byId(id);
-    spec ??= await userParamOverrideStore.load(id);
-    if (spec != null) {
+    var spec = CuratedParameterCatalog.byId(id) ??
+        (norm.isNotEmpty ? CuratedParameterCatalog.byId(norm) : null);
+    spec ??= await userParamOverrideStore.load(id) ??
+        (norm.isNotEmpty ? await userParamOverrideStore.load(norm) : null);
+    if (spec != null && spec.hasAny) {
+      if (spec.type == 'video') return ModelTypes.video;
+      if (spec.type == 'image') return ModelTypes.image;
       final durs = spec.durations;
       if (durs != null && !durs.isEmpty) return ModelTypes.video;
-      return ModelTypes.image;
+      if (spec.aspectRatios.isNotEmpty || spec.resolutions.isNotEmpty) {
+        return ModelTypes.image;
+      }
     }
     return ModelTypes.text;
   }
