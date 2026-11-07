@@ -11,6 +11,7 @@ import '../models/param_spec.dart';
 import '../providers/heuristic_rules.dart';
 import 'curated_parameter_catalog.dart';
 import 'model_type_override_store.dart';
+import 'reasoning_capability_resolver.dart';
 import 'user_param_override_store.dart';
 
 /// Реактивный контроллер «что умеет активная модель».
@@ -320,6 +321,11 @@ class ActiveModelController extends ChangeNotifier {
 
     final isText = kind == ActiveModelKind.text;
     final supportsReasoning = isText && reasoning;
+    final reasoningLevels = supportsReasoning
+        ? await _reasoningLevelsFor(norm)
+        : const <String>['off'];
+    // Защита от гонки: за время await модель могла смениться again.
+    if (token != _resolveToken) return;
     _current = ActiveModelCapabilities(
       modelId: modelId,
       normalizedId: norm,
@@ -327,11 +333,42 @@ class ActiveModelController extends ChangeNotifier {
       params: params,
       vision: vision || isText,
       reasoning: supportsReasoning,
-      reasoningLevels: supportsReasoning
-          ? const <String>['off', 'medium', 'high']
-          : const <String>['off'],
+      reasoningLevels: reasoningLevels,
     );
     notifyListeners();
+  }
+
+  /// Точные уровни размышлений активной модели из
+  /// [ReasoningCapabilityResolver] (кэш каталога OpenRouter) вместо
+  /// прежнего фиксированного списка ['off', 'medium', 'high'].
+  ///
+  /// Правила:
+  ///  - levels берутся из cap.supportedEfforts как есть;
+  ///  - если cap.mandatory == true (размышления обязательны), уровни
+  ///    'none' и 'off' убираются из списка доступных для показа;
+  ///  - cap.defaultEffort сохраняется как рекомендуемый по умолчанию:
+  ///    он остаётся в списке, а если после фильтрации список опустел —
+  ///    возвращается одним уровнем;
+  ///  - для моделей без данных в кэше резолвер отдаёт fallback
+  ///    (['off', 'medium', 'high']) — прежнее поведение сохранено;
+  ///  - любая ошибка резолвера не роняет разрешение модели.
+  Future<List<String>> _reasoningLevelsFor(String normId) async {
+    try {
+      // Догрузка дискового кэша: no-op, если уже загружен. Гарантирует,
+      // что getCapability увидит данные даже до фоновой синхронизации.
+      await ReasoningCapabilityResolver.loadCache();
+      final cap = ReasoningCapabilityResolver.getCapability(normId);
+      final levels = <String>[...cap.supportedEfforts];
+      if (cap.mandatory) {
+        levels.removeWhere((l) => l == 'none' || l == 'off');
+      }
+      if (levels.isNotEmpty) return levels;
+      final def = cap.defaultEffort.trim();
+      if (def.isNotEmpty) return <String>[def];
+    } catch (_) {
+      // Резолвер недоступен — используем базовый список уровней ниже.
+    }
+    return const <String>['off', 'medium', 'high'];
   }
 
   ActiveModelKind _resolveKind(
