@@ -117,6 +117,9 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
     if (cfg is ImageGenModelConfig && cfg.availableAspectRatios.isNotEmpty) {
       return cfg.availableAspectRatios;
     }
+    if (_isVideoMode) {
+      return const <String>['16:9', '9:16', '1:1'];
+    }
     return <String>[for (final r in ImageGenMode.aspectRatios) r.id];
   }
 
@@ -124,8 +127,9 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
     final ov = _override?.durations;
     if (ov != null && !ov.isEmpty) return _durationList(ov);
     final d = widget.capabilities.params?.durations;
-    if (d == null || d.isEmpty) return const <int>[];
-    return _durationList(d);
+    if (d != null && !d.isEmpty) return _durationList(d);
+    if (_isVideoMode) return const <int>[5, 10];
+    return const <int>[];
   }
 
   /// Длительности из диапазона/списка: дискретный список либо шаг 5 с
@@ -379,122 +383,108 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 5,
-                          ),
-                          decoration: BoxDecoration(
-                            color: p.accent.withValues(alpha: 0.14),
-                            borderRadius: BorderRadius.circular(14),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(
-                                isVideo
-                                    ? Icons.videocam_rounded
-                                    : Icons.image_rounded,
-                                size: 15,
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 5,
+                        ),
+                        decoration: BoxDecoration(
+                          color: p.accent.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              isVideo
+                                  ? Icons.videocam_rounded
+                                  : Icons.image_rounded,
+                              size: 15,
+                              color: p.accent,
+                            ),
+                            const SizedBox(width: 5),
+                            Text(
+                              isVideo ? 'Видео' : 'Изображение',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
                                 color: p.accent,
                               ),
-                              const SizedBox(width: 5),
-                              Text(
-                                isVideo ? 'Видео' : 'Изображение',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: p.accent,
-                                ),
-                              ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: 8),
-                        for (final ratio in ratios) ...[
+                      ),
+                      for (final ratio in ratios)
+                        _paramChip(
+                          p: p,
+                          icon: Icons.crop_rounded,
+                          label: ratio,
+                          selected: _selectedRatio == ratio,
+                          onTap: widget.streaming
+                              ? null
+                              : () {
+                                  HapticFeedback.selectionClick();
+                                  setState(() => _selectedRatio = ratio);
+                                  widget.onAspectRatioChanged?.call(ratio);
+                                },
+                        ),
+                      if (isVideo && durations.isNotEmpty)
+                        for (final sec in durations)
                           _paramChip(
                             p: p,
-                            icon: Icons.crop_rounded,
-                            label: ratio,
-                            selected: _selectedRatio == ratio,
+                            icon: Icons.timer_outlined,
+                            label: '${sec}с',
+                            selected: _selectedDuration == sec,
                             onTap: widget.streaming
                                 ? null
                                 : () {
                                     HapticFeedback.selectionClick();
-                                    setState(() => _selectedRatio = ratio);
-                                    widget.onAspectRatioChanged
-                                        ?.call(ratio);
+                                    setState(() => _selectedDuration = sec);
+                                    widget.onDurationChanged?.call(sec);
                                   },
                           ),
-                          const SizedBox(width: 6),
-                        ],
-                        if (isVideo && durations.isNotEmpty) ...[
-                          const SizedBox(width: 4),
-                          for (final sec in durations) ...[
-                            _paramChip(
-                              p: p,
-                              icon: Icons.timer_outlined,
-                              label: '${sec}с',
-                              selected: _selectedDuration == sec,
-                              onTap: widget.streaming
-                                  ? null
-                                  : () {
-                                      HapticFeedback.selectionClick();
-                                      setState(
-                                          () => _selectedDuration = sec);
-                                      widget.onDurationChanged?.call(sec);
-                                    },
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-                        ],
-                        if (resolutions.isNotEmpty) ...[
-                          const SizedBox(width: 4),
-                          for (final res in resolutions) ...[
-                            _paramChip(
-                              p: p,
-                              icon: Icons.high_quality_outlined,
-                              label: res,
-                              selected: _selectedResolution == res,
-                              onTap: widget.streaming
-                                  ? null
-                                  : () {
-                                      HapticFeedback.selectionClick();
-                                      setState(
-                                          () => _selectedResolution = res);
-                                    },
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-                        ],
-                        if (!hasSpec)
-                          ActionChip(
-                            visualDensity: VisualDensity.compact,
-                            avatar: Icon(
-                              Icons.tune_rounded,
-                              size: 15,
+                      if (resolutions.isNotEmpty)
+                        for (final res in resolutions)
+                          _paramChip(
+                            p: p,
+                            icon: Icons.high_quality_outlined,
+                            label: res,
+                            selected: _selectedResolution == res,
+                            onTap: widget.streaming
+                                ? null
+                                : () {
+                                    HapticFeedback.selectionClick();
+                                    setState(() => _selectedResolution = res);
+                                  },
+                          ),
+                      if (!hasSpec)
+                        ActionChip(
+                          visualDensity: VisualDensity.compact,
+                          avatar: Icon(
+                            Icons.tune_rounded,
+                            size: 15,
+                            color: p.accent,
+                          ),
+                          label: Text(
+                            'Указать параметры вручную',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
                               color: p.accent,
                             ),
-                            label: Text(
-                              'Указать параметры вручную',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: p.accent,
-                              ),
-                            ),
-                            backgroundColor: p.accent.withValues(alpha: 0.10),
-                            side: BorderSide(
-                              color: p.accent.withValues(alpha: 0.35),
-                            ),
-                            onPressed: _openManualParamsDialog,
                           ),
-                      ],
-                    ),
+                          backgroundColor: p.accent.withValues(alpha: 0.10),
+                          side: BorderSide(
+                            color: p.accent.withValues(alpha: 0.35),
+                          ),
+                          onPressed: _openManualParamsDialog,
+                        ),
+                    ],
                   ),
                   const SizedBox(height: 6),
                   TextField(

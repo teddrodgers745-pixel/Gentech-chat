@@ -18,17 +18,6 @@ import 'user_param_override_store.dart';
 /// Модель принадлежит [PresetStore] — единственному источнику истины:
 /// геттер [currentModelId] читает модель активного пресета, запись
 /// ([setModel]) делегирует PresetStore.updateActivePresetModel.
-///
-/// Два способа обновления:
-///  - [setModel] — пользовательская смена модели (пишет в PresetStore
-///    и разрешает возможности);
-///  - [syncModel] — реактивная синхронизация с эффективной моделью
-///    (выбор пресета в настройках, режим «Без пресета»): НЕ мутирует
-///    PresetStore, а сразу запрашивает параметры новой модели из
-///    override / курированного каталога.
-///
-/// Слушатель пресетов тоже вызывает полное разрешение возможностей,
-/// поэтому чипсы панели ввода всегда соответствуют активной модели.
 class ActiveModelController extends ChangeNotifier {
   ActiveModelController({
     required PresetStore presetController,
@@ -38,27 +27,37 @@ class ActiveModelController extends ChangeNotifier {
     _presetController.addListener(_onPresetChanged);
   }
 
+  static const List<String> _videoNameHints = <String>[
+    'seedance',
+    'kling',
+    'sora',
+    'veo',
+    'runway',
+    'wan',
+    'hailuo',
+  ];
+
+  static const List<String> _imageNameHints = <String>[
+    'flux',
+    'dall-e',
+    'dalle',
+    'midjourney',
+    'stable-diffusion',
+    'stablediffusion',
+  ];
+
   final PresetStore _presetController;
   final UserParamOverrideStore _overrides;
 
   ActiveModelCapabilities _current = ActiveModelCapabilities.empty;
 
-  /// true, пока выполняется setModel: слушатель пресетов в это время
-  /// не запускает собственное разрешение (защита от рекурсии).
   bool _resolving = false;
-
-  /// Счётчик запросов разрешения для защиты от гонки асинхронных вызовов.
   int _resolveToken = 0;
 
-  /// Текущие возможности активной модели (никогда не null).
   ActiveModelCapabilities get current => _current;
 
-  /// Активная модель. Читается напрямую из активного пресета.
-  /// Пустая строка — активного пресета нет (режим «Без пресета»).
   String get currentModelId => _presetController.activePreset?.model ?? '';
 
-  /// Смена активной модели пользователем: делегирует запись владельцу —
-  /// [PresetStore.updateActivePresetModel] — и разрешает возможности.
   Future<void> setModel(
     String modelId, {
     bool vision = false,
@@ -79,10 +78,6 @@ class ActiveModelController extends ChangeNotifier {
     }
   }
 
-  /// Реактивная синхронизация с эффективной моделью (при выборе пресета
-  /// в настройках либо переключении на «Без пресета»). Не мутирует
-  /// [PresetStore], а запрашивает параметры модели из override /
-  /// каталога и уведомляет слушателей.
   Future<void> syncModel(
     String modelId, {
     bool? vision,
@@ -98,9 +93,6 @@ class ActiveModelController extends ChangeNotifier {
     );
   }
 
-  /// Слушатель [PresetStore]: смена активного пресета либо модели внутри
-  /// пресета мгновенно запрашивает параметры новой модели из каталога
-  /// и перестраивает подписанные виджеты (включая панель ввода в чате).
   Future<void> _onPresetChanged() async {
     if (_resolving) return;
     final presetModel = _presetController.active?.model.trim() ?? '';
@@ -129,12 +121,165 @@ class ActiveModelController extends ChangeNotifier {
     return reasoning;
   }
 
-  /// Разрешает возможности модели [modelId].
-  ///
-  /// Параметры: override пользователя, иначе курированный каталог
-  /// (при необходимости каталог догружается лениво). Любая ошибка
-  /// хранилища/ассетов не роняет вызов: модель останется с пустыми
-  /// параметрами и видом по эвристике.
+  static bool isHeuristicVideo(String rawId) {
+    final lower = HeuristicRules.normalize(rawId).toLowerCase();
+    if (lower.isEmpty) return false;
+    if (lower.contains('wanx')) return false;
+    for (final h in _videoNameHints) {
+      if (lower.contains(h)) return true;
+    }
+    return HeuristicRules.inferRoute(lower) == GenerationRoute.asyncJob;
+  }
+
+  static bool isHeuristicImage(String rawId) {
+    final lower = HeuristicRules.normalize(rawId).toLowerCase();
+    if (lower.isEmpty) return false;
+    if (isHeuristicVideo(lower) && !lower.contains('wanx')) return false;
+    for (final h in _imageNameHints) {
+      if (lower.contains(h)) return true;
+    }
+    return HeuristicRules.inferRoute(lower) == GenerationRoute.imageGeneration;
+  }
+
+  static bool isHeuristicSearch(String rawId) {
+    final lower = HeuristicRules.normalize(rawId).toLowerCase();
+    return lower.contains('sonar');
+  }
+
+  /// Принудительный поиск параметров модели в пользовательских override,
+  /// курированном каталоге и ModelPresets (включая поиск без префикса
+  /// провайдера и по совпадению семейства).
+  Future<ModelParameters?> _lookupCatalogParams(
+    String rawModelId,
+    String norm,
+  ) async {
+    if (norm.isEmpty && rawModelId.trim().isEmpty) return null;
+    final trimmed = rawModelId.trim();
+    final shortId = ModelIdNormalizer.withoutProviderPrefix(
+      norm.isNotEmpty ? norm : trimmed,
+    );
+    final candidates = <String>{
+      if (norm.isNotEmpty) norm,
+      if (trimmed.isNotEmpty) trimmed,
+      if (shortId.isNotEmpty) shortId,
+    };
+
+    for (final c in candidates) {
+      try {
+        final ov = await _overrides.load(c);
+        if (ov != null && ov.hasAny) return ov;
+      } catch (_) {}
+    }
+
+    try {
+      if (!CuratedParameterCatalog.isLoaded) {
+        await CuratedParameterCatalog.load();
+      }
+      for (final c in candidates) {
+        final found = CuratedParameterCatalog.byId(c);
+        if (found != null && (found.hasAny || found.confidence == 'skip')) {
+          return found;
+        }
+      }
+    } catch (_) {}
+
+    try {
+      final ps = await ModelPresets.load();
+      ModelPreset? preset;
+      for (final c in candidates) {
+        preset = ps.forModel(c);
+        if (preset != null) break;
+      }
+      if (preset == null && shortId.isNotEmpty) {
+        for (final item in ps.all) {
+          final itemShort = ModelIdNormalizer.withoutProviderPrefix(item.id);
+          if (itemShort == shortId ||
+              shortId.contains(itemShort) ||
+              itemShort.contains(shortId)) {
+            if (item.isMedia) {
+              preset = item;
+              break;
+            }
+          }
+        }
+      }
+      if (preset != null && preset.isMedia) {
+        return ModelParameters(
+          type: preset.type,
+          aspectRatios: List<String>.of(preset.aspectRatios),
+          durations: preset.durations.isEmpty
+              ? null
+              : DurationRange(discrete: List<int>.of(preset.durations)),
+          resolutions: List<String>.of(preset.resolutions),
+          confidence: 'auto',
+          isUserDefined: false,
+        );
+      }
+    } catch (_) {}
+
+    return null;
+  }
+
+  /// Гарантирует дефолтные параметры для медиа-моделей (видео/картинки),
+  /// если в каталоге точной записи не нашлось или в ней нет пропорций/длительностей.
+  static ModelParameters defaultMediaParams(
+    ActiveModelKind kind,
+    String normalizedId,
+    ModelParameters? existing,
+  ) {
+    final lower = normalizedId.toLowerCase();
+    if (kind == ActiveModelKind.video) {
+      final ratios = (existing != null && existing.aspectRatios.isNotEmpty)
+          ? existing.aspectRatios
+          : (lower.contains('veo') || lower.contains('sora')
+              ? const <String>['16:9', '9:16']
+              : const <String>['16:9', '9:16', '1:1']);
+      final durations = (existing?.durations != null &&
+              !existing!.durations!.isEmpty)
+          ? existing.durations
+          : DurationRange(
+              discrete: lower.contains('sora')
+                  ? const <int>[4, 8, 12]
+                  : lower.contains('veo') || lower.contains('seedance')
+                      ? const <int>[5, 8]
+                      : const <int>[5, 10],
+            );
+      final resolutions = (existing != null && existing.resolutions.isNotEmpty)
+          ? existing.resolutions
+          : const <String>['720p', '1080p'];
+      return ModelParameters(
+        type: 'video',
+        aspectRatios: List<String>.of(ratios),
+        durations: durations,
+        resolutions: List<String>.of(resolutions),
+        sizes: existing?.sizes ?? const <String>[],
+        qualities: existing?.qualities ?? const <String>[],
+        constraints: existing?.constraints ?? const <String>[],
+        confidence: existing?.confidence ?? 'auto',
+        isUserDefined: existing?.isUserDefined ?? false,
+      );
+    }
+    if (kind == ActiveModelKind.image) {
+      final ratios = (existing != null && existing.aspectRatios.isNotEmpty)
+          ? existing.aspectRatios
+          : (lower.contains('flux')
+              ? const <String>['1:1', '16:9', '9:16', '4:3', '3:4']
+              : const <String>['1:1', '16:9', '9:16']);
+      return ModelParameters(
+        type: 'image',
+        aspectRatios: List<String>.of(ratios),
+        durations: null,
+        resolutions: existing?.resolutions ?? const <String>[],
+        sizes: existing?.sizes ?? const <String>[],
+        qualities: existing?.qualities ?? const <String>[],
+        constraints: existing?.constraints ?? const <String>[],
+        confidence: existing?.confidence ?? 'auto',
+        isUserDefined: existing?.isUserDefined ?? false,
+      );
+    }
+    return existing ?? ModelParameters.unknown();
+  }
+
   Future<void> _resolve(
     String modelId, {
     bool vision = false,
@@ -142,33 +287,37 @@ class ActiveModelController extends ChangeNotifier {
   }) async {
     final token = ++_resolveToken;
     final norm = ModelIdNormalizer.normalize(modelId);
-    ModelParameters? params;
-    if (norm.isNotEmpty) {
-      try {
-        params = await _overrides.load(norm);
-      } catch (_) {
-        params = null;
-      }
-      if (params == null) {
-        try {
-          if (!CuratedParameterCatalog.isLoaded) {
-            await CuratedParameterCatalog.load();
-          }
-          params = CuratedParameterCatalog.byId(norm);
-        } catch (_) {
-          params = null;
-        }
-      }
-    }
+    ModelParameters? params = await _lookupCatalogParams(modelId, norm);
+
     String? typeOverride;
     try {
       typeOverride =
           await ModelTypeOverrideStore.instance.loadOverride(modelId);
+      if (typeOverride == null && norm.isNotEmpty && norm != modelId.trim()) {
+        typeOverride =
+            await ModelTypeOverrideStore.instance.loadOverride(norm);
+      }
     } catch (_) {
       typeOverride = null;
     }
     if (token != _resolveToken) return;
+
     final kind = _resolveKind(norm, params, typeOverride);
+
+    if (kind == ActiveModelKind.video || kind == ActiveModelKind.image) {
+      params ??= await _lookupCatalogParams(modelId, norm);
+      if (params == null ||
+          !params.hasAny ||
+          (kind == ActiveModelKind.video &&
+              (params.durations == null || params.durations!.isEmpty))) {
+        params = defaultMediaParams(kind, norm, params);
+      }
+    }
+
+    if (isHeuristicSearch(norm) && settings.searchMode == 'off') {
+      settings.setSearchMode('native');
+    }
+
     final isText = kind == ActiveModelKind.text;
     final supportsReasoning = isText && reasoning;
     _current = ActiveModelCapabilities(
@@ -185,11 +334,6 @@ class ActiveModelController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Вид модели: override типа пользователя -> явный тип из параметров ->
-  /// медиа-эвристика по параметрам -> эвристика маршрута по идентификатору.
-  /// По умолчанию любая рабочая модель считается текстовой: kind unknown
-  /// для рабочих моделей больше не возвращается, поэтому панель ввода
-  /// никогда не теряет капсулы, скрепку и микрофон.
   ActiveModelKind _resolveKind(
     String normalizedId,
     ModelParameters? p,
@@ -213,13 +357,17 @@ class ActiveModelController extends ChangeNotifier {
         case 'live':
           return ActiveModelKind.live;
         case 'text':
-          return ActiveModelKind.text;
+          if (!isHeuristicVideo(normalizedId) &&
+              !isHeuristicImage(normalizedId)) {
+            return ActiveModelKind.text;
+          }
       }
       final hasMedia = p.aspectRatios.isNotEmpty ||
           p.durations != null ||
           p.resolutions.isNotEmpty;
       if (hasMedia) {
-        return p.durations != null
+        return (p.durations != null && !p.durations!.isEmpty) ||
+                isHeuristicVideo(normalizedId)
             ? ActiveModelKind.video
             : ActiveModelKind.image;
       }
@@ -228,6 +376,12 @@ class ActiveModelController extends ChangeNotifier {
       final lower = normalizedId.toLowerCase();
       if (lower.contains('live') || lower.contains('native-audio')) {
         return ActiveModelKind.live;
+      }
+      if (isHeuristicVideo(lower)) {
+        return ActiveModelKind.video;
+      }
+      if (isHeuristicImage(lower)) {
+        return ActiveModelKind.image;
       }
       final route = HeuristicRules.inferRoute(
         HeuristicRules.normalize(normalizedId),
