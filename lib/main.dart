@@ -8,6 +8,7 @@ import 'app_state.dart';
 import 'core/auth/polza_auth_service.dart';
 import 'core/generation/generation_capability_resolver.dart';
 import 'core/generation/reasoning_capability_resolver.dart';
+import 'core/generation/search_capability_resolver.dart';
 import 'core/storage.dart';
 import 'models/tool.dart';
 import 'screens/chat_screen.dart';
@@ -29,6 +30,21 @@ Future<void> main() async {
   // Фоновая синхронизация медиа-параметров (видео/картинки) с OpenRouter:
   // TTL кэша 7 дней, сбой сети не влияет на запуск приложения.
   unawaited(_syncMediaCapabilities());
+  // Фоновая синхронизация данных о нативном веб-поиске с OpenRouter:
+  // TTL кэша 7 дней, сбой сети не влияет на запуск приложения.
+  unawaited(_syncSearchCapabilities());
+}
+
+/// Загружает сохранённый кэш данных о нативном поиске и обновляет его
+/// по публичному эндпоинту OpenRouter /models. Любая ошибка игнорируется:
+/// supportsNativeSearch в этом случае работает по fallback-префиксу.
+Future<void> _syncSearchCapabilities() async {
+  try {
+    await SearchCapabilityResolver.loadCache();
+    await SearchCapabilityResolver.syncCapabilities();
+  } catch (_) {
+    // Не критично: определение поиска продолжает работать по fallback.
+  }
 }
 
 /// Загружает сохранённый кэш медиа-параметров и обновляет его по
