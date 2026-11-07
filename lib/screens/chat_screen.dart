@@ -5,6 +5,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -77,6 +78,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Пользователь у нижнего края списка: автоскролл при стриминге
   /// разрешён, кнопка «Вниз» скрыта.
   bool _atBottom = true;
+
+  /// Пользователь листал вверх: автоскролл стриминга заблокирован,
+  /// показывается кнопка «Вниз». Сбрасывается при отправке сообщения,
+  /// тапе по «Вниз» либо когда пользователь сам долистал до низа.
+  bool _userScrolledUp = false;
   Timer? _uiTimer;
 
   /// Выбранная пропорция изображения/видео.
@@ -363,6 +369,29 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// Слушатель пользовательской прокрутки (UserScrollNotification):
+  /// листание вперёд (палец тянется вниз по экрану — список уходит вверх)
+  /// блокирует автоскролл; долистывание назад до низа (в пределах
+  /// 20 пикселей от maxScrollExtent) снова включает автоскролл.
+  bool _onUserScroll(UserScrollNotification notification) {
+    switch (notification.direction) {
+      case ScrollDirection.forward:
+        if (!_userScrolledUp) {
+          setState(() => _userScrolledUp = true);
+        }
+      case ScrollDirection.reverse:
+        if (_userScrolledUp &&
+            _scroll.hasClients &&
+            _scroll.position.pixels >=
+                _scroll.position.maxScrollExtent - 20) {
+          setState(() => _userScrolledUp = false);
+        }
+      case ScrollDirection.idle:
+        break;
+    }
+    return false;
+  }
+
   void _toEnd() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) {
@@ -373,6 +402,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _opened() {
     _atBottom = true;
+    _userScrolledUp = false;
     _toEnd();
   }
 
@@ -384,7 +414,10 @@ class _ChatScreenState extends State<ChatScreen> {
       setState(() {});
       // Приход новых токенов: если пользователь у дна — держим список
       // прижатым к нижнему краю (после того, как кадр перестроится).
+      // Если пользователь листал вверх (_userScrolledUp), автоскролл
+      // не выполняется — экран не уносится вниз.
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_userScrolledUp) return;
         if (_atBottom && _scroll.hasClients) {
           _scroll.jumpTo(_scroll.position.maxScrollExtent);
         }
@@ -568,6 +601,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _input.clear();
     setState(() => _attachments.clear());
     _atBottom = true;
+    _userScrolledUp = false;
     await _runCompletion(chat, userApiContent: apiContent);
   }
 
@@ -882,6 +916,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (chat.messages.last.role == 'assistant') chat.messages.removeLast();
     if (chat.messages.isEmpty) return;
     _atBottom = true;
+    _userScrolledUp = false;
     await _runCompletion(chat);
   }
 
@@ -1212,7 +1247,9 @@ class _ChatScreenState extends State<ChatScreen> {
             onPointerUp: _up,
             onPointerCancel: _up,
             child: SelectionArea(
-          child: ListView.builder(
+          child: NotificationListener<UserScrollNotification>(
+            onNotification: _onUserScroll,
+            child: ListView.builder(
             controller: _scroll,
             physics: _pinching
                 ? const NeverScrollableScrollPhysics()
@@ -1249,10 +1286,11 @@ class _ChatScreenState extends State<ChatScreen> {
               return view;
             },
           ),
+            ),
         ),
         ),
         ),
-        if (!_atBottom)
+        if (_userScrolledUp)
           Positioned(
             right: 16,
             bottom: 16,
@@ -1271,7 +1309,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// включает автоскролл.
   void _scrollToBottom() {
     if (!_scroll.hasClients) return;
-    setState(() => _atBottom = true);
+    setState(() {
+      _atBottom = true;
+      _userScrolledUp = false;
+    });
     _scroll.animateTo(
       _scroll.position.maxScrollExtent,
       duration: const Duration(milliseconds: 300),
