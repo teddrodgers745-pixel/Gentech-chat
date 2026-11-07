@@ -1255,16 +1255,14 @@ class _ChatScreenState extends State<ChatScreen> {
                   builder: (ctx, _) {
                     final caps = _activeModel.current;
                     final effType = _effectiveModelType;
-                    final presetId = presets.active?.id ?? 'default';
                     final effectiveLevel = caps.reasoning
                         ? ReasoningMapper.fromId(settings.reasoningLevel)
                         : ReasoningLevel.off;
-                    // ValueKey пересоздаёт панель при смене модели/пресета:
-                    // внутреннее состояние режима композера не «залипает».
+                    // ValueKey из normalizedId модели и эффективного типа:
+                    // панель пересоздаётся при смене модели, состояние
+                    // композера синхронизировано с capabilities.
                     return AdaptiveChatInputBar(
-                      key: ValueKey(
-                        'composer_${presetId}_${activeModel}_${effType}_${caps.kind.name}',
-                      ),
+                      key: ValueKey(caps.normalizedId + effType),
                       config: _currentConfig,
                       capabilities: caps,
                       controller: _input,
