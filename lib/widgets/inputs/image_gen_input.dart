@@ -156,7 +156,7 @@ class _ImageGenInputState extends State<ImageGenInput> {
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,
-                      contentPadding: EdgeInsets.fromLTRB(16, 2, 16, 11.6),
+                      contentPadding: const EdgeInsets.fromLTRB(16, 2, 16, 11.6),
                     ),
                     minLines: 1,
                     maxLines: 6,
