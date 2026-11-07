@@ -170,21 +170,17 @@ class ActiveModelController extends ChangeNotifier {
     if (token != _resolveToken) return;
     final kind = _resolveKind(norm, params, typeOverride);
     final isText = kind == ActiveModelKind.text;
+    final supportsReasoning = isText && reasoning;
     _current = ActiveModelCapabilities(
       modelId: modelId,
       normalizedId: norm,
       kind: kind,
       params: params,
       vision: vision || isText,
-      reasoning: reasoning || isText,
-      reasoningLevels: const <String>[
-        'off',
-        'low',
-        'medium',
-        'high',
-        'xhigh',
-        'max',
-      ],
+      reasoning: supportsReasoning,
+      reasoningLevels: supportsReasoning
+          ? const <String>['off', 'medium', 'high']
+          : const <String>['off'],
     );
     notifyListeners();
   }

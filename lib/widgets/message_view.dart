@@ -13,9 +13,11 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
+import 'dart:typed_data';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 
 import '../app_state.dart';
 import '../core/generation/async_job_executor.dart';
@@ -601,30 +603,35 @@ class _MarkdownImage extends StatelessWidget {
         if (uri.scheme == 'file') {
           image = Image.file(
             File(uri.toFilePath()),
-            fit: BoxFit.contain,
+            width: double.infinity,
+            fit: BoxFit.cover,
             errorBuilder: (_, __, ___) => _placeholder(p),
           );
         } else {
           image = Image.network(
             uri.toString(),
-            fit: BoxFit.contain,
+            width: double.infinity,
+            fit: BoxFit.cover,
             errorBuilder: (_, __, ___) => _placeholder(p),
           );
         }
+        final src = uri.toString();
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 8),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(14),
             child: Stack(
               children: [
-                Container(
-                  width: double.infinity,
-                  constraints: const BoxConstraints(maxHeight: 420),
-                  alignment: Alignment.center,
-                  color: p.codeBg,
-                  child: image,
+                GestureDetector(
+                  onTap: () => _openFullscreenImage(context, src),
+                  child: Container(
+                    width: double.infinity,
+                    constraints: const BoxConstraints(maxHeight: 420),
+                    color: p.codeBg,
+                    child: image,
+                  ),
                 ),
-                _ImageActions(source: uri.toString(), p: p),
+                _ImageActions(source: src, p: p),
               ],
             ),
           ),
@@ -663,12 +670,14 @@ class _PartImage extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         child: Stack(
           children: [
-            Container(
-              width: double.infinity,
-              constraints: const BoxConstraints(maxHeight: 420),
-              alignment: Alignment.center,
-              color: p.codeBg,
-              child: _image(),
+            GestureDetector(
+              onTap: () => _openFullscreenImage(context, src),
+              child: Container(
+                width: double.infinity,
+                constraints: const BoxConstraints(maxHeight: 420),
+                color: p.codeBg,
+                child: _image(),
+              ),
             ),
             _ImageActions(source: src, p: p),
           ],
@@ -681,7 +690,8 @@ class _PartImage extends StatelessWidget {
     if (part.isLocal) {
       return Image.file(
         File(part.localPath ?? ''),
-        fit: BoxFit.contain,
+        width: double.infinity,
+        fit: BoxFit.cover,
         errorBuilder: (_, __, ___) => _fallback,
       );
     }
@@ -693,7 +703,8 @@ class _PartImage extends StatelessWidget {
           final bytes = base64Decode(url.substring(comma + 1));
           return Image.memory(
             bytes,
-            fit: BoxFit.contain,
+            width: double.infinity,
+            fit: BoxFit.cover,
             errorBuilder: (_, __, ___) => _fallback,
           );
         } catch (_) {
@@ -705,7 +716,8 @@ class _PartImage extends StatelessWidget {
     if (url.isEmpty) return _fallback;
     return Image.network(
       url,
-      fit: BoxFit.contain,
+      width: double.infinity,
+      fit: BoxFit.cover,
       errorBuilder: (_, __, ___) => _fallback,
     );
   }
@@ -786,9 +798,59 @@ class _ImageActions extends StatelessWidget {
   }
 }
 
-/// Сохраняет изображение из чата: локальный файл, data URL либо сетевая
-/// ссылка. Готовый файл передаётся в системный шеринг; по завершении —
-/// SnackBar «Сохранено», при сбое — понятное сообщение.
+/// Открывает полноэкранный просмотр изображения с масштабированием.
+void _openFullscreenImage(BuildContext context, String source) {
+  final s = source.trim();
+  if (s.isEmpty) return;
+  Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (ctx) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          actions: [
+            IconButton(
+              tooltip: 'Скачать',
+              icon: const Icon(Icons.download),
+              onPressed: () => _saveChatImage(ctx, s),
+            ),
+          ],
+        ),
+        body: Center(
+          child: InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 5.0,
+            child: _buildFullscreenImageWidget(s),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+Widget _buildFullscreenImageWidget(String s) {
+  if (s.startsWith('data:image')) {
+    final comma = s.indexOf(',');
+    if (comma >= 0 && comma + 1 < s.length) {
+      try {
+        return Image.memory(
+          base64Decode(s.substring(comma + 1)),
+          fit: BoxFit.contain,
+        );
+      } catch (_) {}
+    }
+  }
+  if (s.startsWith('http://') || s.startsWith('https://')) {
+    return Image.network(s, fit: BoxFit.contain);
+  }
+  final path = s.startsWith('file://')
+      ? Uri.parse(s).toFilePath()
+      : s.replaceFirst(RegExp(r'^file://'), '');
+  return Image.file(File(path), fit: BoxFit.contain);
+}
+
+/// Физически сохраняет изображение в папку Downloads (или через FilePicker).
 Future<void> _saveChatImage(BuildContext context, String source) async {
   final messenger = ScaffoldMessenger.maybeOf(context);
   void snack(String text) {
@@ -800,7 +862,7 @@ Future<void> _saveChatImage(BuildContext context, String source) async {
 
   try {
     final s = source.trim();
-    final List<int> bytes;
+    final Uint8List bytes;
     if (s.startsWith('data:')) {
       final idx = s.indexOf(',');
       if (idx < 0) throw const FormatException('bad data url');
@@ -814,20 +876,55 @@ Future<void> _saveChatImage(BuildContext context, String source) async {
       }
       bytes = resp.bodyBytes;
     } else {
-      final path = s.replaceFirst(RegExp(r'^file://'), '');
+      final path = s.startsWith('file://')
+          ? Uri.parse(s).toFilePath()
+          : s.replaceFirst(RegExp(r'^file://'), '');
       bytes = await File(path).readAsBytes();
     }
     if (bytes.isEmpty) throw Exception('Пустой файл');
-    final tmp = await getTemporaryDirectory();
-    final dir = Directory('${tmp.path}/GenTech/share');
-    await dir.create(recursive: true);
-    final file = File(
-      '${dir.path}/img_${DateTime.now().millisecondsSinceEpoch}'
-      '${_imageExtFor(s)}',
-    );
-    await file.writeAsBytes(bytes, flush: true);
-    await Share.shareXFiles(<XFile>[XFile(file.path)]);
-    snack('Сохранено');
+
+    final fileName =
+        'img_${DateTime.now().millisecondsSinceEpoch}${_imageExtFor(s)}';
+
+    var saved = false;
+    if (Platform.isAndroid) {
+      try {
+        final dlDir = Directory('/storage/emulated/0/Download');
+        if (await dlDir.exists()) {
+          final outFile = File('${dlDir.path}/$fileName');
+          await outFile.writeAsBytes(bytes, flush: true);
+          saved = true;
+          snack('Сохранено в Загрузки: $fileName');
+        }
+      } catch (_) {
+        saved = false;
+      }
+    }
+
+    if (!saved) {
+      final savedPath = await FilePicker.platform.saveFile(
+        dialogTitle: 'Сохранить изображение',
+        fileName: fileName,
+        type: FileType.image,
+        bytes: bytes,
+      );
+      if (savedPath != null && savedPath.isNotEmpty) {
+        final f = File(savedPath);
+        if (!await f.exists() || await f.length() == 0) {
+          await f.writeAsBytes(bytes, flush: true);
+        }
+        saved = true;
+        snack('Сохранено в Загрузки');
+      }
+    }
+
+    if (!saved) {
+      final dir = (await getDownloadsDirectory()) ??
+          await getApplicationDocumentsDirectory();
+      final outFile = File('${dir.path}/$fileName');
+      await outFile.writeAsBytes(bytes, flush: true);
+      snack('Сохранено: ${outFile.path}');
+    }
   } catch (_) {
     snack('Не удалось сохранить изображение');
   }
