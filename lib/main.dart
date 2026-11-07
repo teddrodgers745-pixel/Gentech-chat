@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'core/auth/polza_auth_service.dart';
+import 'core/generation/reasoning_capability_resolver.dart';
 import 'core/storage.dart';
 import 'models/tool.dart';
 import 'screens/chat_screen.dart';
@@ -20,6 +21,22 @@ Future<void> main() async {
   await polzaAuth.load();
   await _seedDefaultTools();
   runApp(const GenTechChatApp());
+
+  // Фоновая синхронизация уровней reasoning с каталогом OpenRouter:
+  // запуск приложения не блокируется, сбой сети не влияет на работу.
+  unawaited(_syncReasoningCapabilities());
+}
+
+/// Загружает сохранённый кэш уровней reasoning и обновляет его по
+/// публичному эндпоинту OpenRouter /models. Любая ошибка игнорируется:
+/// getCapability в этом случае отдаёт fallback.
+Future<void> _syncReasoningCapabilities() async {
+  try {
+    await ReasoningCapabilityResolver.loadCache();
+    await ReasoningCapabilityResolver.syncCapabilities();
+  } catch (_) {
+    // Не критично: интерфейс продолжает работать с fallback-уровнями.
+  }
 }
 
 /// Базовые инструменты, которые появляются в списке по умолчанию:
