@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'core/auth/polza_auth_service.dart';
+import 'core/generation/generation_capability_resolver.dart';
 import 'core/generation/reasoning_capability_resolver.dart';
 import 'core/storage.dart';
 import 'models/tool.dart';
@@ -25,6 +26,21 @@ Future<void> main() async {
   // Фоновая синхронизация уровней reasoning с каталогом OpenRouter:
   // запуск приложения не блокируется, сбой сети не влияет на работу.
   unawaited(_syncReasoningCapabilities());
+  // Фоновая синхронизация медиа-параметров (видео/картинки) с OpenRouter:
+  // TTL кэша 7 дней, сбой сети не влияет на запуск приложения.
+  unawaited(_syncMediaCapabilities());
+}
+
+/// Загружает сохранённый кэш медиа-параметров и обновляет его по
+/// эндпоинтам OpenRouter (видео и изображения). Любая ошибка игнорируется:
+/// getCapability в этом случае вернёт null.
+Future<void> _syncMediaCapabilities() async {
+  try {
+    await GenerationCapabilityResolver.loadCache();
+    await GenerationCapabilityResolver.syncCapabilities();
+  } catch (_) {
+    // Не критично: параметры недоступны до следующей успешной синхронизации.
+  }
 }
 
 /// Загружает сохранённый кэш уровней reasoning и обновляет его по
