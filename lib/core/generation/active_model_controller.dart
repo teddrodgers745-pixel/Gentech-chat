@@ -532,7 +532,7 @@ class ActiveModelController extends ChangeNotifier {
       '[caps] $modelId (conn: ${cid ?? 'нет'}): '
       'type=${(entry?.type.isNotEmpty ?? false) ? entry!.type : '?'}, '
       'kind=${kind.name} [$kindSource], '
-      'params=${params == null ? 'нет' : params!.confidence} [$paramsSource], '
+      'params=${params == null ? 'нет' : params.confidence} [$paramsSource], '
       'reasoning=[${reasoningLevels.join(',')}] [$reasoningSource]',
     );
     notifyListeners();
