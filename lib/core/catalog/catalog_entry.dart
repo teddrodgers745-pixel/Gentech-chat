@@ -175,6 +175,7 @@ class CatalogEntry {
     String? capabilitiesSource,
     String? priceSource,
     bool clearReasoning = false,
+    bool clearReasoningUnknown = false,
     bool clearMaxCompletionTokens = false,
     bool clearMaxReferenceImages = false,
   }) {
@@ -187,7 +188,9 @@ class CatalogEntry {
       maxCompletionTokens:
           clearMaxCompletionTokens ? null : (maxCompletionTokens ?? this.maxCompletionTokens),
       reasoning: clearReasoning ? null : (reasoning ?? this.reasoning),
-      reasoningUnknown: reasoningUnknown || this.reasoningUnknown,
+      reasoningUnknown: clearReasoningUnknown
+          ? false
+          : (reasoningUnknown || this.reasoningUnknown),
       supportsTools: supportsTools ?? this.supportsTools,
       aspectRatios: aspectRatios ?? this.aspectRatios,
       resolutions: resolutions ?? this.resolutions,
