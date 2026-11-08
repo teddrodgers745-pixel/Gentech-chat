@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:gentech_chat/core/catalog/catalog_entry.dart';
+// Типы каталога экспортируются вместе с provider_catalog_service.dart.
 import 'package:gentech_chat/core/catalog/provider_catalog_service.dart';
 
 void main() {

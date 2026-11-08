@@ -524,15 +524,15 @@ class ProviderCatalogService extends ChangeNotifier {
     await loadCache();
     final rawId = modelId.trim();
     final norm = ModelIdNormalizer.normalize(rawId);
-    var entry = _byConnection[connectionId.trim()]?[norm];
-    if (entry == null) {
-      entry = CatalogEntry(
-        connectionId: connectionId,
-        id: rawId,
-        reasoningUnknown: true,
-        capabilitiesSource: CatalogSources.fallback,
-      );
-    }
+    // Переменная сразу объявлена непустым CatalogEntry: продвижение типов
+    // не участвует, присваивания дозаполненных записей безопасны.
+    CatalogEntry entry = _byConnection[connectionId.trim()]?[norm] ??
+        CatalogEntry(
+          connectionId: connectionId,
+          id: rawId,
+          reasoningUnknown: true,
+          capabilitiesSource: CatalogSources.fallback,
+        );
     var source = entry.capabilitiesSource;
     var refUsed = false;
 
@@ -567,7 +567,8 @@ class ProviderCatalogService extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    if (entry.type.isEmpty || (entry.reasoning == null && entry.reasoningUnknown)) {
+    if (entry.type.isEmpty ||
+        (entry.reasoning == null && entry.reasoningUnknown)) {
       entry = _applyFallback(entry, rawId);
     }
     final rState = entry.reasoning != null
@@ -596,6 +597,7 @@ class ProviderCatalogService extends ChangeNotifier {
       (e.type.isEmpty || e.type == 'image' || e.type == 'video');
 
   /// Дозаполнение возможностей из справочника OpenRouter (цены не трогаем).
+  /// Возвращает гарантированно непустую запись и признак изменений.
   static (CatalogEntry, bool) _fillFromReference(
     CatalogEntry e,
     Map<String, dynamic> ref,
