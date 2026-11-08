@@ -3,6 +3,8 @@
 import 'package:flutter/foundation.dart';
 
 import '../../app_state.dart';
+import '../auth/polza_auth_service.dart';
+import '../catalog/provider_catalog_service.dart';
 import '../models/active_model_capabilities.dart';
 import '../models/model_id_normalizer.dart';
 import '../models/model_info.dart';
@@ -21,6 +23,10 @@ import 'user_param_override_store.dart';
 /// Модель принадлежит [PresetStore] — единственному источнику истины:
 /// геттер [currentModelId] читает модель активного пресета, запись
 /// ([setModel]) делегирует PresetStore.updateActivePresetModel.
+///
+/// Источник данных о возможностях — каталог подключения
+/// ([ProviderCatalogService.lookup]); при отсутствии данных работают
+/// прежние резолверы (кэш OpenRouter, курированный каталог, эвристика).
 class ActiveModelController extends ChangeNotifier {
   /// [SearchCapabilityResolver] пробрасывается снаружи (main.dart /
   /// место создания контроллера); по умолчанию — статический резолвер.
@@ -33,6 +39,9 @@ class ActiveModelController extends ChangeNotifier {
         _supportsNativeSearch =
             supportsNativeSearch ?? SearchCapabilityResolver.supportsNativeSearch {
     _presetController.addListener(_onPresetChanged);
+    // Каталог подключения обновился после sync — пересчитываем
+    // возможности активной модели (см. _onCatalogChanged).
+    providerCatalog.addListener(_onCatalogChanged);
   }
 
   static const List<String> _videoNameHints = <String>[
@@ -52,6 +61,12 @@ class ActiveModelController extends ChangeNotifier {
     'midjourney',
     'stable-diffusion',
     'stablediffusion',
+  ];
+
+  /// Базовые уровни размышлений, когда провайдер не сообщил данных:
+  /// капсула «Мышление» остаётся видимой.
+  static const List<String> _baseReasoningLevels = <String>[
+    'none', 'low', 'medium', 'high',
   ];
 
   final PresetStore _presetController;
@@ -107,8 +122,28 @@ class ActiveModelController extends ChangeNotifier {
 
   Future<void> _onPresetChanged() async {
     if (_resolving) return;
+    // Guard на время разрешения: смена пресета (текст/картинка/видео)
+    // пересчитывает capabilities без устаревших значений — параллельные
+    // пересчёты (в т.ч. от каталога) не вмешиваются, гонка гасится токеном.
+    _resolving = true;
+    try {
+      final presetModel = _presetController.active?.model.trim() ?? '';
+      final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
+      final vision = _inferVision(id);
+      final reasoning = await _inferReasoning(id);
+      await _resolve(id, vision: vision, reasoning: reasoning);
+    } finally {
+      _resolving = false;
+    }
+  }
+
+  /// Каталог подключения обновился (sync завершился): пересчитываем
+  /// возможности выбранной модели и уведомляем интерфейс.
+  Future<void> _onCatalogChanged() async {
+    if (_resolving) return;
     final presetModel = _presetController.active?.model.trim() ?? '';
     final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
+    if (id.isEmpty) return;
     final vision = _inferVision(id);
     final reasoning = await _inferReasoning(id);
     await _resolve(id, vision: vision, reasoning: reasoning);
@@ -156,6 +191,45 @@ class ActiveModelController extends ChangeNotifier {
   static bool isHeuristicSearch(String rawId) {
     final lower = HeuristicRules.normalize(rawId).toLowerCase();
     return lower.contains('sonar');
+  }
+
+  /// Идентификатор подключения для [ProviderCatalogService.lookup] —
+  /// собранный так же, как в _collectConnections каталога:
+  /// 'preset:<id>' для активного пресета с заполненными адресом и ключом,
+  /// 'polza' для активной Polza-сессии, 'global' для общих настроек.
+  /// null — активное подключение не определено.
+  String? _catalogConnectionId() {
+    final pr = _presetController.active;
+    if (pr != null &&
+        pr.id != PresetStore.defaultPresetId &&
+        pr.baseUrl.trim().isNotEmpty &&
+        pr.apiKey.trim().isNotEmpty) {
+      return 'preset:${pr.id}';
+    }
+    final polzaKey = polzaAuth.isAuthenticated
+        ? polzaAuth.accessToken.trim()
+        : '';
+    final url = pr?.baseUrl.trim().isNotEmpty == true
+        ? pr!.baseUrl.trim()
+        : settings.baseUrl.trim();
+    final key = pr?.apiKey.trim().isNotEmpty == true
+        ? pr!.apiKey.trim()
+        : settings.apiKey.trim();
+    if (url.isEmpty || key.isEmpty) {
+      if (polzaKey.isNotEmpty) return 'polza';
+      return null;
+    }
+    if (polzaKey.isNotEmpty &&
+        key == polzaKey &&
+        url == PolzaAuthService.polzaBaseUrl) {
+      return 'polza';
+    }
+    if (pr != null &&
+        pr.baseUrl.trim().isNotEmpty &&
+        pr.apiKey.trim().isNotEmpty) {
+      return 'preset:${pr.id}';
+    }
+    return 'global';
   }
 
   /// Принудительный поиск параметров модели в пользовательских override,
@@ -299,23 +373,46 @@ class ActiveModelController extends ChangeNotifier {
   }) async {
     final token = ++_resolveToken;
     final norm = ModelIdNormalizer.normalize(modelId);
-    // Приоритет 1: кэш GenerationCapabilityResolver (каталог OpenRouter:
-    // медиа-параметры видео и изображений). Данные помечаются
-    // confidence='openrouter'; если модели в кэше нет —
-    // приоритет 2: пользовательские override, курированный каталог
-    // и пресеты моделей (_lookupCatalogParams).
-    ModelParameters? params;
+
+    // ---- Приоритет 0: каталог подключения (ProviderCatalogService) ----
+    String? cid;
+    CatalogEntry? entry;
     try {
-      // Догрузка дискового кэша: no-op, если уже загружен в main.dart.
-      await GenerationCapabilityResolver.loadCache();
+      cid = _catalogConnectionId();
+      if (cid != null && modelId.trim().isNotEmpty) {
+        entry = await providerCatalog.lookup(cid, modelId);
+      }
     } catch (_) {
-      // Кэш недоступен — продолжаем с каталогом/пресетами.
+      entry = null;
     }
-    final genCap = GenerationCapabilityResolver.getCapability(norm);
-    if (genCap != null) {
-      params = _withConfidence(genCap, 'openrouter');
+    if (token != _resolveToken) return;
+
+    // ---- Параметры генерации ----
+    // Приоритет: каталог подключения -> кэш GenerationCapabilityResolver
+    // (OpenRouter, confidence='openrouter') -> override/курированный
+    // каталог/пресеты (_lookupCatalogParams).
+    ModelParameters? params;
+    String paramsSource = 'нет';
+    final fromCatalog = _paramsFromCatalog(entry);
+    if (fromCatalog != null && fromCatalog.hasAny) {
+      params = fromCatalog;
+      paramsSource = 'каталог (${entry!.capabilitiesSource})';
+    } else {
+      try {
+        // Догрузка дискового кэша: no-op, если уже загружен в main.dart.
+        await GenerationCapabilityResolver.loadCache();
+      } catch (_) {
+        // Кэш недоступен — продолжаем с каталогом/пресетами.
+      }
+      final genCap = GenerationCapabilityResolver.getCapability(norm);
+      if (genCap != null) {
+        params = _withConfidence(genCap, 'openrouter');
+        paramsSource = 'кэш OpenRouter';
+      }
+      params ??= await _lookupCatalogParams(modelId, norm);
+      if (params != null) paramsSource = 'override/курированный каталог';
     }
-    params ??= await _lookupCatalogParams(modelId, norm);
+    if (token != _resolveToken) return;
 
     String? typeOverride;
     try {
@@ -330,15 +427,34 @@ class ActiveModelController extends ChangeNotifier {
     }
     if (token != _resolveToken) return;
 
-    final kind = _resolveKind(norm, params, typeOverride);
+    final (kind, kindSource) = _kindWithCatalog(
+      entry,
+      norm,
+      params,
+      typeOverride,
+    );
 
     if (kind == ActiveModelKind.video || kind == ActiveModelKind.image) {
-      params ??= await _lookupCatalogParams(modelId, norm);
       if (params == null ||
           !params.hasAny ||
           (kind == ActiveModelKind.video &&
               (params.durations == null || params.durations!.isEmpty))) {
-        params = defaultMediaParams(kind, norm, params);
+        final catalogFallback = await _lookupCatalogParams(modelId, norm);
+        if (catalogFallback != null &&
+            catalogFallback.hasAny &&
+            !(kind == ActiveModelKind.video &&
+                (catalogFallback.durations == null ||
+                    catalogFallback.durations!.isEmpty) &&
+                (params != null && params.hasAny))) {
+          params = catalogFallback;
+        }
+        if (params == null ||
+            !params.hasAny ||
+            (kind == ActiveModelKind.video &&
+                (params.durations == null || params.durations!.isEmpty))) {
+          params = defaultMediaParams(kind, norm, params);
+          paramsSource = 'дефолт медиа';
+        }
       }
     }
 
@@ -355,13 +471,53 @@ class ActiveModelController extends ChangeNotifier {
     }
     final nativeSearch = _supportsNativeSearch(norm);
 
+    // ---- Reasoning ----
     final isText = kind == ActiveModelKind.text;
-    final supportsReasoning = isText && reasoning;
-    final reasoningLevels = supportsReasoning
+    var supportsReasoning = isText && reasoning;
+    var reasoningLevels = supportsReasoning
         ? await _reasoningLevelsFor(norm)
         : const <String>['off'];
+    var reasoningSource = 'прежние резолверы';
+    if (isText && entry != null) {
+      final r = entry.reasoning;
+      if (r != null) {
+        // Источник явно сообщил reasoning: уровни как есть,
+        // mandatory убирает 'none'/'off'.
+        final levels = <String>[...r.levels];
+        if (r.mandatory) {
+          levels.removeWhere((l) => l == 'none' || l == 'off');
+        }
+        if (levels.isEmpty && r.defaultEffort.trim().isNotEmpty) {
+          levels.add(r.defaultEffort.trim());
+        }
+        supportsReasoning = true;
+        if (levels.isNotEmpty) {
+          reasoningLevels = levels;
+          reasoningSource =
+              'каталог (${entry.capabilitiesSource})'
+              '${r.mandatory ? ', mandatory' : ''}';
+        } else {
+          reasoningLevels = List<String>.of(_baseReasoningLevels);
+          reasoningSource =
+              'каталог (${entry.capabilitiesSource}), уровни не перечислены';
+        }
+      } else if (entry.reasoningUnknown) {
+        // Данных нет (формат В): базовый список, капсула остаётся видимой.
+        supportsReasoning = true;
+        reasoningLevels = List<String>.of(_baseReasoningLevels);
+        reasoningSource = 'unknown -> базовый список';
+      } else {
+        // Источник ЯВНО сообщает, что reasoning у модели нет:
+        // капсула скрывается (пустой список уровней).
+        supportsReasoning = false;
+        reasoningLevels = const <String>[];
+        reasoningSource =
+            'каталог (${entry.capabilitiesSource}): reasoning отсутствует';
+      }
+    }
     // Защита от гонки: за время await модель могла смениться again.
     if (token != _resolveToken) return;
+
     _current = ActiveModelCapabilities(
       modelId: modelId,
       normalizedId: norm,
@@ -372,7 +528,79 @@ class ActiveModelController extends ChangeNotifier {
       reasoningLevels: reasoningLevels,
       supportsNativeSearch: nativeSearch,
     );
+    debugPrint(
+      '[caps] $modelId (conn: ${cid ?? 'нет'}): '
+      'type=${(entry?.type.isNotEmpty ?? false) ? entry!.type : '?'}, '
+      'kind=${kind.name} [$kindSource], '
+      'params=${params == null ? 'нет' : params!.confidence} [$paramsSource], '
+      'reasoning=[${reasoningLevels.join(',')}] [$reasoningSource]',
+    );
     notifyListeners();
+  }
+
+  /// Параметры генерации из записи каталога подключения
+  /// ([CatalogEntry]): пропорции, разрешения, длительности, качества.
+  /// null — у записи нет медиа-данных.
+  static ModelParameters? _paramsFromCatalog(CatalogEntry? e) {
+    final en = e;
+    if (en == null) return null;
+    final durs = en.durations;
+    final hasAny = en.aspectRatios.isNotEmpty ||
+        en.resolutions.isNotEmpty ||
+        durs.isNotEmpty;
+    if (!hasAny) return null;
+    return ModelParameters(
+      type: en.type.isEmpty ? null : en.type,
+      aspectRatios: List<String>.of(en.aspectRatios),
+      durations:
+          durs.isEmpty ? null : DurationRange(discrete: List<int>.of(durs)),
+      resolutions: List<String>.of(en.resolutions),
+      sizes: const <String>[],
+      qualities: List<String>.of(en.qualities),
+      constraints: const <String>[],
+      confidence: en.capabilitiesSource,
+      isUserDefined: false,
+    );
+  }
+
+  /// Вид модели: по типу из каталога подключения (приоритет после
+  /// ручного override пользователя), иначе прежняя эвристика.
+  ///  - image -> image, video -> video, chat -> text;
+  ///  - tts/stt/embedding/music/classification и неизвестный тип ->
+  ///    text, ничего не прячем.
+  (ActiveModelKind, String) _kindWithCatalog(
+    CatalogEntry? entry,
+    String norm,
+    ModelParameters? params,
+    String? typeOverride,
+  ) {
+    if (typeOverride != null) {
+      return (
+        switch (typeOverride) {
+          'image' => ActiveModelKind.image,
+          'video' => ActiveModelKind.video,
+          _ => ActiveModelKind.text,
+        },
+        'override типа',
+      );
+    }
+    final e = entry;
+    final type = e?.type ?? '';
+    switch (type) {
+      case 'image':
+        return (ActiveModelKind.image, 'каталог (${e!.capabilitiesSource})');
+      case 'video':
+        return (ActiveModelKind.video, 'каталог (${e!.capabilitiesSource})');
+      case 'chat':
+        return (ActiveModelKind.text, 'каталог (${e!.capabilitiesSource})');
+      case 'tts':
+      case 'stt':
+      case 'embedding':
+      case 'music':
+      case 'classification':
+        return (ActiveModelKind.text, 'каталог: служебный тип $type');
+    }
+    return (_resolveKind(norm, params, typeOverride), 'эвристика/параметры');
   }
 
   /// Точные уровни размышлений активной модели из
@@ -511,6 +739,7 @@ class ActiveModelController extends ChangeNotifier {
   @override
   void dispose() {
     _presetController.removeListener(_onPresetChanged);
+    providerCatalog.removeListener(_onCatalogChanged);
     super.dispose();
   }
 }
