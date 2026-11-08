@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
 import '../core/auth/polza_auth_service.dart';
+import '../core/catalog/provider_catalog_service.dart';
 
 /// Секция «ПОДКЛЮЧЕНИЕ» в настройках: Base URL, API-ключ и модель
 /// по умолчанию. Используются, когда не выбран ни один пресет.
@@ -94,6 +95,16 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
       _loadingModels = true;
       _modelsError = null;
     });
+    // Параллельно обновляем каталог моделей этого подключения
+    // (возможности и цены), не задерживая загрузку списка моделей.
+    unawaited(providerCatalog.sync(
+      CatalogConnection(
+        id: authed ? 'polza' : 'global',
+        baseUrl: base,
+        apiKey: key,
+      ),
+      force: true,
+    ));
     try {
       final resp = await http
           .get(

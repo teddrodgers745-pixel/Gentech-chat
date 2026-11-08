@@ -1,11 +1,13 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/auth/polza_auth_service.dart';
+import 'core/catalog/provider_catalog_service.dart';
 import 'core/search/search_strategy.dart';
 import 'core/storage.dart';
 import 'core/utils/reasoning_mapper.dart';
@@ -363,6 +365,8 @@ class AppSettings extends ChangeNotifier {
   Future<void> saveNow() => _persist();
 
   void setConnection({String? key, String? url, String? mdl, String? sys}) {
+    final keyChanged = key != null && key.trim() != apiKey.trim();
+    final urlChanged = url != null && url.trim() != baseUrl.trim();
     if (key != null) apiKey = key;
     if (url != null) baseUrl = url;
     if (mdl != null) model = mdl;
@@ -376,6 +380,21 @@ class AppSettings extends ChangeNotifier {
     }
     _persist();
     notifyListeners();
+    // Каталог моделей по подключению: сразу после ввода или смены ключа
+    // (либо адреса) синхронизируем возможности и цены (force: true).
+    // Смена одной только модели синхронизацию не запускает.
+    if (keyChanged || urlChanged) {
+      try {
+        unawaited(providerCatalog.sync(
+          CatalogConnection(
+            id: 'global',
+            baseUrl: baseUrl.trim().replaceAll(RegExp(r'/+$'), ''),
+            apiKey: apiKey.trim(),
+          ),
+          force: true,
+        ));
+      } catch (_) {}
+    }
   }
 
   void setPalette(String id) {

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'core/auth/polza_auth_service.dart';
+import 'core/catalog/provider_catalog_service.dart';
 import 'core/generation/generation_capability_resolver.dart';
 import 'core/generation/reasoning_capability_resolver.dart';
 import 'core/generation/search_capability_resolver.dart';
@@ -33,6 +34,21 @@ Future<void> main() async {
   // Фоновая синхронизация данных о нативном веб-поиске с OpenRouter:
   // TTL кэша 7 дней, сбой сети не влияет на запуск приложения.
   unawaited(_syncSearchCapabilities());
+  // Фоновая синхронизация каталога моделей по подключениям (пресеты,
+  // глобальные настройки, Polza-сессия): TTL 24 часа на подключение,
+  // сбой сети не влияет на запуск приложения.
+  unawaited(_syncProviderCatalog());
+}
+
+/// Загружает кэш каталога моделей по подключениям и обновляет его
+/// (GET {baseUrl}/models для каждого подключения, TTL 24 часа).
+/// Любая ошибка игнорируется: прежний кэш остаётся в силе.
+Future<void> _syncProviderCatalog() async {
+  try {
+    await providerCatalog.syncAll();
+  } catch (_) {
+    // Не критично: каталог недоступен до следующей успешной синхронизации.
+  }
 }
 
 /// Загружает сохранённый кэш данных о нативном поиске и обновляет его

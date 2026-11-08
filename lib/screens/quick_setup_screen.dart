@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
+import '../core/catalog/provider_catalog_service.dart';
 import '../models.dart';
 import '../theme.dart';
 
@@ -112,6 +113,12 @@ class _QuickSetupScreenState extends State<QuickSetupScreen> {
       _loading = true;
       _error = null;
     });
+    // Параллельно обновляем каталог моделей этого подключения
+    // (возможности и цены), не задерживая загрузку списка.
+    unawaited(providerCatalog.sync(
+      CatalogConnection(id: 'quick_setup', baseUrl: base, apiKey: key),
+      force: true,
+    ));
     try {
       // Ключ передаётся отдельно, чтобы не попадал в строки ошибок логов.
       final authed = await _getWithAuth('$base/models', key);

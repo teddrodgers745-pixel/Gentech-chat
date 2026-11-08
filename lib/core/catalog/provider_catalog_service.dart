@@ -18,6 +18,9 @@ import '../providers/heuristic_rules.dart';
 import 'catalog_entry.dart';
 import 'openrouter_reference_service.dart';
 
+export 'catalog_entry.dart'
+    show CatalogConnection, CatalogEntry, CatalogReasoning, CatalogSources;
+
 // ---------- терпимые помощники разбора (значения любых типов) ----------
 
 Map<String, dynamic>? _asMap(Object? v) =>
@@ -531,6 +534,7 @@ class ProviderCatalogService extends ChangeNotifier {
       );
     }
     var source = entry.capabilitiesSource;
+    var refUsed = false;
 
     if (_needsReference(entry)) {
       try {
@@ -542,6 +546,7 @@ class ProviderCatalogService extends ChangeNotifier {
           if (changed) {
             source = _upgradedSource(source, CatalogSources.openrouter);
             entry = filled;
+            refUsed = true;
           }
         }
       } catch (_) {}
@@ -570,7 +575,8 @@ class ProviderCatalogService extends ChangeNotifier {
         : (entry.reasoningUnknown ? 'неизвестен' : 'не заявлен');
     debugPrint('[caps] lookup "$rawId" (norm: $norm, conn: $connectionId): '
         'caps=$source, price=${entry.priceSource ?? 'нет'}, reasoning=$rState, '
-        'type=${entry.type.isEmpty ? '?' : entry.type}');
+        'type=${entry.type.isEmpty ? '?' : entry.type}, '
+        'openrouter=${refUsed ? 'добрали' : 'нет'}');
     return entry;
   }
 
@@ -613,7 +619,8 @@ class ProviderCatalogService extends ChangeNotifier {
           name: e.name.isEmpty ? refName : null,
           contextLength: e.contextLength ?? _asInt(ref['contextLength']),
           reasoning: e.reasoning ?? r.$1,
-          reasoningUnknown: r.$1 != null,
+          reasoningUnknown: false,
+          clearReasoningUnknown: r.$1 != null,
           supportsTools: e.supportsTools ??
               (params.isNotEmpty
                   ? params.contains('tools') ||
