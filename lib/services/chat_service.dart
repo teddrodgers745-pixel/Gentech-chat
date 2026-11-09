@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import '../app_state.dart';
 import '../core/generation/search_capability_resolver.dart';
 import '../core/providers/heuristic_rules.dart';
+import '../core/providers/model_catalog_adapter.dart';
 import '../core/search/search_controller.dart';
 import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
@@ -83,7 +84,12 @@ class ToolOutcome {
 
 class ChatServiceException implements Exception {
   final String message;
-  ChatServiceException(this.message);
+
+  /// HTTP-статус ответа провайдера, если ошибка пришла от HTTP
+  /// (400, 401 ...); null — ошибка без статуса (сеть, таймаут).
+  final int? statusCode;
+
+  ChatServiceException(this.message, {this.statusCode});
 
   @override
   String toString() => message;
@@ -509,9 +515,85 @@ class ChatService {
     return null;
   }
 
+  /// RouterAI: провайдер, у которого уровни размышлений ограничены
+  /// ('off'/'high'); определяется по Base URL (host содержит routerai).
+  static bool _isRouterAI(String baseUrl) =>
+      ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'routerai';
+
+  /// Один запрос к /chat/completions с автоповтором для RouterAI:
+  /// если пользователь выбрал уровень 'high' либо 'max' и провайдер
+  /// ответил ошибкой 400 либо пустым ответом, запрос автоматически
+  /// повторяется ОДИН раз с уровнем 'high'. Ошибка повтора (либо
+  /// иной статус) пробрасывается дальше без изменений.
+  Stream<StreamChunk> _round({
+    required String baseUrl,
+    required String apiKey,
+    required String model,
+    required List<Map<String, dynamic>> history,
+    required bool stream,
+    double? temperature,
+    String? reasoningEffort,
+    required List<Tool> tools,
+    required _RoundHolder holder,
+  }) async* {
+    final canRetry = _isRouterAI(baseUrl) &&
+        (reasoningEffort == 'high' || reasoningEffort == 'max');
+    try {
+      await for (final chunk in _roundOnce(
+        baseUrl: baseUrl,
+        apiKey: apiKey,
+        model: model,
+        history: history,
+        stream: stream,
+        temperature: temperature,
+        reasoningEffort: reasoningEffort,
+        tools: tools,
+        holder: holder,
+      )) {
+        yield chunk;
+      }
+    } on ChatServiceException catch (e) {
+      if (canRetry && e.statusCode == 400 && !_wasCancelled) {
+        // RouterAI отклонил запрос с 400: повторяем с уровнем 'high'.
+        yield* _roundOnce(
+          baseUrl: baseUrl,
+          apiKey: apiKey,
+          model: model,
+          history: history,
+          stream: stream,
+          temperature: temperature,
+          reasoningEffort: 'high',
+          tools: tools,
+          holder: holder,
+        );
+        return;
+      }
+      rethrow;
+    }
+    if (!canRetry || _wasCancelled) return;
+    final res = holder.result;
+    if (res == null) return;
+    final isEmpty = res.content.trim().isEmpty &&
+        res.reasoning.trim().isEmpty &&
+        res.toolCalls.isEmpty;
+    if (!isEmpty) return;
+    // Пустой ответ провайдера: повторяем запрос с уровнем 'high'.
+    yield* _roundOnce(
+      baseUrl: baseUrl,
+      apiKey: apiKey,
+      model: model,
+      history: history,
+      stream: stream,
+      temperature: temperature,
+      reasoningEffort: 'high',
+      tools: tools,
+      holder: holder,
+    );
+  }
+
   /// Один запрос к /chat/completions. Стримит куски контента,
   /// итог раунда (в т.ч. tool_calls) кладёт в holder.
-  Stream<StreamChunk> _round({
+  Stream<StreamChunk> _roundOnce({
     required String baseUrl,
     required String apiKey,
     required String model,
@@ -597,7 +679,10 @@ class ChatService {
       final resp = await client.send(req).timeout(_apiTimeout);
       if (resp.statusCode != 200) {
         final body = await resp.stream.bytesToString();
-        throw ChatServiceException(_describeError(resp.statusCode, body));
+        throw ChatServiceException(
+          _describeError(resp.statusCode, body),
+          statusCode: resp.statusCode,
+        );
       }
 
       if (!stream) {
