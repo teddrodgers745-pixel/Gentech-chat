@@ -349,6 +349,17 @@ class ProviderCatalogService extends ChangeNotifier {
         qualities = _asStringList(_asMap(params['quality'])?['values']);
         maxRefImages = _asInt(_asMap(params['images'])?['max']);
       }
+      // Формат RouterAI: плоские списки на верхнем уровне записи,
+      // если блок parameters (Polza) не дал данных.
+      if (aspectRatios.isEmpty) {
+        aspectRatios = _asStringList(m['supported_aspect_ratios']);
+      }
+      if (resolutions.isEmpty) {
+        resolutions = _asStringList(m['supported_resolutions']);
+      }
+      if (durations.isEmpty) {
+        durations = _asIntList(m['supported_durations']);
+      }
     } catch (_) {}
 
     double? priceIn;
@@ -396,6 +407,12 @@ class ProviderCatalogService extends ChangeNotifier {
   /// но не перечислил уровни.
   static const List<String> _defaultReasoningLevels = <String>[
     'none', 'low', 'medium', 'high',
+  ];
+
+  /// Базовые уровни для формата RouterAI: reasoning заявлен в
+  /// supported_parameters, но уровни не перечислены.
+  static const List<String> _supportedParamsReasoningLevels = <String>[
+    'off', 'high',
   ];
 
   /// Reasoning: m['reasoning'] и/или m['top_provider']['reasoning'].
@@ -450,8 +467,12 @@ class ProviderCatalogService extends ChangeNotifier {
     }
     if (supportedParams.contains('reasoning') ||
         supportedParams.contains('reasoning_effort')) {
+      // RouterAI: reasoning заявлен в supported_parameters без списка
+      // уровней — базовые уровни off/high.
       return (
-        CatalogReasoning(levels: List<String>.of(_defaultReasoningLevels)),
+        CatalogReasoning(
+          levels: List<String>.of(_supportedParamsReasoningLevels),
+        ),
         false,
       );
     }
@@ -509,8 +530,9 @@ class ProviderCatalogService extends ChangeNotifier {
       final inTok = _asDouble(pricing['prompt'] ?? pricing['input']);
       final outTok = _asDouble(pricing['completion'] ?? pricing['output']);
       if (inTok == null && outTok == null) continue;
+      // Цена меньше 0.01 — это цена за один токен; иначе уже за 1M.
       double? s(double? v) =>
-          v == null ? null : (v < 1 ? v * 1000000 : v);
+          v == null ? null : (v < 0.01 ? v * 1000000 : v);
       return (s(inTok), s(outTok), _asString(pricing['currency']) ?? 'USD');
     }
     return (null, null, null);
