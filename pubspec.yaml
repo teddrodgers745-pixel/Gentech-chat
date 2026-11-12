@@ -42,7 +42,7 @@ dependencies:
   web_socket_channel: any
   record: ^5.1.2
   just_audio: ^0.9.40
-  flutter_soloud: 2.1.0
+  flutter_soloud: 1.6.3
 
 dependency_overrides:
   record_linux: ^1.0.0
