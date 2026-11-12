@@ -10,3 +10,10 @@ linter:
     prefer_const_constructors: true
     prefer_final_locals: true
     avoid_print: false
+
+# Flutter 3.47+ помечает package:flutter/material.dart как deprecated
+# в пользу package:material_ui/material_ui.dart. Миграция отложена.
+analyzer:
+  errors:
+    deprecated_member_use: ignore
+    deprecated_member_use_from_same_package: ignore
