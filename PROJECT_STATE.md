@@ -24,7 +24,7 @@ _Last updated: 2026-11-13_
 ## Current stage — Stage 2 (СПЛИТ на 2a и 2b)
 Исходная Stage 2 содержит 5 подцелей, разбиваем из-за разных risk-профилей:
 
-### Stage 2a (в работе) — критический backend + verification
+### Stage 2a (закрыта) — критический backend + verification
 - **(a) Изоляция lookup по connectionId**: `ActiveModelController._resolve`
   должен брать CatalogEntry из каталога ТЕКУЩЕГО подключения, а не из
   общего пула Polza+RouterAI+OpenRouter. Одинаковый modelId в разных
@@ -34,6 +34,15 @@ _Last updated: 2026-11-13_
   доезжают через `ActiveModelCapabilities`/`ModelInfo` до капсулы
   `text_chat_input`. Не пересчитывать из raw, не подставлять curated
   при явно пустом списке от провайдера.
+- Изменённые файлы: `lib/core/generation/active_model_controller.dart`
+  (`_resolve` берёт CatalogEntry строго из каталога АКТИВНОГО подключения:
+  `_catalogConnectionId()` -> `ProviderCatalogService.lookup(connectionId, ...)`;
+  fallback при connectionId == null — прежние резолверы; уровни reasoning
+  из CatalogEntry как есть, mandatory убирает 'off', при явном отсутствии
+  reasoning капсула скрывается без подстановки curated),
+  `lib/core/catalog/provider_catalog_service.dart`
+  (`lookup(connectionId, modelId)` — поиск записи только в каталоге
+  указанного подключения).
 
 ### Stage 2b (открыта, после 2a) — UX + merge + media
 - **(b) UI refresh после `syncFromConnection`**: `ActiveModelController`
@@ -53,3 +62,5 @@ _Last updated: 2026-11-13_
 ## Changelog
 - 2026-11-13: создан файл. Stage 2 разбита на 2a (backend+verification)
   и 2b (UX+media) для изоляции рисков.
+- 2026-11-13: Stage 2a закрыта. (a) lookup изолирован по connectionId;
+  (d) reasoningLevels pass-through проверен и пофикшен.
