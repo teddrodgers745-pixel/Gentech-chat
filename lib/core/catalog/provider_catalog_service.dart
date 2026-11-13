@@ -299,7 +299,7 @@ class ProviderCatalogService extends ChangeNotifier {
       try {
         final Map<String, dynamic> safeMap = decoded is Map<String, dynamic>
             ? decoded
-            : Map<String, dynamic>.from(decoded as Map);
+            : Map<String, dynamic>.from(decoded);
         final parsed = parseModelsList(safeMap, connection.baseUrl);
         for (final entry in parsed) {
           if (entry.id.isNotEmpty) out.add(entry);
