@@ -56,6 +56,8 @@ class AdaptiveChatInputBar extends StatefulWidget {
     this.reasoningLevel = 0,
     this.onAspectRatioChanged,
     this.onDurationChanged,
+    this.onResolutionChanged,
+    this.onQualityChanged,
     this.onCycleReasoning,
     this.onToggleSearch,
     this.onToggleMic,
