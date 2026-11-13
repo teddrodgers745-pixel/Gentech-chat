@@ -681,10 +681,13 @@ class _ChatScreenState extends State<ChatScreen> {
         <String, dynamic>{'role': 'user', 'content': txt},
       ],
       stream: false,
-      // Разрешение в image-запрос сознательно не добавляем: у части
-      // провайдеров (Polza) ключ — image_resolution, перевод ключа — 2c.
+      // Разрешение изображения уходит как 'resolution' (безопасный дефолт,
+      // совместим с RouterAI и Media API); ImagesApiExecutor для Polza
+      // дополнительно дублирует значение в 'image_resolution'.
       parameters: <String, dynamic>{
         ParamKeys.aspectRatio: _aspectRatio,
+        if ((_mediaResolution ?? '').trim().isNotEmpty)
+          ParamKeys.resolution: _mediaResolution!.trim(),
         if ((_mediaQuality ?? '').trim().isNotEmpty)
           ParamKeys.quality: _mediaQuality!.trim(),
       },

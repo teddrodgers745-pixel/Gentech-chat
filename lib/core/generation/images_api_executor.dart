@@ -168,6 +168,16 @@ class ImagesApiExecutor extends GenerationExecutor {
       rawParams: rawParams,
       fallback: () => ParameterTranslator.translate(rawParams, info),
     );
+    // Stage 2c: Polza Media API ожидает разрешение под ключом
+    // 'image_resolution'; универсальный 'resolution' (RouterAI и общий
+    // Media API) остаётся. Дублируем только для Polza — по провайдер-флагу
+    // из ModelCatalogAdapter, без хардкода по baseUrl в трансляторе.
+    if (providerId == 'polza') {
+      final res = translated[ParamKeys.resolution];
+      if (res is String && res.trim().isNotEmpty) {
+        translated['image_resolution'] = res.trim();
+      }
+    }
     if (dialect == ImageApiDialect.openRouterChatImages) {
       return dio.post<String>(
         '$base${ImageDialectResolver.primaryPath(dialect)}',

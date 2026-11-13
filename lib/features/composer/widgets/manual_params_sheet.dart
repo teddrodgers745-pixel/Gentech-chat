@@ -8,15 +8,26 @@ import '../../../core/models/param_spec.dart';
 /// Показывает нижнюю шторку ручного ввода параметров модели.
 /// Возвращает разобранный [ModelParameters] (confidence 'user') либо
 /// null — шторка закрыта без сохранения.
+///
+/// [allowedResolutions] / [allowedQualities] — поддерживаемые моделью
+/// значения из каталога (caps.params). Непустые списки включают секцию
+/// MEDIA с чипсами: тап подставляет значение в соответствующее поле;
+/// итог сохраняется вызывающим кодом в UserParamOverrideStore как раньше.
 Future<ModelParameters?> showManualParamsSheet(
   BuildContext context, {
   ModelParameters? initial,
+  List<String> allowedResolutions = const <String>[],
+  List<String> allowedQualities = const <String>[],
 }) {
   return showModalBottomSheet<ModelParameters>(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (_) => _ManualParamsSheet(initial: initial),
+    builder: (_) => _ManualParamsSheet(
+      initial: initial,
+      allowedResolutions: allowedResolutions,
+      allowedQualities: allowedQualities,
+    ),
   );
 }
 
@@ -27,7 +38,16 @@ Future<ModelParameters?> showManualParamsSheet(
 class _ManualParamsSheet extends StatefulWidget {
   final ModelParameters? initial;
 
-  const _ManualParamsSheet({this.initial});
+  /// Поддерживаемые моделью разрешения и качества (из caps.params);
+  /// непустой список включает секцию MEDIA.
+  final List<String> allowedResolutions;
+  final List<String> allowedQualities;
+
+  const _ManualParamsSheet({
+    this.initial,
+    this.allowedResolutions = const <String>[],
+    this.allowedQualities = const <String>[],
+  });
 
   @override
   State<_ManualParamsSheet> createState() => _ManualParamsSheetState();
@@ -40,9 +60,24 @@ class _ManualParamsSheetState extends State<_ManualParamsSheet> {
   late final TextEditingController _sizes;
   late final TextEditingController _qualities;
 
+  late final List<String> _chipResolutions;
+  late final List<String> _chipQualities;
+
+  /// Трим, дубликаты и пустые значения из списка caps убираются.
+  static List<String> _cleanList(List<String> raw) {
+    final out = <String>[];
+    for (final e in raw) {
+      final s = e.trim();
+      if (s.isNotEmpty && !out.contains(s)) out.add(s);
+    }
+    return out;
+  }
+
   @override
   void initState() {
     super.initState();
+    _chipResolutions = _cleanList(widget.allowedResolutions);
+    _chipQualities = _cleanList(widget.allowedQualities);
     final s = widget.initial;
     _ratios = TextEditingController(text: s?.aspectRatios.join(', ') ?? '');
     _durations = TextEditingController(text: _durationsText(s));
@@ -136,6 +171,124 @@ class _ManualParamsSheetState extends State<_ManualParamsSheet> {
     );
   }
 
+  /// Секция MEDIA (Stage 2c): чипсы поддерживаемых моделью разрешений
+  /// и качеств. Тап подставляет значение в соответствующее поле шторки;
+  /// сохранение — общим путём через «Сохранить» (UserParamOverrideStore).
+  Widget _mediaSection(Palette p) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'MEDIA',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.6,
+            color: p.accent,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Значения из каталога модели. Тап подставляет значение в поле '
+          'ниже (поле можно отредактировать вручную).',
+          style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
+        ),
+        const SizedBox(height: 10),
+        if (_chipResolutions.isNotEmpty) ...[
+          Text(
+            'Разрешения',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: p.text,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final v in _chipResolutions)
+                _mediaChip(p, v, _resolutions),
+            ],
+          ),
+          const SizedBox(height: 10),
+        ],
+        if (_chipQualities.isNotEmpty) ...[
+          Text(
+            'Качество',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: p.text,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final v in _chipQualities) _mediaChip(p, v, _qualities),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _mediaChip(
+    Palette p,
+    String value,
+    TextEditingController target,
+  ) {
+    final selected = target.text.trim() == value;
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: () {
+        setState(() {
+          target.text = value;
+          target.selection = TextSelection.collapsed(offset: value.length);
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOut,
+        height: 34,
+        padding: const EdgeInsets.symmetric(horizontal: 13),
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: selected
+              ? p.accent.withValues(alpha: 0.16)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: selected ? p.accent : p.border,
+            width: selected ? 1.6 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (selected) ...[
+              Icon(Icons.check_rounded, size: 15, color: p.accent),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.2,
+                fontWeight: FontWeight.w600,
+                color: selected ? p.accent : p.muted,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   void _save() {
     final params = _parse();
     if (params == null) {
@@ -179,6 +332,8 @@ class _ManualParamsSheetState extends State<_ManualParamsSheet> {
                   style: TextStyle(color: p.muted, fontSize: 12.5),
                 ),
                 const SizedBox(height: 14),
+                if (_chipResolutions.isNotEmpty || _chipQualities.isNotEmpty)
+                  _mediaSection(p),
                 TextField(
                   controller: _ratios,
                   autocorrect: false,

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../../app_state.dart';
 import '../../core/generation/model_type_override_store.dart' show ModelTypes;
 import '../../core/generation/user_param_override_store.dart';
+import 'widgets/manual_params_sheet.dart';
 import '../../core/models/active_model_capabilities.dart';
 import '../../core/models/param_spec.dart';
 import '../../models/model_config.dart';
@@ -156,13 +157,19 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
     return const <int>[5, 10];
   }
 
-  List<String> _availableResolutions() =>
-      widget.capabilities.params?.resolutions ?? const <String>[];
+  List<String> _availableResolutions() {
+    final ov = _override?.resolutions;
+    if (ov != null && ov.isNotEmpty) return ov;
+    return widget.capabilities.params?.resolutions ?? const <String>[];
+  }
 
   /// Качества генерации модели ('standard', 'hd' ...); пустой список —
-  /// чипсы качества не показываются.
-  List<String> _availableQualities() =>
-      widget.capabilities.params?.qualities ?? const <String>[];
+  /// чипсы качества не показываются. Override пользователя приоритетен.
+  List<String> _availableQualities() {
+    final ov = _override?.qualities;
+    if (ov != null && ov.isNotEmpty) return ov;
+    return widget.capabilities.params?.qualities ?? const <String>[];
+  }
 
   void _syncDefaultParams() {
     final ratios = _availableAspectRatios();
@@ -234,100 +241,49 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
     super.dispose();
   }
 
-  /// Диалог ручного ввода параметров (когда модель неизвестна каталогу):
-  /// пропорции и длительности сохраняются как override пользователя.
+  /// Ручной ввод параметров (когда модель неизвестна каталогу): открывает
+  /// шторку ManualParamsSheet с полями пропорций/длительностей и секцией
+  /// MEDIA (чипсы разрешений/качества из caps). Результат сохраняется
+  /// как override пользователя (UserParamOverrideStore).
   Future<void> _openManualParamsDialog() async {
     final normId = widget.capabilities.normalizedId;
     if (normId.isEmpty) return;
-    final isVideo = _isVideoMode;
-    final ratiosCtrl = TextEditingController(
-      text: _availableAspectRatios().join(', '),
+    final res = await showManualParamsSheet(
+      context,
+      initial: _override,
+      allowedResolutions: _availableResolutions(),
+      allowedQualities: _availableQualities(),
     );
-    final durationsCtrl = TextEditingController(
-      text: _availableDurations().join(', '),
-    );
-
-    final saved = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(
-          isVideo ? 'Параметры видео-модели' : 'Параметры модели изображений',
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: ratiosCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Пропорции (через запятую)',
-                hintText: '16:9, 9:16, 1:1',
-              ),
-            ),
-            if (isVideo) ...[
-              const SizedBox(height: 12),
-              TextField(
-                controller: durationsCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Длительность в секундах (через запятую)',
-                  hintText: '5, 10',
-                ),
-              ),
-            ],
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Сохранить'),
-          ),
-        ],
-      ),
-    );
-
-    if (saved != true) {
-      ratiosCtrl.dispose();
-      durationsCtrl.dispose();
-      return;
+    if (res == null || !res.hasAny) return;
+    // Тип модели фиксируем в override: спецификация только по разрешению
+    // иначе сбивала бы определение вида модели (видео -> изображение).
+    if (_isVideoMode) {
+      res.type = 'video';
+    } else if (_isImageMode) {
+      res.type = 'image';
     }
-    final ratios = ratiosCtrl.text
-        .split(',')
-        .map((s) => s.trim())
-        .where((s) => s.isNotEmpty)
-        .toList();
-    final durs = durationsCtrl.text
-        .split(',')
-        .map((s) => int.tryParse(s.trim()))
-        .whereType<int>()
-        .toList();
-    ratiosCtrl.dispose();
-    durationsCtrl.dispose();
-
-    final spec = ModelParameters(
-      type: isVideo ? 'video' : 'image',
-      aspectRatios:
-          ratios.isEmpty ? const <String>['1:1', '16:9', '9:16'] : ratios,
-      durations: isVideo && durs.isNotEmpty
-          ? DurationRange(discrete: durs)
-          : null,
-      confidence: 'manual',
-    );
-    await userParamOverrideStore.save(normId, spec);
+    await userParamOverrideStore.save(normId, res);
     if (!mounted) return;
     setState(() {
-      _override = spec;
-      if (spec.aspectRatios.isNotEmpty) {
-        _selectedRatio = spec.aspectRatios.first;
+      _override = res;
+      if (res.aspectRatios.isNotEmpty) {
+        _selectedRatio = res.aspectRatios.first;
         widget.onAspectRatioChanged?.call(_selectedRatio);
       }
-      final list = _availableDurations();
-      if (list.isNotEmpty) {
-        _selectedDuration = list.first;
+      final durs = _availableDurations();
+      if (durs.isNotEmpty) {
+        _selectedDuration = durs.first;
         widget.onDurationChanged?.call(_selectedDuration!);
+      }
+      final resList = _availableResolutions();
+      if (resList.isNotEmpty) {
+        _selectedResolution = resList.first;
+        widget.onResolutionChanged?.call(_selectedResolution!);
+      }
+      final qList = _availableQualities();
+      if (qList.isNotEmpty) {
+        _selectedQuality = qList.first;
+        widget.onQualityChanged?.call(_selectedQuality!);
       }
     });
   }

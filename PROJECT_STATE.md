@@ -1,6 +1,6 @@
 # GenTech Lab — Project State
 
-_Last updated: 2026-11-13_
+_Last updated: 2026-11-14_
 
 ## Repo & workflow
 - `~/gentech_work` — Flutter app `gentech_lab`.
@@ -56,15 +56,34 @@ _Last updated: 2026-11-13_
   media-чипсы не показываются (composer строится только для media-kind).
 
 ## Next stages
-- **Stage 2c (открыта)** — остатки (e):
-  - resolution в image-запросе: ключ `image_resolution` у Polza —
-    добавить перевод ключа в `ParameterTranslator.toImageBody` по
-    провайдеру/схеме (сейчас в image-запрос resolution не отправляется
-    намеренно, чтобы не ломать валидные запросы);
+- **Stage 2c (закрыта 2026-11-14, Stage 2c-2)** — остатки (e):
+  - ✅ resolution в image-запросе: `chat_screen._sendImage` пробрасывает
+    `ParamKeys.resolution` в `GenerationRequest.parameters`;
+    `ParameterTranslator.toImageBody` отдаёт безопасный дефолт
+    `'resolution'` (совместим с RouterAI и Media API), а
+    `ImagesApiExecutor` при `providerId == 'polza'` дополнительно
+    дублирует значение в `'image_resolution'` (реальное имя в Polza
+    Media API). Перевод сделан в исполнителе по существующему
+    провайдер-флагу — без хардкода по baseUrl и без ломки сигнатуры
+    транслятора.
+  - ✅ качества/разрешения в ручном override: `ManualParamsSheet` получил
+    секцию MEDIA — чипсы resolutions/qualities из caps.params (тап
+    подставляет значение в поле шторки); сохранение — прежним путём через
+    `UserParamOverrideStore`. `AdaptiveChatInputBar._openManualParamsDialog`
+    теперь открывает эту шторку и передаёт списки из caps; тип модели
+    фиксируется в override (видео-модель не превращается в image).
   - merge каталога подключения в `ParameterTranslator.translateWithCatalog`
-    (сейчас spec = user > curated; catalog-уровень добирается только
-    через caps.params в UI);
-  - качества/разрешения в диалоге ручного override параметров.
+    — перенесён в Stage 2c-3 (см. ниже).
+- **Stage 2c-3 (открыта)**: merge CatalogEntry в
+  `ParameterTranslator.translateWithCatalog` с приоритетом
+  `UserOverride > CatalogEntry > Curated > spec-defaults`. Требует
+  изменения сигнатуры: `GenerationRequest` не несёт CatalogEntry, а
+  `translateWithCatalog` не получает каталог — нужно передавать
+  CatalogEntry (либо уже разрешённую spec) новым опциональным параметром
+  из исполнителей (ImagesApiExecutor/AsyncJobExecutor) и добавить
+  field-level merge между user и curated в трансляторе. UI-уровень
+  (caps.params из ActiveModelController) уже перекрывает основные
+  сценарии, поэтому перенос безопасен и отложен.
 - **Stage 2d (открыта)**: sizes-chips — отложено, в API Polza/RouterAI
   нет отдельного поля 'sizes' (есть image_resolution/resolutions — это
   уже показывается как resolutions). Если появится источник — вернуться.
@@ -89,3 +108,10 @@ _Last updated: 2026-11-13_
   Polza: в mediaParams добавлены images_min/images_max/prompt_max_length.
   Существующие pricing_tiers/pricing_variants сохранены. UI пока эти поля
   не использует — данные для будущих stages.
+- 2026-11-14: Stage 2c-2. (1) image_resolution в image-запросе —
+  resolution пробрасывается в GenerationRequest.parameters (chat_screen),
+  toImageBody отдаёт 'resolution', ImagesApiExecutor для Polza
+  дополнительно дублирует в 'image_resolution'. (3) ManualParamsSheet
+  media-чипсы (resolution/quality) + подключение из AdaptiveChatInputBar.
+  (2) — отложено: merge CatalogEntry в translateWithCatalog требует
+  изменения сигнатуры, перенос в Stage 2c-3.
