@@ -103,6 +103,13 @@ abstract final class RouterAiParser {
 
     final (priceIn, priceOut, currency) = parsePrice(m);
 
+    // Цены по вариантам изображения (image_pricing) — опциональное поле
+    // mediaParams: если поля нет, карта пуста и поле не добавляется.
+    final pricingVariants = parseImagePricing(m);
+    final mediaParams = <String, dynamic>{
+      if (pricingVariants.isNotEmpty) 'pricing_variants': pricingVariants,
+    };
+
     return CatalogEntry(
       connectionId: connectionId,
       id: id,
@@ -118,6 +125,7 @@ abstract final class RouterAiParser {
       resolutions: media.resolutions,
       durations: media.durations,
       qualities: media.qualities,
+      mediaParams: mediaParams,
       priceIn: priceIn,
       priceOut: priceOut,
       currency: currency,
@@ -242,6 +250,23 @@ abstract final class RouterAiParser {
     return (null, null, null);
   }
 
+  /// Цены по вариантам изображения из m['image_pricing']:
+  /// [{"unit": "image", "variant": "1k", "price": 0.02}] -> {'1k': 0.02}.
+  /// Пустая карта — поля нет либо не разобрались.
+  static Map<String, double> parseImagePricing(Map<String, dynamic> m) {
+    final out = <String, double>{};
+    final raw = m['image_pricing'];
+    if (raw is! List) return out;
+    for (final e in raw) {
+      if (e is! Map) continue;
+      final price = asDouble(e['price']);
+      final variant = asStr(e['variant']) ?? '';
+      if (price == null || variant.isEmpty) continue;
+      if (!out.containsKey(variant)) out[variant] = price;
+    }
+    return out;
+  }
+
   /// Медиа-параметры записи формата RouterAI: плоские списки
   /// на верхнем уровне (пропорции, разрешения, длительности, качества).
   static ({
@@ -257,7 +282,10 @@ abstract final class RouterAiParser {
     try {
       // Основной формат RouterAI: плоские списки на верхнем уровне.
       aspectRatios = asStrList(m['supported_aspect_ratios']);
-      resolutions = asStrList(m['supported_resolutions']);
+      resolutions = asStrList(
+        asStrList(m['supported_image_sizes']).isNotEmpty
+            ? m['supported_image_sizes']
+            : m['supported_resolutions']);
       durations = asIntList(m['supported_durations']);
       qualities = asStrList(m['supported_qualities']);
       // Дополнительно принимаем блок parameters (как у Polza), если

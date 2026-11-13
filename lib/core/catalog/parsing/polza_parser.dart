@@ -104,6 +104,13 @@ abstract final class PolzaParser {
 
     final (priceIn, priceOut, currency) = parsePrice(m, topProvider);
 
+    // Цены по разрешению (top_provider.pricing.tiers) — опциональное поле
+    // mediaParams: если tiers нет, карта пуста и поле не добавляется.
+    final pricingTiers = parsePricingTiers(topProvider);
+    final mediaParams = <String, dynamic>{
+      if (pricingTiers.isNotEmpty) 'pricing_tiers': pricingTiers,
+    };
+
     return CatalogEntry(
       connectionId: connectionId,
       id: id,
@@ -120,6 +127,7 @@ abstract final class PolzaParser {
       durations: media.durations,
       qualities: media.qualities,
       maxReferenceImages: media.maxImages,
+      mediaParams: mediaParams,
       priceIn: priceIn,
       priceOut: priceOut,
       currency: currency,
@@ -258,6 +266,34 @@ abstract final class PolzaParser {
     return (null, null, null);
   }
 
+  /// Цены по разрешению из top_provider.pricing.tiers:
+  /// [{"conditions": ["image_resolution=1K"], "cost_rub": "0.05"}]
+  /// -> {'1K': 0.05}. Пустая карта — tiers нет либо не разобрались.
+  static Map<String, double> parsePricingTiers(
+    Map<String, dynamic>? topProvider,
+  ) {
+    final out = <String, double>{};
+    final pricing = asMap(topProvider?['pricing']);
+    final tiers = pricing?['tiers'];
+    if (tiers is! List) return out;
+    for (final t in tiers) {
+      if (t is! Map) continue;
+      final cost = asDouble(t['cost_rub']);
+      if (cost == null) continue;
+      final conditions = t['conditions'];
+      if (conditions is! List) continue;
+      for (final c in conditions) {
+        if (c == null) continue;
+        final s = c.toString().trim();
+        if (s.isEmpty) continue;
+        final eq = s.indexOf('=');
+        final key = eq >= 0 ? s.substring(eq + 1).trim() : s;
+        if (key.isNotEmpty && !out.containsKey(key)) out[key] = cost;
+      }
+    }
+    return out;
+  }
+
   /// Медиа-параметры записи: пропорции, разрешения, длительности
   /// (строки Polza вида '4' приводятся к int), качества и лимит
   /// референсных изображений.
@@ -277,7 +313,9 @@ abstract final class PolzaParser {
       final params = asMap(m['parameters']);
       if (params != null) {
         aspectRatios = asStrList(asMap(params['aspect_ratio'])?['values']);
-        resolutions = asStrList(asMap(params['resolution'])?['values']);
+        resolutions = asStrList(
+          asMap(params['image_resolution'])?['values'] ??
+              asMap(params['resolution'])?['values']);
         durations = asIntList(asMap(params['duration'])?['values']);
         qualities = asStrList(asMap(params['quality'])?['values']);
         maxImages = asInt(asMap(params['images'])?['max']);

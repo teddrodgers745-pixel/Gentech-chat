@@ -20,6 +20,8 @@ _Last updated: 2026-11-13_
   `none→off`, `minimal→low`, canonical sort, drop `off` при mandatory.
   Применено в polza/routerai/openrouter parsers + provider_catalog_service.
   APK `gentech-lab-v2-101609.apk`.
+- ✅ Media parsers fix: aspectRatios/resolutions для Polza/RouterAI
+  теперь парсятся из реальных полей API (flux.2-pro, seedream-4.5 и др.).
 
 ## Current stage — Stage 2 (СПЛИТ на 2a и 2b)
 Исходная Stage 2 содержит 5 подцелей, разбиваем из-за разных risk-профилей:
@@ -64,3 +66,7 @@ _Last updated: 2026-11-13_
   и 2b (UX+media) для изоляции рисков.
 - 2026-11-13: Stage 2a закрыта. (a) lookup изолирован по connectionId;
   (d) reasoningLevels pass-through проверен и пофикшен.
+- 2026-11-13: медиа-парсеры пофикшены. polza_parser: params['resolution']
+  → params['image_resolution'] (реальное имя в API). routerai_parser:
+  supported_resolutions → supported_image_sizes. Добавлен парсинг цен по
+  разрешению в mediaParams['pricing_tiers'] / ['pricing_variants'].
