@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 
 import '../../../app_state.dart';
 import '../../../core/models/param_spec.dart';
+// ignore: unused_import не нужен: Palette используется в _mediaSection/_mediaChip.
+import '../../../theme.dart';
 
 /// Показывает нижнюю шторку ручного ввода параметров модели.
 /// Возвращает разобранный [ModelParameters] (confidence 'user') либо
