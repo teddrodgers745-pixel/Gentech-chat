@@ -39,8 +39,14 @@ class ActiveModelController extends ChangeNotifier {
         _supportsNativeSearch =
             supportsNativeSearch ?? SearchCapabilityResolver.supportsNativeSearch {
     _presetController.addListener(_onPresetChanged);
-    // Каталог подключения обновился после sync — пересчитываем
-    // возможности активной модели (см. _onCatalogChanged).
+    // Stage 2b (b): подписка на завершение sync уже реализована в ходе 2a —
+    // ProviderCatalogService уведомляет слушателей после успешной
+    // синхронизации, контроллер пересчитывает _resolve для активной модели
+    // и вызывает notifyListeners() без рестарта (_onCatalogChanged).
+    // Race guard — существующий механизм токена в _resolve
+    // (token = ++_resolveToken; проверки после каждого await), отдельные
+    // мьютексы не нужны. Рекурсии нет: notifyListeners() не вызывает
+    // _resolve (слушатели — только перестройка UI). Подтверждено, не меняем.
     providerCatalog.addListener(_onCatalogChanged);
   }
 
@@ -232,6 +238,175 @@ class ActiveModelController extends ChangeNotifier {
     return 'global';
   }
 
+  /// Кандидаты идентификаторов для поиска параметров: нормализованный id,
+  /// сырой id и id без префикса провайдера.
+  static Set<String> _paramCandidates(String rawModelId, String norm) {
+    final trimmed = rawModelId.trim();
+    final shortId = ModelIdNormalizer.withoutProviderPrefix(
+      norm.isNotEmpty ? norm : trimmed,
+    );
+    return <String>{
+      if (norm.isNotEmpty) norm,
+      if (trimmed.isNotEmpty) trimmed,
+      if (shortId.isNotEmpty) shortId,
+    };
+  }
+
+  /// Пользовательский override параметров — приоритет 1 (Stage 2b (c)):
+  /// читается ВСЕГДА, поверх любых catalog/curated. null — override нет.
+  Future<ModelParameters?> _loadUserOverride(
+    String rawModelId,
+    String norm,
+  ) async {
+    for (final c in _paramCandidates(rawModelId, norm)) {
+      try {
+        final ov = await _overrides.load(c);
+        if (ov != null && ov.hasAny) return ov;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Параметры из курированного каталога и пресетов моделей — приоритет 3
+  /// (Stage 2b (c)); используется только для полей, не заполненных
+  /// override и каталогом подключения. Без пользовательского override:
+  /// он учитывается отдельно с высшим приоритетом в _mergeFieldLevel.
+  Future<ModelParameters?> _loadCuratedParams(
+    String rawModelId,
+    String norm,
+  ) async {
+    final candidates = _paramCandidates(rawModelId, norm);
+    try {
+      if (!CuratedParameterCatalog.isLoaded) {
+        await CuratedParameterCatalog.load();
+      }
+      for (final c in candidates) {
+        final found = CuratedParameterCatalog.byId(c);
+        if (found != null && (found.hasAny || found.confidence == 'skip')) {
+          return found;
+        }
+      }
+    } catch (_) {}
+    try {
+      final ps = await ModelPresets.load();
+      ModelPreset? preset;
+      for (final c in candidates) {
+        preset = ps.forModel(c);
+        if (preset != null) break;
+      }
+      if (preset == null) {
+        final shortId = ModelIdNormalizer.withoutProviderPrefix(
+          norm.isNotEmpty ? norm : rawModelId.trim(),
+        );
+        if (shortId.isNotEmpty) {
+          for (final item in ps.all) {
+            final itemShort = ModelIdNormalizer.withoutProviderPrefix(item.id);
+            if (itemShort == shortId ||
+                shortId.contains(itemShort) ||
+                itemShort.contains(shortId)) {
+              if (item.isMedia) {
+                preset = item;
+                break;
+              }
+            }
+          }
+        }
+      }
+      if (preset != null && preset.isMedia) {
+        return ModelParameters(
+          type: preset.type,
+          aspectRatios: List<String>.of(preset.aspectRatios),
+          durations: preset.durations.isEmpty
+              ? null
+              : DurationRange(discrete: List<int>.of(preset.durations)),
+          resolutions: List<String>.of(preset.resolutions),
+          confidence: 'auto',
+          isUserDefined: false,
+        );
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Слияние источников параметров ПО КАЖДОМУ ПОЛЮ отдельно (Stage 2b (c)).
+  /// Приоритет: [user] (UserParamOverrideStore, SharedPreferences) ->
+  /// [fromCatalog] (CatalogEntry подключения / кэш OpenRouter) ->
+  /// [curated] (курированный каталог + пресеты). Непустое значение более
+  /// приоритетного источника всегда побеждает; пустое поле источника
+  /// просто пропускается. Ограничения (constraints) объединяются из всех
+  /// источников. null — ни один источник не дал полей генерации
+  /// (кроме SKIP-спецификации: модель не генератор).
+  static ModelParameters? _mergeFieldLevel({
+    ModelParameters? user,
+    ModelParameters? fromCatalog,
+    ModelParameters? curated,
+  }) {
+    final out = ModelParameters.unknown();
+    String? type;
+    var confidence = 'low';
+    var userContributed = false;
+    var anyField = false;
+
+    void take(ModelParameters? src, bool isUserSrc, String srcConfidence) {
+      final s = src;
+      if (s == null) return;
+      void claim() {
+        anyField = true;
+        if (isUserSrc) userContributed = true;
+        confidence = srcConfidence;
+      }
+
+      if (out.aspectRatios.isEmpty && s.aspectRatios.isNotEmpty) {
+        out.aspectRatios = List<String>.of(s.aspectRatios);
+        claim();
+      }
+      final d = s.durations;
+      if ((out.durations == null || out.durations!.isEmpty) &&
+          d != null &&
+          !d.isEmpty) {
+        out.durations = DurationRange(
+          min: d.min,
+          max: d.max,
+          discrete: d.discrete == null ? null : List<int>.of(d.discrete!),
+        );
+        claim();
+      }
+      if (out.resolutions.isEmpty && s.resolutions.isNotEmpty) {
+        out.resolutions = List<String>.of(s.resolutions);
+        claim();
+      }
+      if (out.sizes.isEmpty && s.sizes.isNotEmpty) {
+        out.sizes = List<String>.of(s.sizes);
+        claim();
+      }
+      if (out.qualities.isEmpty && s.qualities.isNotEmpty) {
+        out.qualities = List<String>.of(s.qualities);
+        claim();
+      }
+      final t = s.type?.trim() ?? '';
+      if (t.isNotEmpty && (type == null || type!.isEmpty)) type = t;
+      for (final c in s.constraints) {
+        if (!out.constraints.contains(c)) out.constraints.add(c);
+      }
+    }
+
+    take(user, true, 'user');
+    take(fromCatalog, false, fromCatalog?.confidence ?? 'low');
+    take(curated, false, curated?.confidence ?? 'low');
+
+    if (!anyField) {
+      if (curated != null && curated.confidence == 'skip') {
+        return ModelParameters.unknown(confidence: 'skip');
+      }
+      return null;
+    }
+    out
+      ..type = type
+      ..confidence = userContributed ? 'user' : confidence
+      ..isUserDefined = userContributed;
+    return out;
+  }
+
   /// Принудительный поиск параметров модели в пользовательских override,
   /// курированном каталоге и ModelPresets (включая поиск без префикса
   /// провайдера и по совпадению семейства).
@@ -387,30 +562,47 @@ class ActiveModelController extends ChangeNotifier {
     }
     if (token != _resolveToken) return;
 
-    // ---- Параметры генерации ----
-    // Приоритет: каталог подключения -> кэш GenerationCapabilityResolver
-    // (OpenRouter, confidence='openrouter') -> override/курированный
-    // каталог/пресеты (_lookupCatalogParams).
+    // ---- Параметры генерации (Stage 2b (c): merge по каждому полю) ----
+    // Приоритет по КАЖДОМУ полю отдельно:
+    //  1. UserParamOverrideStore (SharedPreferences) — всегда побеждает;
+    //  2. динамический каталог: CatalogEntry подключения, пробелы добирает
+    //     кэш OpenRouter (GenerationCapabilityResolver);
+    //  3. курированный каталог и пресеты — только для пустых полей;
+    //  4. unknown/пусто. Reasoning обрабатывается отдельно ниже (2a):
+    //    явный пустой список уровней от провайдера там НЕ добирается.
     ModelParameters? params;
     String paramsSource = 'нет';
-    final fromCatalog = _paramsFromCatalog(entry);
-    if (fromCatalog != null && fromCatalog.hasAny) {
-      params = fromCatalog;
-      paramsSource = 'каталог (${entry!.capabilitiesSource})';
-    } else {
+    final userOverride = await _loadUserOverride(modelId, norm);
+    if (token != _resolveToken) return;
+
+    ModelParameters? dynamicParams = _paramsFromCatalog(entry);
+    var dynSource = 'каталог (${entry?.capabilitiesSource ?? 'нет'})';
+    if (dynamicParams == null) {
       try {
         // Догрузка дискового кэша: no-op, если уже загружен в main.dart.
         await GenerationCapabilityResolver.loadCache();
       } catch (_) {
         // Кэш недоступен — продолжаем с каталогом/пресетами.
       }
-      final genCap = GenerationCapabilityResolver.getCapability(norm);
+      final genCap = _genCapabilityQuietly(norm);
       if (genCap != null) {
-        params = _withConfidence(genCap, 'openrouter');
-        paramsSource = 'кэш OpenRouter';
+        dynamicParams = _withConfidence(genCap, 'openrouter');
+        dynSource = 'кэш OpenRouter';
       }
-      params ??= await _lookupCatalogParams(modelId, norm);
-      if (params != null) paramsSource = 'override/курированный каталог';
+    }
+
+    final curatedParams = await _loadCuratedParams(modelId, norm);
+    if (token != _resolveToken) return;
+
+    final merged = _mergeFieldLevel(
+      user: userOverride,
+      fromCatalog: dynamicParams,
+      curated: curatedParams,
+    );
+    if (merged != null) {
+      params = merged;
+      paramsSource =
+          userOverride != null ? 'override > $dynSource > curated' : dynSource;
     }
     if (token != _resolveToken) return;
 

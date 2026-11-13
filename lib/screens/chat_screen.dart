@@ -92,6 +92,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Выбранная длительность видео в секундах (режим генерации видео).
   int? _videoDuration;
 
+  /// Выбранное разрешение и качество генерации (чипсы панели ввода);
+  /// null — не выбрано (поле в запрос не отправляется).
+  String? _mediaResolution;
+  String? _mediaQuality;
+
   /// Активный исполнитель генерации изображений (для кнопки «стоп»).
   ImagesApiExecutor? _imageExecutor;
 
@@ -676,6 +681,13 @@ class _ChatScreenState extends State<ChatScreen> {
         <String, dynamic>{'role': 'user', 'content': txt},
       ],
       stream: false,
+      // Разрешение в image-запрос сознательно не добавляем: у части
+      // провайдеров (Polza) ключ — image_resolution, перевод ключа — 2c.
+      parameters: <String, dynamic>{
+        ParamKeys.aspectRatio: _aspectRatio,
+        if ((_mediaQuality ?? '').trim().isNotEmpty)
+          ParamKeys.quality: _mediaQuality!.trim(),
+      },
       estimatedUsd: estimate.estimatedUsd,
     );
     GenError? genError;
@@ -765,6 +777,10 @@ class _ChatScreenState extends State<ChatScreen> {
       parameters: <String, dynamic>{
         ParamKeys.aspectRatio: _aspectRatio,
         if (_videoDuration != null) ParamKeys.duration: _videoDuration!,
+        if ((_mediaResolution ?? '').trim().isNotEmpty)
+          ParamKeys.resolution: _mediaResolution!.trim(),
+        if ((_mediaQuality ?? '').trim().isNotEmpty)
+          ParamKeys.quality: _mediaQuality!.trim(),
       },
       estimatedUsd: CostEstimator.estimate(
         modelId: cfg.model,
@@ -1272,6 +1288,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       attachmentsBusy: _attachments.any((a) => a.isBusy),
                       onAspectRatioChanged: (r) => _aspectRatio = r,
                       onDurationChanged: (d) => _videoDuration = d,
+                      onResolutionChanged: (r) => _mediaResolution = r,
+                      onQualityChanged: (q) => _mediaQuality = q,
                       streaming: _streaming,
                       reasoningLevel: effectiveLevel.index,
                       onCycleReasoning: _cycleReasoning,

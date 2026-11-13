@@ -35,6 +35,8 @@ class AdaptiveChatInputBar extends StatefulWidget {
 
   final ValueChanged<String>? onAspectRatioChanged;
   final ValueChanged<int>? onDurationChanged;
+  final ValueChanged<String>? onResolutionChanged;
+  final ValueChanged<String>? onQualityChanged;
   final VoidCallback? onCycleReasoning;
   final VoidCallback? onToggleSearch;
   final VoidCallback? onToggleMic;
@@ -74,6 +76,7 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
   String _selectedRatio = '1:1';
   int? _selectedDuration;
   String? _selectedResolution;
+  String? _selectedQuality;
 
   /// Локальная копия сохранённого override параметров: чипсы обновляются
   /// сразу после сохранения, не дожидаясь пересборки контроллера модели.
@@ -154,6 +157,11 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
   List<String> _availableResolutions() =>
       widget.capabilities.params?.resolutions ?? const <String>[];
 
+  /// Качества генерации модели ('standard', 'hd' ...); пустой список —
+  /// чипсы качества не показываются.
+  List<String> _availableQualities() =>
+      widget.capabilities.params?.qualities ?? const <String>[];
+
   void _syncDefaultParams() {
     final ratios = _availableAspectRatios();
     if (ratios.isNotEmpty && !ratios.contains(_selectedRatio)) {
@@ -180,9 +188,25 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
       if (_selectedResolution == null ||
           !resolutions.contains(_selectedResolution)) {
         _selectedResolution = resolutions.first;
+        final r = _selectedResolution!;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onResolutionChanged?.call(r);
+        });
       }
     } else {
       _selectedResolution = null;
+    }
+    final qualities = _availableQualities();
+    if (qualities.isNotEmpty) {
+      if (_selectedQuality == null || !qualities.contains(_selectedQuality)) {
+        _selectedQuality = qualities.first;
+        final q = _selectedQuality!;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onQualityChanged?.call(q);
+        });
+      }
+    } else {
+      _selectedQuality = null;
     }
   }
 
@@ -346,6 +370,7 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
         final ratios = _availableAspectRatios();
         final durations = isVideo ? _availableDurations() : const <int>[];
         final resolutions = _availableResolutions();
+        final qualities = _availableQualities();
         final hasSpec =
             _override != null || widget.capabilities.params != null;
 
@@ -460,6 +485,22 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                                 : () {
                                     HapticFeedback.selectionClick();
                                     setState(() => _selectedResolution = res);
+                                    widget.onResolutionChanged?.call(res);
+                                  },
+                          ),
+                      if (qualities.isNotEmpty)
+                        for (final q in qualities)
+                          _paramChip(
+                            p: p,
+                            icon: Icons.auto_awesome_outlined,
+                            label: q,
+                            selected: _selectedQuality == q,
+                            onTap: widget.streaming
+                                ? null
+                                : () {
+                                    HapticFeedback.selectionClick();
+                                    setState(() => _selectedQuality = q);
+                                    widget.onQualityChanged?.call(q);
                                   },
                           ),
                       if (!hasSpec)

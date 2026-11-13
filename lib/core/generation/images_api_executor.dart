@@ -157,7 +157,12 @@ class ImagesApiExecutor extends GenerationExecutor {
     // generationSchema: какие поля и в каком виде ожидает провайдер.
     final providerId = ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '';
     final info = ModelInfoResolver.resolveModel(providerId, request.model);
-    final rawParams = <String, dynamic>{ParamKeys.aspectRatio: aspectRatio};
+    // Параметры из панели ввода (aspect_ratio, quality) поверх выбранной
+    // конструктором пропорции: нормализуются по схеме/каталогу модели.
+    final rawParams = <String, dynamic>{
+      ParamKeys.aspectRatio: aspectRatio,
+      ...request.parameters,
+    };
     final translated = await ParameterTranslator.translateWithCatalog(
       modelId: request.model,
       rawParams: rawParams,
