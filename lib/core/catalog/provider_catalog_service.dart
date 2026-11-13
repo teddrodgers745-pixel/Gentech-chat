@@ -16,6 +16,7 @@ import '../models/model_info.dart' show GenerationRoute;
 import '../models/param_spec.dart';
 import '../providers/heuristic_rules.dart';
 import 'catalog_entry.dart';
+import 'catalog_parsing.dart';
 import 'openrouter_reference_service.dart';
 
 export 'catalog_entry.dart'
@@ -285,12 +286,43 @@ class ProviderCatalogService extends ChangeNotifier {
     if (decoded is! Map) return out;
     final data = decoded['data'] ?? decoded['models'];
     if (data is! List) return out;
-    for (final e in data) {
-      if (e is! Map) continue;
+    // Известные провайдеры (polza.ai / routerai.ru / openrouter.ai)
+    // разбираются dispatcher'ом parseModelsList из catalog_parsing.dart;
+    // прочие провайдеры — прежним универсальным parseEntry, чтобы не
+    // сломать формат В (модели только с id/owned_by). Если dispatcher
+    // упал, разбор откатывается на старый parseEntry.
+    final String normUrl = connection.baseUrl.toLowerCase();
+    final bool knownProvider = normUrl.contains('polza.ai') ||
+        normUrl.contains('routerai.ru') ||
+        normUrl.contains('openrouter.ai');
+    if (knownProvider) {
       try {
-        final entry = parseEntry(e, connection);
-        if (entry.id.isNotEmpty) out.add(entry);
-      } catch (_) {}
+        final Map<String, dynamic> safeMap = decoded is Map<String, dynamic>
+            ? decoded
+            : Map<String, dynamic>.from(decoded as Map);
+        final parsed = parseModelsList(safeMap, connection.baseUrl);
+        for (final entry in parsed) {
+          if (entry.id.isNotEmpty) out.add(entry);
+        }
+      } catch (_) {
+        // fallback: старый parseEntry, если новый dispatcher упал
+        for (final e in data) {
+          if (e is! Map) continue;
+          try {
+            final entry = parseEntry(e, connection);
+            if (entry.id.isNotEmpty) out.add(entry);
+          } catch (_) {}
+        }
+      }
+    } else {
+      // провайдер не известен — старый универсальный parseEntry (формат В)
+      for (final e in data) {
+        if (e is! Map) continue;
+        try {
+          final entry = parseEntry(e, connection);
+          if (entry.id.isNotEmpty) out.add(entry);
+        } catch (_) {}
+      }
     }
     return out;
   }
