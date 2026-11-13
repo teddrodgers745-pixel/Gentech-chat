@@ -12,11 +12,28 @@ import 'reasoning_levels.dart';
 ///  - reasoning (словарь supported_efforts/default_effort/mandatory
 ///    либо флаг true) и supported_parameters (в том числе 'reasoning');
 ///  - плоские списки на верхнем уровне записи:
-///    supported_aspect_ratios, supported_resolutions,
+///    supported_aspect_ratios, supported_image_sizes/supported_resolutions,
 ///    supported_durations (строки вида '4' приводятся к int),
 ///    supported_qualities;
 ///  - цены за миллион токенов (prompt_per_million,
 ///    completion_per_million ...) либо объект pricing.
+///
+/// Куда кладутся данные:
+///  - прямые поля CatalogEntry: aspectRatios (supported_aspect_ratios /
+///    parameters.aspect_ratio.values), resolutions (supported_image_sizes /
+///    supported_resolutions / parameters.resolution.values), durations
+///    (supported_durations / parameters.duration.values), qualities
+///    (supported_qualities / parameters.quality.values);
+///  - mediaParams (Stage 2c-1; ТОЛЬКО ненулевые значения — если поле
+///    отсутствует либо null, ключ в карту НЕ добавляется):
+///    'pricing_variants' (Map<String, double> из image_pricing),
+///    'output_formats' (List<String> из supported_output_formats),
+///    'backgrounds' (List<String> из supported_backgrounds),
+///    'max_image_count' (int из max_image_count),
+///    'max_image_references' (int из max_image_references),
+///    'supports_image_references' (bool из supported_image_references),
+///    'image_seed' (bool из image_seed),
+///    'supports_negative_prompt' (bool из supports_negative_prompt).
 ///
 /// Битые значения приводятся к null/пустым спискам, разбор одной записи
 /// никогда не роняет остальные. Запись без идентификатора отбрасывается.
@@ -106,8 +123,24 @@ abstract final class RouterAiParser {
     // Цены по вариантам изображения (image_pricing) — опциональное поле
     // mediaParams: если поля нет, карта пуста и поле не добавляется.
     final pricingVariants = parseImagePricing(m);
+    // Stage 2c-1: дополнительные медиа-поля API. Значение null (или
+    // отсутствующее поле) — ключ в mediaParams не добавляется.
+    final outputFormats = asStrList(m['supported_output_formats']);
+    final backgrounds = asStrList(m['supported_backgrounds']);
+    final maxImageCount = asInt(m['max_image_count']);
+    final maxImageRefs = asInt(m['max_image_references']);
+    final imageRefs = m['supported_image_references'];
+    final imageSeed = m['image_seed'];
+    final negativePrompt = m['supports_negative_prompt'];
     final mediaParams = <String, dynamic>{
       if (pricingVariants.isNotEmpty) 'pricing_variants': pricingVariants,
+      if (outputFormats.isNotEmpty) 'output_formats': outputFormats,
+      if (backgrounds.isNotEmpty) 'backgrounds': backgrounds,
+      if (maxImageCount != null) 'max_image_count': maxImageCount,
+      if (maxImageRefs != null) 'max_image_references': maxImageRefs,
+      if (imageRefs is bool) 'supports_image_references': imageRefs,
+      if (imageSeed is bool) 'image_seed': imageSeed,
+      if (negativePrompt is bool) 'supports_negative_prompt': negativePrompt,
     };
 
     return CatalogEntry(

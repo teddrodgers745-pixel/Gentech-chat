@@ -13,8 +13,21 @@ import 'reasoning_levels.dart';
 ///    mandatory) и supported_parameters;
 ///  - top_provider.pricing — цены за миллион токенов (prompt_per_million,
 ///    completion_per_million ...);
-///  - parameters — медиа-поля: aspect_ratio, resolution, duration
-///    (строки вида '4' приводятся к int), quality, images.max.
+///  - parameters — медиа-поля: aspect_ratio, image_resolution/resolution,
+///    duration (строки вида '4' приводятся к int), quality, images.max.
+///
+/// Куда кладутся данные:
+///  - прямые поля CatalogEntry: aspectRatios (parameters.aspect_ratio.values),
+///    resolutions (parameters.image_resolution.values /
+///    parameters.resolution.values), durations (parameters.duration.values),
+///    qualities (parameters.quality.values), maxReferenceImages
+///    (parameters.images.max);
+///  - mediaParams (Stage 2c-1; ТОЛЬКО ненулевые значения — если поле
+///    отсутствует либо null, ключ в карту НЕ добавляется):
+///    'pricing_tiers' (Map<String, double> из top_provider.pricing.tiers),
+///    'images_min' (int из parameters.images.min),
+///    'images_max' (int из parameters.images.max),
+///    'prompt_max_length' (int из parameters.prompt.max_length).
 ///
 /// Битые значения приводятся к null/пустым спискам, разбор одной записи
 /// никогда не роняет остальные. Запись без идентификатора отбрасывается.
@@ -107,8 +120,22 @@ abstract final class PolzaParser {
     // Цены по разрешению (top_provider.pricing.tiers) — опциональное поле
     // mediaParams: если tiers нет, карта пуста и поле не добавляется.
     final pricingTiers = parsePricingTiers(topProvider);
+    // Stage 2c-1: images.min/max и prompt.max_length из
+    // top_provider.parameters (фоллбэк — parameters самой записи, как
+    // читает parseMediaParams). Значение null — ключ не добавляется.
+    final paramsMap =
+        asMap(topProvider?['parameters']) ?? asMap(m['parameters']);
+    final imagesMap = paramsMap == null ? null : asMap(paramsMap['images']);
+    final promptMap = paramsMap == null ? null : asMap(paramsMap['prompt']);
+    final imagesMin = imagesMap == null ? null : asInt(imagesMap['min']);
+    final imagesMax = imagesMap == null ? null : asInt(imagesMap['max']);
+    final promptMaxLength =
+        promptMap == null ? null : asInt(promptMap['max_length']);
     final mediaParams = <String, dynamic>{
       if (pricingTiers.isNotEmpty) 'pricing_tiers': pricingTiers,
+      if (imagesMin != null) 'images_min': imagesMin,
+      if (imagesMax != null) 'images_max': imagesMax,
+      if (promptMaxLength != null) 'prompt_max_length': promptMaxLength,
     };
 
     return CatalogEntry(

@@ -57,8 +57,6 @@ _Last updated: 2026-11-13_
 
 ## Next stages
 - **Stage 2c (открыта)** — остатки (e):
-  - sizes-чипсы: у CatalogEntry нет списка sizes (только mediaParams-карта
-    произвольного формата) — нужен парсер/источник размеров;
   - resolution в image-запросе: ключ `image_resolution` у Polza —
     добавить перевод ключа в `ParameterTranslator.toImageBody` по
     провайдеру/схеме (сейчас в image-запрос resolution не отправляется
@@ -67,6 +65,9 @@ _Last updated: 2026-11-13_
     (сейчас spec = user > curated; catalog-уровень добирается только
     через caps.params в UI);
   - качества/разрешения в диалоге ручного override параметров.
+- **Stage 2d (открыта)**: sizes-chips — отложено, в API Polza/RouterAI
+  нет отдельного поля 'sizes' (есть image_resolution/resolutions — это
+  уже показывается как resolutions). Если появится источник — вернуться.
 - **Stage 3:** сквозные регрессионные тесты каталога, контроллера, парсеров.
 
 ## Changelog
@@ -82,3 +83,9 @@ _Last updated: 2026-11-13_
   из 2a); (c) field-level priority merge (user > catalog > curated);
   (e) media params в чипсах композера + проброс resolution/quality в
   запрос (частично: sizes и image-resolution — в Stage 2c).
+- 2026-11-14: media-парсеры расширены. RouterAI: в mediaParams
+  добавлены output_formats/backgrounds/max_image_count/max_image_references/
+  supports_image_references/image_seed/supports_negative_prompt.
+  Polza: в mediaParams добавлены images_min/images_max/prompt_max_length.
+  Существующие pricing_tiers/pricing_variants сохранены. UI пока эти поля
+  не использует — данные для будущих stages.
