@@ -18,6 +18,7 @@ import '../providers/heuristic_rules.dart';
 import 'catalog_entry.dart';
 import 'catalog_parsing.dart';
 import 'openrouter_reference_service.dart';
+import 'parsing/reasoning_levels.dart';
 
 export 'catalog_entry.dart'
     show CatalogConnection, CatalogEntry, CatalogReasoning, CatalogSources;
@@ -438,7 +439,7 @@ class ProviderCatalogService extends ChangeNotifier {
   /// Уровни размышлений по умолчанию, когда провайдер заявил reasoning,
   /// но не перечислил уровни.
   static const List<String> _defaultReasoningLevels = <String>[
-    'none', 'low', 'medium', 'high',
+    'off', 'low', 'medium', 'high',
   ];
 
   /// Базовые уровни для формата RouterAI: reasoning заявлен в
@@ -471,11 +472,12 @@ class ProviderCatalogService extends ChangeNotifier {
           ) ??
           '';
       if (efforts.isNotEmpty) {
+        final mandatory = mapCandidate['mandatory'] == true;
         return (
           CatalogReasoning(
-            levels: efforts,
-            defaultEffort: def,
-            mandatory: mapCandidate['mandatory'] == true,
+            levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
+            defaultEffort: normalizeReasoningEffort(def),
+            mandatory: mandatory,
           ),
           false,
         );
@@ -483,8 +485,11 @@ class ProviderCatalogService extends ChangeNotifier {
       // Словарь без списка усилий: базовые уровни.
       return (
         CatalogReasoning(
-          levels: List<String>.of(_defaultReasoningLevels),
-          defaultEffort: def,
+          levels: normalizeReasoningLevels(
+            List<String>.of(_defaultReasoningLevels),
+            mandatory: mapCandidate['mandatory'] == true,
+          ),
+          defaultEffort: normalizeReasoningEffort(def),
           mandatory: mapCandidate['mandatory'] == true,
         ),
         false,
@@ -493,7 +498,11 @@ class ProviderCatalogService extends ChangeNotifier {
     if (sawMarker) {
       // reasoning: true — уровни не перечислены.
       return (
-        CatalogReasoning(levels: List<String>.of(_defaultReasoningLevels)),
+        CatalogReasoning(
+          levels: normalizeReasoningLevels(
+            List<String>.of(_defaultReasoningLevels),
+          ),
+        ),
         false,
       );
     }

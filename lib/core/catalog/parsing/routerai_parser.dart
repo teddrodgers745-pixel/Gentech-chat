@@ -3,6 +3,7 @@
 import 'dart:convert';
 
 import '../catalog_entry.dart';
+import 'reasoning_levels.dart';
 
 /// Терпимый парсер каталога моделей RouterAI (GET {baseUrl}/models).
 ///
@@ -29,7 +30,7 @@ abstract final class RouterAiParser {
   /// Уровни размышлений по умолчанию, когда провайдер заявил reasoning,
   /// но не перечислил уровни.
   static const List<String> defaultReasoningLevels = <String>[
-    'none', 'low', 'medium', 'high',
+    'off', 'low', 'medium', 'high',
   ];
 
   /// Базовые уровни, когда reasoning заявлен только в supported_parameters.
@@ -146,11 +147,12 @@ abstract final class RouterAiParser {
           ) ??
           '';
       if (efforts.isNotEmpty) {
+        final mandatory = candidate['mandatory'] == true;
         return (
           CatalogReasoning(
-            levels: efforts,
-            defaultEffort: def,
-            mandatory: candidate['mandatory'] == true,
+            levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
+            defaultEffort: normalizeReasoningEffort(def),
+            mandatory: mandatory,
           ),
           false,
         );
@@ -158,8 +160,11 @@ abstract final class RouterAiParser {
       // Словарь без списка усилий: базовые уровни.
       return (
         CatalogReasoning(
-          levels: List<String>.of(defaultReasoningLevels),
-          defaultEffort: def,
+          levels: normalizeReasoningLevels(
+            List<String>.of(defaultReasoningLevels),
+            mandatory: candidate['mandatory'] == true,
+          ),
+          defaultEffort: normalizeReasoningEffort(def),
           mandatory: candidate['mandatory'] == true,
         ),
         false,
@@ -168,7 +173,11 @@ abstract final class RouterAiParser {
     if (marker) {
       // reasoning: true — уровни не перечислены.
       return (
-        CatalogReasoning(levels: List<String>.of(defaultReasoningLevels)),
+        CatalogReasoning(
+          levels: normalizeReasoningLevels(
+            List<String>.of(defaultReasoningLevels),
+          ),
+        ),
         false,
       );
     }

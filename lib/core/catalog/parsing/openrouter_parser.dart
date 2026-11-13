@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import '../catalog_entry.dart';
+import 'reasoning_levels.dart';
 
 /// Разбирает одну модель из ответа OpenRouter API (`GET /api/v1/models`).
 /// Возвращает `null`, если у записи отсутствует валидный непустой `id`.
@@ -56,10 +57,10 @@ CatalogEntry? parseOpenRouterModel(Map<String, dynamic> m) {
   bool reasoningUnknown = false;
 
   if (efforts.isNotEmpty) {
-    reasoningLevels = efforts;
+    reasoningLevels = normalizeReasoningLevels(efforts, mandatory: mandatory);
     reasoning = CatalogReasoning(
-      levels: efforts,
-      defaultEffort: defaultEffort,
+      levels: reasoningLevels,
+      defaultEffort: normalizeReasoningEffort(defaultEffort),
       mandatory: mandatory,
     );
     reasoningCapabilityKnown = true;
