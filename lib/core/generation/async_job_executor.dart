@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:flutter/foundation.dart';
 
 import '../models/gen_error.dart';
+import '../models/model_info.dart' show GenerationRoute, Modality;
 import '../providers/model_catalog_adapter.dart';
 import '../providers/model_info_resolver.dart';
 import 'active_jobs_store.dart';
@@ -360,11 +361,18 @@ class AsyncJobExecutor extends GenerationExecutor {
       rawParams: rawParams,
       fallback: () => ParameterTranslator.translate(rawParams, info),
     );
-    final body = jsonEncode(<String, dynamic>{
+    // Stage 4.1 (c): для video-моделей добавляем 'async': true —
+    // создание асинхронной задачи защищает от 120-секундного клиентского
+    // таймаута на долгих видео-генерациях (Polza Media API).
+    final isVideoModel = info.outputModalities.contains(Modality.video) ||
+        info.route == GenerationRoute.asyncJob;
+    final bodyMap = <String, dynamic>{
       'model': request.model,
       'prompt': prompt,
       ...translated,
-    });
+      if (isVideoModel) 'async': true,
+    };
+    final body = jsonEncode(bodyMap);
     for (final path in _createPaths) {
       final uri = Uri.tryParse('$base$path');
       if (uri == null) continue;

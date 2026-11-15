@@ -599,7 +599,12 @@ class ProviderCatalogService extends ChangeNotifier {
     var source = entry.capabilitiesSource;
     var refUsed = false;
 
-    if (_needsReference(entry)) {
+    // Stage 4.1 (a), архитектурное правило: для известных провайдеров
+    // (polza/routerai/openrouter) справочник OpenRouter НЕ вызывается —
+    // используются ТОЛЬКО данные их /v1/models. null от провайдера =
+    // «провайдер не сказал»: чипсы скрыты, reasoning не добирается.
+    if (!_isKnownProviderConnection(connectionId, entry) &&
+        _needsReference(entry)) {
       try {
         await openRouterReference.loadCache();
         unawaited(openRouterReference.sync());
@@ -646,6 +651,30 @@ class ProviderCatalogService extends ChangeNotifier {
 
   static String _upgradedSource(String current, String candidate) =>
       current == CatalogSources.fallback ? candidate : current;
+
+  /// Stage 4.1 (a): относится ли подключение к известному провайдеру
+  /// (polza.ai / routerai.ru / openrouter.ai). Провайдер определяется
+  /// так же, как в parseModelsList — по baseUrl подключения с данным id
+  /// (_collectConnections). Минимально-инвазивный вариант: сигнатура
+  /// _needsReference не менялась, фильтр применён в lookup перед вызовом;
+  /// _fillFromReference остаётся для сторонних API (кастомный baseUrl).
+  bool _isKnownProviderConnection(String connectionId, CatalogEntry e) {
+    final ids = <String>{
+      connectionId.trim(),
+      if (e.connectionId.trim().isNotEmpty) e.connectionId.trim(),
+    };
+    if (ids.isEmpty) return false;
+    for (final c in _collectConnections()) {
+      if (!ids.contains(c.id)) continue;
+      final u = c.baseUrl.toLowerCase();
+      if (u.contains('polza.ai') ||
+          u.contains('routerai.ru') ||
+          u.contains('openrouter.ai')) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   static bool _needsReference(CatalogEntry e) =>
       e.reasoningUnknown ||

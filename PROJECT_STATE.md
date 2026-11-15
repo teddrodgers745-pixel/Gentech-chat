@@ -55,6 +55,14 @@ _Last updated: 2026-11-14_
   не потребовалось. Только image/video моделей: у chat-моделей
   media-чипсы не показываются (composer строится только для media-kind).
 
+## Архитектурные правила
+- Для known providers (polza/routerai/openrouter): только их /v1/models.
+  OpenRouter reference — только для сторонних API. null от провайдера =
+  чипсы скрыты, curated fallback ТОЛЬКО для media-полей (не reasoning).
+- Реактивная защита: 400 с metadata.raw → retry без поля (один раз).
+  warnings[] от Media API → in-memory blacklist по модели.
+- async:true для video — защита от 120-сек таймаута.
+
 ## Next stages
 - **Stage 2c (закрыта 2026-11-14, Stage 2c-2)** — остатки (e):
   - ✅ resolution в image-запросе: `chat_screen._sendImage` пробрасывает
@@ -115,3 +123,15 @@ _Last updated: 2026-11-14_
   media-чипсы (resolution/quality) + подключение из AdaptiveChatInputBar.
   (2) — отложено: merge CatalogEntry в translateWithCatalog требует
   изменения сигнатуры, перенос в Stage 2c-3.
+- 2026-11-15: Stage 4.1. (a) _needsReference skip для known providers
+  (polza/routerai/openrouter): фильтр в lookup по baseUrl подключения
+  (_isKnownProviderConnection), сигнатура _needsReference не менялась,
+  _fillFromReference сохранён для сторонних API. (b) retry 400 через
+  error.metadata.raw — реализован в реальном исполнителе POST
+  /chat/completions (ChatService._roundOnce): извлечение имени поля
+  (3 паттерна), один retry с удалением поля, повторный 400 — пользователю.
+  (c) async:true для video-моделей в AsyncJobExecutor._createJob.
+  (d) warnings[] медиа-ответа → in-memory blacklist
+  _unsupportedParamsByModel в ImagesApiExecutor (параметр не отправляется
+  повторно, лог '[media] dropped unsupported param'). Stage 2c пункт (2)
+  остаётся в Stage 2c-3.

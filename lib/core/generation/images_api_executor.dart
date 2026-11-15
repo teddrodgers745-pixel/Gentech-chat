@@ -3,6 +3,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/gen_error.dart';
 import '../models/generation_schema.dart';
@@ -37,6 +38,12 @@ import 'parameter_validation_exception.dart';
 /// сохраняются через [ArtifactMaterializer]). Ошибка — последнее событие
 /// [GenerationFailure] с типизированным [GenError].
 class ImagesApiExecutor extends GenerationExecutor {
+  /// Stage 4.1 (d): in-memory blacklist параметров, не поддерживаемых
+  /// моделью (выучено из 'warnings' медиа-ответа). Ключ — id модели,
+  /// значение — набор имён параметров.
+  static final Map<String, Set<String>> _unsupportedParamsByModel =
+      <String, Set<String>>{};
+
   /// Выбранная пропорция изображения ('1:1', '16:9', '9:16').
   final String aspectRatio;
 
@@ -97,6 +104,9 @@ class ImagesApiExecutor extends GenerationExecutor {
         yield GenerationFailure(_mapError(status, body));
         return;
       }
+      // Stage 4.1 (d): учим blacklist параметров из 'warnings': [...]
+      // ответа провайдера (в памяти, по модели).
+      _learnWarnings(body, request.model);
       final sources = _extractImageSourcesFromResponse(body);
       if (_cancelled) return;
       if (sources.isEmpty) {
@@ -168,6 +178,9 @@ class ImagesApiExecutor extends GenerationExecutor {
       rawParams: rawParams,
       fallback: () => ParameterTranslator.translate(rawParams, info),
     );
+    // Stage 4.1 (d): параметры, выученные как неподдерживаемые
+    // (warnings[] предыдущего ответа), повторно не отправляются.
+    _dropUnsupportedParams(translated, request.model);
     // Stage 2c: Polza Media API ожидает разрешение под ключом
     // 'image_resolution'; универсальный 'resolution' (RouterAI и общий
     // Media API) остаётся. Дублируем только для Polza — по провайдер-флагу
@@ -250,6 +263,62 @@ class ImagesApiExecutor extends GenerationExecutor {
     }
     if (cfg.isNotEmpty) body['image_config'] = cfg;
     return body;
+  }
+
+  /// Stage 4.1 (d): разбирает 'warnings': [...] из ответа провайдера.
+  /// Паттерны: "Параметр X не поддерживается" (en-варианты ниже) и
+  /// "X ignored". Извлечение терпимо к кавычкам/бэктикам; ложные имена
+  /// безвредны — на отправке отфильтровываются только реально
+  /// присутствующие в теле ключи.
+  static void _learnWarnings(String body, String modelId) {
+    Object? json;
+    try {
+      json = jsonDecode(body);
+    } catch (_) {
+      return;
+    }
+    if (json is! Map) return;
+    final raw = json['warnings'];
+    if (raw is! List) return;
+    const patterns = <RegExp>[
+      RegExp(
+        r'''(?:parameter|param)\s*[`'"]?(\w+)[`'"]?\s+(?:is\s+)?not supported''',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'''(?:parameter|param)\s*[`'"]?(\w+)[`'"]?\s+(?:is\s+)?unsupported''',
+        caseSensitive: false,
+      ),
+      RegExp(r'''[`'"]?(\w+)[`'"]?\s+ignored''', caseSensitive: false),
+    ];
+    for (final w in raw) {
+      if (w == null) continue;
+      final s = w.toString();
+      for (final re in patterns) {
+        final m = re.firstMatch(s);
+        final name = m?.group(1);
+        if (name == null || name.isEmpty) continue;
+        final set =
+            _unsupportedParamsByModel.putIfAbsent(modelId, () => <String>{});
+        if (set.add(name)) {
+          debugPrint("[media] blacklist: '$name' for $modelId (warnings)");
+        }
+      }
+    }
+  }
+
+  /// Stage 4.1 (d): убирает из тела запроса параметры из blacklist модели.
+  static void _dropUnsupportedParams(
+    Map<String, dynamic> params,
+    String modelId,
+  ) {
+    final blocked = _unsupportedParamsByModel[modelId];
+    if (blocked == null || blocked.isEmpty) return;
+    for (final key in List<String>.of(params.keys)) {
+      if (!blocked.contains(key)) continue;
+      params.remove(key);
+      debugPrint("[media] dropped unsupported param '$key' for model $modelId");
+    }
   }
 
   @override

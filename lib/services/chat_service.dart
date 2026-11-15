@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
@@ -609,12 +610,8 @@ class ChatService {
     try {
       final base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
       final uri = Uri.parse('$base/chat/completions');
-      final req = http.Request('POST', uri);
-      req.headers.addAll({
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $apiKey',
-        'Accept': 'text/event-stream',
-      });
+      // Stage 4.1 (b): запрос создаётся непосредственно перед отправкой
+      // (см. блок ретрая ниже — один повтор при 400 с удалением поля).
       final builtin = _builtinToolsPayload();
       Map<String, dynamic> bodyMap = {
         'model': model,
@@ -674,11 +671,39 @@ class ChatService {
         if (!hasSearch) list.add(<String, dynamic>{'type': 'web_search'});
         bodyMap['tools'] = list;
       }
-      req.body = jsonEncode(bodyMap);
-
-      final resp = await client.send(req).timeout(_apiTimeout);
+      // Stage 4.1 (b): реактивный ретрай на 400. Тело ответа содержит
+      // error.metadata.raw вида "The parameter `duration` specified in
+      // the request is not valid" — извлекаем имя поля, убираем его из
+      // тела и отправляем ЕЩЁ РАЗ (ровно один retry, не цикл; повторный
+      // 400 возвращается пользователю как раньше).
+      final droppedParams = <String>{};
+      final requestHeaders = <String, String>{
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $apiKey',
+        'Accept': 'text/event-stream',
+      };
+      final firstReq = http.Request('POST', uri)
+        ..headers.addAll(requestHeaders);
+      firstReq.body = jsonEncode(bodyMap);
+      var resp = await client.send(firstReq).timeout(_apiTimeout);
+      String? resp400Body;
+      if (resp.statusCode == 400) {
+        final errBody = await resp.stream.bytesToString();
+        final param = _invalidParamFrom400(errBody);
+        if (param != null && droppedParams.add(param)) {
+          debugPrint("[retry] dropped param '$param' after 400");
+          bodyMap.remove(param);
+          final retryReq = http.Request('POST', uri)
+            ..headers.addAll(requestHeaders);
+          retryReq.body = jsonEncode(bodyMap);
+          resp = await client.send(retryReq).timeout(_apiTimeout);
+        } else {
+          resp400Body = errBody;
+        }
+      }
       if (resp.statusCode != 200) {
-        final body = await resp.stream.bytesToString();
+        final body = resp400Body ??
+            await resp.stream.bytesToString();
         throw ChatServiceException(
           _describeError(resp.statusCode, body),
           statusCode: resp.statusCode,
@@ -988,6 +1013,45 @@ class ChatService {
   }
 
   String _scalar(Object? v) => v?.toString() ?? '';
+
+  /// Stage 4.1 (b): имя невалидного поля тела из ответа 400.
+  /// Источник текста — error.metadata.raw (формат Polza), фоллбэк —
+  /// error.message. Паттерны: "The parameter `X` specified",
+  /// "invalid ... parameter 'X'", "Unknown parameter: X".
+  /// null — имя поля определить не удалось (ретрай не выполняется).
+  static String? _invalidParamFrom400(String body) {
+    var raw = body;
+    try {
+      final j = jsonDecode(body);
+      if (j is Map) {
+        final err = j['error'];
+        if (err is Map) {
+          final md = err['metadata'];
+          final mdRaw = md is Map ? md['raw'] : null;
+          if (mdRaw is String && mdRaw.trim().isNotEmpty) {
+            raw = mdRaw;
+          } else if (err['message'] is String) {
+            raw = err['message'] as String;
+          }
+        } else if (j['message'] is String) {
+          raw = j['message'] as String;
+        }
+      }
+    } catch (_) {}
+    final s = raw.trim();
+    if (s.isEmpty) return null;
+    const patterns = <RegExp>[
+      RegExp(r'The parameter `(\w+)` specified'),
+      RegExp(r'''invalid.*parameter.*['"](\w+)['"]''', caseSensitive: false),
+      RegExp(r'''Unknown.*parameter:?\s*['"]?(\w+)''', caseSensitive: false),
+    ];
+    for (final re in patterns) {
+      final m = re.firstMatch(s);
+      final name = m?.group(1);
+      if (name != null && name.isNotEmpty) return name;
+    }
+    return null;
+  }
 
   String _describeError(int code, String body) {
     switch (code) {
