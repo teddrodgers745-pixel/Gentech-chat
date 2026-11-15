@@ -135,3 +135,5 @@ _Last updated: 2026-11-15_
   остаётся в Stage 2c-3.
 - 2026-11-15: Stage 2c-3. ParameterTranslator теперь принимает итоговые
   merged params из контроллера (User > Catalog > Curated).
+- 2026-11-15: фикс 401. Ключ и baseUrl теперь берутся из активного пресета
+  (preset.apiKey/baseUrl), а не из глобальных settings, если пресет заполнен.

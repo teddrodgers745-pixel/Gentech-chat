@@ -60,12 +60,22 @@ EffectiveConfig effectiveConfig() {
 
   final pr = presets.active;
   if (pr != null && pr.id != PresetStore.defaultPresetId) {
-    final url = pr.baseUrl.trim().isNotEmpty
+    // Фикс 401: адрес и ключ берутся ИЗ ОДНОГО источника — та же логика
+    // выбора подключения, что в ActiveModelController._catalogConnectionId.
+    // Пресет используется целиком, только если он заполнен ПОЛНОСТЬЮ
+    // (baseUrl и apiKey); иначе подключение целиком из глобальных настроек
+    // (с прежним фоллбэком на Polza-сессию). Прежнее по-полевое смешивание
+    // (адрес пресета + ключ из настроек/Polza) отправляло запрос на адрес
+    // пресета с чужим или устаревшим ключом -> «Неверный API-ключ (401)»,
+    // хотя авторизация Polza была активна.
+    final presetFilled =
+        pr.baseUrl.trim().isNotEmpty && pr.apiKey.trim().isNotEmpty;
+    final url = presetFilled
         ? pr.baseUrl.trim()
         : (settings.baseUrl.trim().isNotEmpty
             ? settings.baseUrl.trim()
             : (polzaKey.isNotEmpty ? polzaUrl : ''));
-    final key = pr.apiKey.trim().isNotEmpty
+    final key = presetFilled
         ? pr.apiKey.trim()
         : (settings.apiKey.trim().isNotEmpty
             ? settings.apiKey.trim()
