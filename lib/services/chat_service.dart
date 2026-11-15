@@ -1040,7 +1040,7 @@ class ChatService {
     } catch (_) {}
     final s = raw.trim();
     if (s.isEmpty) return null;
-    const patterns = <RegExp>[
+    final patterns = <RegExp>[
       RegExp(r'The parameter `(\w+)` specified'),
       RegExp(r'''invalid.*parameter.*['"](\w+)['"]''', caseSensitive: false),
       RegExp(r'''Unknown.*parameter:?\s*['"]?(\w+)''', caseSensitive: false),

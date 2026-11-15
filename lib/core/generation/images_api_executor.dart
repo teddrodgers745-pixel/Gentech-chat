@@ -280,7 +280,7 @@ class ImagesApiExecutor extends GenerationExecutor {
     if (json is! Map) return;
     final raw = json['warnings'];
     if (raw is! List) return;
-    const patterns = <RegExp>[
+    final patterns = <RegExp>[
       RegExp(
         r'''(?:parameter|param)\s*[`'"]?(\w+)[`'"]?\s+(?:is\s+)?not supported''',
         caseSensitive: false,
