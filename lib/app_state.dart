@@ -59,6 +59,48 @@ EffectiveConfig effectiveConfig() {
   final polzaUrl = PolzaAuthService.polzaBaseUrl;
 
   final pr = presets.active;
+  // Фикс 401 (часть 2): при активной сессии Polza AI живой OAuth-токен
+  // (polzaAuth.accessToken) имеет приоритет над settings.apiKey и ключом
+  // пресета — иначе запросы уходили с устаревшим ключом из настроек либо
+  // пресета и падали с «Неверный API-ключ (401)», хотя
+  // polzaAuth.isAuthenticated был true. Исключение — явный пресет
+  // ДРУГОГО провайдера: baseUrl содержит 'routerai.ru' и не содержит
+  // 'polza.ai' — такой пресет используется целиком (pr.baseUrl + pr.apiKey).
+  if (polzaAuth.isAuthenticated) {
+    final presetUrl = pr?.baseUrl.trim() ?? '';
+    final isUserPreset = pr != null && pr.id != PresetStore.defaultPresetId;
+    final otherProvider = isUserPreset &&
+        presetUrl.contains('routerai.ru') &&
+        !presetUrl.contains('polza.ai');
+    if (otherProvider) {
+      final presetKey = pr!.apiKey.trim();
+      final key = presetKey.isNotEmpty
+          ? presetKey
+          : (settings.apiKey.trim().isNotEmpty
+              ? settings.apiKey.trim()
+              : polzaKey);
+      return EffectiveConfig(
+        baseUrl: presetUrl,
+        apiKey: key,
+        model: pr.model.trim(),
+        systemPrompt: pr.systemPrompt,
+        stream: pr.stream,
+        temperature: pr.temperature,
+      );
+    }
+    // Пользователь залогинен в Polza AI и пресет не указывает явно на
+    // RouterAI: подключение целиком из Polza-сессии (токен + Base URL),
+    // модель и поведение — из активного пресета, как раньше.
+    return EffectiveConfig(
+      baseUrl: polzaUrl,
+      apiKey: polzaKey,
+      model: (pr?.model ?? settings.model).trim(),
+      systemPrompt:
+          isUserPreset ? pr!.systemPrompt : settings.systemPrompt,
+      stream: pr?.stream ?? true,
+      temperature: isUserPreset ? pr!.temperature : null,
+    );
+  }
   if (pr != null && pr.id != PresetStore.defaultPresetId) {
     // Фикс 401: адрес и ключ берутся ИЗ ОДНОГО источника — та же логика
     // выбора подключения, что в ActiveModelController._catalogConnectionId.

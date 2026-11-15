@@ -137,3 +137,7 @@ _Last updated: 2026-11-15_
   merged params из контроллера (User > Catalog > Curated).
 - 2026-11-15: фикс 401. Ключ и baseUrl теперь берутся из активного пресета
   (preset.apiKey/baseUrl), а не из глобальных settings, если пресет заполнен.
+- 2026-11-16: фикс 401 (часть 2). effectiveConfig() теперь отдаёт приоритет
+  polzaAuth.accessToken, если polzaAuth.isAuthenticated, кроме случая
+  явного RouterAI-пресета. Устранён конфликт со старыми ключами в
+  settings/preset.
