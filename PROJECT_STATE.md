@@ -1,6 +1,6 @@
 # GenTech Lab — Project State
 
-_Last updated: 2026-11-14_
+_Last updated: 2026-11-15_
 
 ## Repo & workflow
 - `~/gentech_work` — Flutter app `gentech_lab`.
@@ -82,16 +82,14 @@ _Last updated: 2026-11-14_
     фиксируется в override (видео-модель не превращается в image).
   - merge каталога подключения в `ParameterTranslator.translateWithCatalog`
     — перенесён в Stage 2c-3 (см. ниже).
-- **Stage 2c-3 (открыта)**: merge CatalogEntry в
-  `ParameterTranslator.translateWithCatalog` с приоритетом
-  `UserOverride > CatalogEntry > Curated > spec-defaults`. Требует
-  изменения сигнатуры: `GenerationRequest` не несёт CatalogEntry, а
-  `translateWithCatalog` не получает каталог — нужно передавать
-  CatalogEntry (либо уже разрешённую spec) новым опциональным параметром
-  из исполнителей (ImagesApiExecutor/AsyncJobExecutor) и добавить
-  field-level merge между user и curated в трансляторе. UI-уровень
-  (caps.params из ActiveModelController) уже перекрывает основные
-  сценарии, поэтому перенос безопасен и отложен.
+- ✅ **Stage 2c-3 (закрыта 2026-11-15)**: merge CatalogEntry в
+  `ParameterTranslator.translateWithCatalog`. Итоговые merged-параметры
+  контроллера (field-level: User > CatalogEntry > Curated) публикуются
+  в статическом реестре ActiveModelController (`mergedParamsFor`) —
+  GenerationRequest, исполнители и UI не менялись. Транслятор берёт
+  merged как базовый источник и применяет свежий UserOverride поверх
+  по полям (constraints объединяются); без merged — прежний путь
+  (UserOverride > Curated).
 - **Stage 2d (открыта)**: sizes-chips — отложено, в API Polza/RouterAI
   нет отдельного поля 'sizes' (есть image_resolution/resolutions — это
   уже показывается как resolutions). Если появится источник — вернуться.
@@ -135,3 +133,5 @@ _Last updated: 2026-11-14_
   _unsupportedParamsByModel в ImagesApiExecutor (параметр не отправляется
   повторно, лог '[media] dropped unsupported param'). Stage 2c пункт (2)
   остаётся в Stage 2c-3.
+- 2026-11-15: Stage 2c-3. ParameterTranslator теперь принимает итоговые
+  merged params из контроллера (User > Catalog > Curated).

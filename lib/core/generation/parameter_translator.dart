@@ -3,6 +3,7 @@
 import '../models/generation_schema.dart';
 import '../models/model_info.dart';
 import '../models/param_spec.dart';
+import 'active_model_controller.dart';
 import 'curated_parameter_catalog.dart';
 import 'parameter_validation_exception.dart';
 import 'user_param_override_store.dart';
@@ -162,10 +163,30 @@ abstract final class ParameterTranslator {
     required Map<String, dynamic> rawParams,
     required Map<String, dynamic> Function() fallback,
   }) async {
-    if (!CuratedParameterCatalog.isLoaded) {
-      await CuratedParameterCatalog.load();
+    // Stage 2c-3: итоговые merged-параметры контроллера (field-level:
+    // User > CatalogEntry/кэш OpenRouter > Curated) — базовый источник
+    // спецификации. Свежий пользовательский override применяется поверх
+    // по полям: свежее сохранение подхватывается даже до пересчёта
+    // контроллера.
+    var spec = ActiveModelController.mergedParamsFor(modelId);
+    if (spec != null && spec.hasAny) {
+      ModelParameters? user;
+      try {
+        user = await userParamOverrideStore.load(modelId);
+      } catch (_) {
+        user = null;
+      }
+      if (user != null && user.hasAny) {
+        spec = _userOverBase(user, spec);
+      }
+    } else {
+      // Контроллер ещё не разрешал модель либо merged пуст: прежний путь
+      // (UserOverride > Curated).
+      if (!CuratedParameterCatalog.isLoaded) {
+        await CuratedParameterCatalog.load();
+      }
+      spec = await resolveParams(modelId, userParamOverrideStore);
     }
-    final spec = await resolveParams(modelId, userParamOverrideStore);
     if (spec == null || !spec.hasAny) return fallback();
     final p = UniversalParams.fromRaw(rawParams);
     final durations = spec.durations;
@@ -173,6 +194,41 @@ abstract final class ParameterTranslator {
     final body = isVideo ? toVideoBody(p, spec) : toImageBody(p, spec);
     if (body.isEmpty) return fallback();
     return body;
+  }
+
+  /// Stage 2c-3: применяет пользовательский override ПОВЕРХ базовой
+  /// merged-спецификации по полям: непустое поле пользователя побеждает,
+  /// пустое поле пропускается (база добирает недостающие), ограничения
+  /// объединяются из обоих источников.
+  static ModelParameters _userOverBase(
+    ModelParameters user,
+    ModelParameters base,
+  ) {
+    final ud = user.durations;
+    final bd = base.durations;
+    final constraints = <String>[...base.constraints];
+    for (final c in user.constraints) {
+      if (!constraints.contains(c)) constraints.add(c);
+    }
+    return ModelParameters(
+      aspectRatios: user.aspectRatios.isNotEmpty
+          ? List<String>.of(user.aspectRatios)
+          : List<String>.of(base.aspectRatios),
+      durations: (ud != null && !ud.isEmpty) ? ud : bd,
+      resolutions: user.resolutions.isNotEmpty
+          ? List<String>.of(user.resolutions)
+          : List<String>.of(base.resolutions),
+      sizes: user.sizes.isNotEmpty
+          ? List<String>.of(user.sizes)
+          : List<String>.of(base.sizes),
+      qualities: user.qualities.isNotEmpty
+          ? List<String>.of(user.qualities)
+          : List<String>.of(base.qualities),
+      constraints: constraints,
+      type: (user.type?.trim().isNotEmpty ?? false) ? user.type : base.type,
+      confidence: 'user',
+      isUserDefined: true,
+    );
   }
 
   // ---------- правила ограничений ----------

@@ -89,6 +89,69 @@ class ActiveModelController extends ChangeNotifier {
 
   ActiveModelCapabilities get current => _current;
 
+  /// Stage 2c-3: реестр итоговых merged-параметров (field-level:
+  /// UserParamOverrideStore > CatalogEntry/кэш OpenRouter > curated),
+  /// опубликованных [_resolve]. [ParameterTranslator.translateWithCatalog]
+  /// читает их как базовый источник спецификации — GenerationRequest и
+  /// исполнители при этом не меняются (минимальный канал передачи без
+  /// правки UI).
+  static final Map<String, ModelParameters> _publishedMerged =
+      <String, ModelParameters>{};
+
+  /// Итоговые merged-параметры для модели (результат Stage 2b (c));
+  /// null — контроллер ещё не разрешал модель либо параметров нет.
+  /// Поиск: сырой id, затем нормализованный, затем без префикса провайдера.
+  static ModelParameters? mergedParamsFor(String modelId) {
+    final raw = modelId.trim();
+    if (raw.isEmpty || _publishedMerged.isEmpty) return null;
+    final norm = ModelIdNormalizer.normalize(raw);
+    final direct = _publishedMerged[raw] ?? _publishedMerged[norm];
+    if (direct != null) return direct;
+    final short = ModelIdNormalizer.withoutProviderPrefix(norm);
+    if (short.isEmpty || short == norm) return null;
+    return _publishedMerged[short];
+  }
+
+  /// Публикует КОПИЮ [params] под сырым, нормализованным и коротким
+  /// идентификатором модели; прежние записи этой модели снимаются,
+  /// пустые параметры регистрацию отменяют.
+  static void _publishMergedParams(
+    String rawModelId,
+    ModelParameters? params,
+  ) {
+    final raw = rawModelId.trim();
+    final norm = ModelIdNormalizer.normalize(rawModelId);
+    final short = ModelIdNormalizer.withoutProviderPrefix(norm);
+    _publishedMerged
+      ..remove(raw)
+      ..remove(norm)
+      ..remove(short);
+    final p = params;
+    if (p == null || !p.hasAny) return;
+    final d = p.durations;
+    final copy = ModelParameters(
+      aspectRatios: List<String>.of(p.aspectRatios),
+      durations: d == null
+          ? null
+          : DurationRange(
+              min: d.min,
+              max: d.max,
+              discrete:
+                  d.discrete == null ? null : List<int>.of(d.discrete!),
+            ),
+      resolutions: List<String>.of(p.resolutions),
+      sizes: List<String>.of(p.sizes),
+      qualities: List<String>.of(p.qualities),
+      constraints: List<String>.of(p.constraints),
+      type: p.type,
+      confidence: p.confidence,
+      isUserDefined: p.isUserDefined,
+    );
+    if (raw.isNotEmpty) _publishedMerged[raw] = copy;
+    if (norm.isNotEmpty) _publishedMerged[norm] = copy;
+    if (short.isNotEmpty) _publishedMerged[short] = copy;
+  }
+
   String get currentModelId => _presetController.activePreset?.model ?? '';
 
   Future<void> setModel(
@@ -710,6 +773,11 @@ class ActiveModelController extends ChangeNotifier {
     // Защита от гонки: за время await модель могла смениться again.
     if (token != _resolveToken) return;
 
+    // Stage 2c-3: публикация итоговых merged-параметров (user > каталог >
+    // curated, включая fallback медиа-дефолтов выше) для исполнителей —
+    // ParameterTranslator.translateWithCatalog берёт их как базовый
+    // источник спецификации (см. mergedParamsFor).
+    _publishMergedParams(modelId, params);
     _current = ActiveModelCapabilities(
       modelId: modelId,
       normalizedId: norm,
