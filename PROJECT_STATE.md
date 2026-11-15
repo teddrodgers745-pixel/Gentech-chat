@@ -144,3 +144,9 @@ _Last updated: 2026-11-15_
 - 2026-11-16: OAuth Polza. Добавлен refreshAccessToken() (grant_type=refresh_token),
   авто-refresh при 401 в chat_service (один retry), prompt=login в URL
   авторизации (браузер больше не подхватывает старую сессию).
+- 2026-11-16: ФИКС 401 НАЙДЕН. polzaBaseUrl исправлен с
+  https://api.polza.ai/api/v1 на https://polza.ai/api/v1. Причина:
+  api.polza.ai делает редирект на polza.ai, при котором dart:io
+  HttpClient вырезает заголовок Authorization. Добавлена миграция
+  старого URL в settings.baseUrl при загрузке. Добавлена очистка
+  'Bearer ' в ChatService._roundOnce на случай ручного ввода.

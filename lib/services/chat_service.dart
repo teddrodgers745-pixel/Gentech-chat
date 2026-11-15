@@ -704,9 +704,15 @@ class ChatService {
       // тела и отправляем ЕЩЁ РАЗ (ровно один retry, не цикл; повторный
       // 400 возвращается пользователю как раньше).
       final droppedParams = <String>{};
+      // Очистка ключа от случайного префикса 'Bearer ', вставленного
+      // пользователем вручную при создании пресета: иначе заголовок
+      // Authorization получался 'Bearer Bearer sk-...' и ломал авторизацию.
+      final cleanKey = apiKey
+          .trim()
+          .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
       final requestHeaders = <String, String>{
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer $apiKey',
+        'Authorization': 'Bearer $cleanKey',
         'Accept': 'text/event-stream',
       };
       final firstReq = http.Request('POST', uri)

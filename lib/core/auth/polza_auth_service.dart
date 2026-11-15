@@ -223,7 +223,11 @@ class SecureTokenStore {
 /// браузер через url_launcher -> проверка state -> обмен кода на токен
 /// -> сохранение в SecureTokenStore и применение к настройкам чата.
 class PolzaAuthService extends ChangeNotifier {
-  static const String polzaBaseUrl = 'https://api.polza.ai/api/v1';
+  // Фикс 401: правильный хост — polza.ai (без 'api.' поддомена).
+  // api.polza.ai отвечает редиректом на polza.ai, а dart:io HttpClient
+  // при редиректе на другой хост автоматически вырезает заголовок
+  // Authorization — запрос приходил без ключа и падал с 401.
+  static const String polzaBaseUrl = 'https://polza.ai/api/v1';
   static const String polzaAuthEndpoint = 'https://polza.ai/api/auth/authorize';
   static const String polzaTokenEndpoint = 'https://polza.ai/api/auth/token';
   static const String polzaBillingUrl = 'https://polza.ai/dashboard/billing';
@@ -282,6 +286,14 @@ class PolzaAuthService extends ChangeNotifier {
   /// Инициализация при старте приложения: токен и кэш профиля.
   Future<void> load() async {
     try {
+      // Фикс 401: миграция старого Base URL. Ранние сборки сохраняли
+      // в настройках 'https://api.polza.ai/api/v1' (redirect-хост);
+      // переводим на рабочий 'https://polza.ai/api/v1', чтобы
+      // providerCatalog и ручные пресеты ходили на правильный адрес.
+      if (settings.baseUrl.trim() == 'https://api.polza.ai/api/v1') {
+        settings.baseUrl = polzaBaseUrl;
+        await settings.saveNow();
+      }
       _accessToken = await _tokenStore.readAccessToken();
       _refreshToken = await _tokenStore.readRefreshToken();
       _account = await _tokenStore.readAccount();
