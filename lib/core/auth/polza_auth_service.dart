@@ -336,6 +336,10 @@ class PolzaAuthService extends ChangeNotifier {
         'code_challenge_method': 'S256',
         'state': pkce.state,
         'callback_url': redirectUri,
+        // prompt=login заставляет Polza всегда показывать форму входа:
+        // без него браузер молча возвращает прежнюю сессию и «открывается
+        // то же окно» вместо формы авторизации.
+        'prompt': 'login',
       },
     );
 
@@ -664,6 +668,54 @@ class PolzaAuthService extends ChangeNotifier {
       if (v != null) return v;
     }
     return null;
+  }
+
+  /// Обновляет access-токен по refresh-токену (grant_type=refresh_token,
+  /// RFC 6749 §6). Эндпоинт тот же, что при обмене кода на токен
+  /// (polzaTokenEndpoint). При успехе сохраняет новый access (и новый
+  /// refresh, если провайдер его выдал) в SecureTokenStore и обновляет
+  /// состояние сервиса. false — refresh-токена нет либо провайдер
+  /// отказал (пользователю нужен повторный вход через PKCE).
+  Future<bool> refreshAccessToken() async {
+    final rt = _refreshToken;
+    if (rt == null || rt.isEmpty) return false;
+    try {
+      final response = await _dio.post<dynamic>(
+        polzaTokenEndpoint,
+        data: <String, dynamic>{
+          'grant_type': 'refresh_token',
+          'refresh_token': rt,
+        },
+        options: Options(
+          headers: const <String, String>{
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          validateStatus: (s) => s != null && s < 500,
+        ),
+      );
+      final data = response.data;
+      if (response.statusCode != 200 || data is! Map) return false;
+      final newAccess = (data['key'] ??
+              data['access_token'] ??
+              data['api_key'] ??
+              data['token'] ??
+              '')
+          .toString()
+          .trim();
+      final newRefresh = (data['refresh_token'] ?? '').toString().trim();
+      if (newAccess.isEmpty) return false;
+      await _tokenStore.saveTokens(
+        accessToken: newAccess,
+        refreshToken: newRefresh.isEmpty ? null : newRefresh,
+      );
+      _accessToken = newAccess;
+      if (newRefresh.isNotEmpty) _refreshToken = newRefresh;
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Отмена текущего ожидания авторизации.

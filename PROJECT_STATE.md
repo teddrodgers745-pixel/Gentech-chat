@@ -141,3 +141,6 @@ _Last updated: 2026-11-15_
   polzaAuth.accessToken, если polzaAuth.isAuthenticated, кроме случая
   явного RouterAI-пресета. Устранён конфликт со старыми ключами в
   settings/preset.
+- 2026-11-16: OAuth Polza. Добавлен refreshAccessToken() (grant_type=refresh_token),
+  авто-refresh при 401 в chat_service (один retry), prompt=login в URL
+  авторизации (браузер больше не подхватывает старую сессию).

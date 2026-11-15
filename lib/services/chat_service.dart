@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
+import '../core/auth/polza_auth_service.dart';
 import '../core/generation/search_capability_resolver.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../core/providers/model_catalog_adapter.dart';
@@ -568,6 +569,32 @@ class ChatService {
           holder: holder,
         );
         return;
+      }
+      // OAuth Polza: 401 после истечения access-токена — пробуем обновить
+      // токен по refresh-токену и повторить запрос РОВНО ОДИН раз со
+      // свежим polzaAuth.accessToken. Не входим в цикл: неудача refresh
+      // возвращает ошибку 401 пользователю (нужен повторный вход).
+      if (e.statusCode == 401 &&
+          !_wasCancelled &&
+          baseUrl.trim().toLowerCase().contains('polza.ai') &&
+          polzaAuth.isAuthenticated) {
+        final refreshed = await polzaAuth.refreshAccessToken();
+        if (refreshed) {
+          debugPrint('[auth] refreshed polza token, retrying');
+          yield* _roundOnce(
+            baseUrl: baseUrl,
+            apiKey: polzaAuth.accessToken,
+            model: model,
+            history: history,
+            stream: stream,
+            temperature: temperature,
+            reasoningEffort: reasoningEffort,
+            tools: tools,
+            holder: holder,
+          );
+          return;
+        }
+        debugPrint('[auth] polza refresh failed, asking re-login');
       }
       rethrow;
     }
