@@ -483,26 +483,46 @@ class PolzaAuthService extends ChangeNotifier {
             'Content-Type': 'application/json',
             'Accept': 'application/json',
           },
+          // OAuth Debug: нужен СЫРОЙ текст ответа сервера, поэтому
+          // Dio не декодирует JSON автоматически (ResponseType.plain).
+          responseType: ResponseType.plain,
           validateStatus: (s) => s != null && s < 500,
         ),
       );
-      final data = response.data;
-      if (response.statusCode == 200 && data is Map) {
-        // Polza возвращает API-ключ в поле 'key' (pza_...), а не
-        // 'access_token'. Поддержан fallback на access_token/api_key/token
-        // на случай изменений провайдера. Refresh_token Polza не выдаёт:
-        // он не парсится и не сохраняется.
-        final token = (data['key'] ??
-                data['access_token'] ??
-                data['api_key'] ??
-                data['token'] ??
-                '')
-            .toString()
-            .trim();
-        if (token.isNotEmpty) {
-          final ok = await _finalizeLogin(accessToken: token);
-          return ok;
+      final Object? rawBody = response.data;
+      final String responseBody =
+          rawBody is String ? rawBody : (rawBody?.toString() ?? '');
+      Map<String, dynamic> data = <String, dynamic>{};
+      try {
+        final Object? decoded = jsonDecode(responseBody);
+        if (decoded is Map) {
+          data = Map<String, dynamic>.from(decoded);
         }
+      } catch (_) {}
+      // Polza возвращает API-ключ в поле 'key' (pza_...), а не
+      // 'access_token'. Поддержан fallback на access_token/api_key/token
+      // на случай изменений провайдера. Refresh_token Polza не выдаёт:
+      // он не парсится и не сохраняется.
+      final String access = (data['key'] ??
+              data['access_token'] ??
+              data['api_key'] ??
+              data['token'] ??
+              '')
+          .toString()
+          .trim();
+      // OAuth Debug (диагностика неверного токена): сырой ответ сервера
+      // и извлечённый ключ сохраняются в SharedPreferences и показываются
+      // в настройках Polza — пользователь может прислать скриншот.
+      await storage.setString('polza_oauth_debug_raw', responseBody);
+      await storage.setString('polza_oauth_debug_parsed', access);
+      if (access.isEmpty || !access.startsWith('pza_')) {
+        await storage.setString('polza_oauth_debug_error', 'key_not_pza');
+      } else {
+        await storage.setString('polza_oauth_debug_error', '');
+      }
+      if (response.statusCode == 200 && access.isNotEmpty) {
+        final ok = await _finalizeLogin(accessToken: access);
+        return ok;
       }
       // Пользователь мог вставить непосредственно ключ вида sk-...
       if (code.startsWith('sk-') || code.length >= 28) {
