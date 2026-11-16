@@ -1,6 +1,6 @@
 # GenTech Lab — Project State
 
-_Last updated: 2026-11-15_
+_Last updated: 2026-11-16_
 
 ## Repo & workflow
 - `~/gentech_work` — Flutter app `gentech_lab`.
@@ -150,3 +150,7 @@ _Last updated: 2026-11-15_
   HttpClient вырезает заголовок Authorization. Добавлена миграция
   старого URL в settings.baseUrl при загрузке. Добавлена очистка
   'Bearer ' в ChatService._roundOnce на случай ручного ввода.
+- 2026-11-16: Убран refreshAccessToken() из обработки 401 (Polza не
+  поддерживает grant_type=refresh_token). При 401 для Polza — разлогин.
+  В текст ошибки 401 добавлены URL и префикс токена для отладки.
+  baseUrl принудительно мигрирует на https://polza.ai/api/v1.

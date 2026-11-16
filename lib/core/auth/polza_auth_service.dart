@@ -299,6 +299,17 @@ class PolzaAuthService extends ChangeNotifier {
       _account = await _tokenStore.readAccount();
       if (_accessToken != null && _accessToken!.isNotEmpty) {
         _status = PolzaAuthStatus.authenticated;
+        // Фикс 401 (финал): при восстановлении сессии Base URL
+        // принудительно переводится на рабочий https://polza.ai/api/v1 —
+        // даже если в настройках остался старый адрес. Миграция должна
+        // срабатывать всегда, а не только для конкретной старой строки:
+        // запросы при активной сессии всё равно идут на polzaBaseUrl
+        // (effectiveConfig), поэтому здесь важно лишь синхронизировать
+        // настройки и каталог подключений.
+        if (settings.baseUrl.trim() != polzaBaseUrl) {
+          settings.baseUrl = polzaBaseUrl;
+          await settings.saveNow();
+        }
         // Если глобальный ключ ещё не задан, подставляем Polza автоматически.
         if (settings.apiKey.trim().isEmpty) applyToSettings();
         notifyListeners();

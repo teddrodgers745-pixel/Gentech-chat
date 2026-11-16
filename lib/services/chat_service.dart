@@ -91,7 +91,18 @@ class ChatServiceException implements Exception {
   /// (400, 401 ...); null — ошибка без статуса (сеть, таймаут).
   final int? statusCode;
 
-  ChatServiceException(this.message, {this.statusCode});
+  /// Отладка 401: полный URL запроса и маскированный префикс токена
+  /// (первые 8 + последние 8 символов) — помогают найти причину ошибки
+  /// авторизации, не раскрывая весь ключ в интерфейсе.
+  final String url;
+  final String tokenPrefix;
+
+  ChatServiceException(
+    this.message, {
+    this.statusCode,
+    this.url = '',
+    this.tokenPrefix = '',
+  });
 
   @override
   String toString() => message;
@@ -570,31 +581,19 @@ class ChatService {
         );
         return;
       }
-      // OAuth Polza: 401 после истечения access-токена — пробуем обновить
-      // токен по refresh-токену и повторить запрос РОВНО ОДИН раз со
-      // свежим polzaAuth.accessToken. Не входим в цикл: неудача refresh
-      // возвращает ошибку 401 пользователю (нужен повторный вход).
+      // Фикс 401 (финал): Polza НЕ поддерживает grant_type=refresh_token
+      // (сервер принимает только authorization_code), поэтому
+      // refreshAccessToken() всегда падал и лишь тормозил обработку
+      // ошибки. Вместо refresh — сбрасываем протухшую сессию (logout),
+      // чтобы пользователь залогинился заново, и пробрасываем ошибку
+      // дальше: её текст содержит URL и префикс токена для отладки.
       if (e.statusCode == 401 &&
           !_wasCancelled &&
-          baseUrl.trim().toLowerCase().contains('polza.ai') &&
-          polzaAuth.isAuthenticated) {
-        final refreshed = await polzaAuth.refreshAccessToken();
-        if (refreshed) {
-          debugPrint('[auth] refreshed polza token, retrying');
-          yield* _roundOnce(
-            baseUrl: baseUrl,
-            apiKey: polzaAuth.accessToken,
-            model: model,
-            history: history,
-            stream: stream,
-            temperature: temperature,
-            reasoningEffort: reasoningEffort,
-            tools: tools,
-            holder: holder,
-          );
-          return;
-        }
-        debugPrint('[auth] polza refresh failed, asking re-login');
+          baseUrl.trim().toLowerCase().contains('polza.ai')) {
+        debugPrint('[auth] polza 401: logout, нужен повторный вход');
+        try {
+          await polzaAuth.logout();
+        } catch (_) {}
       }
       rethrow;
     }
@@ -737,9 +736,22 @@ class ChatService {
       if (resp.statusCode != 200) {
         final body = resp400Body ??
             await resp.stream.bytesToString();
+        // Отладка 401: URL и маскированный токен попадают в текст ошибки.
+        final cond = cleanKey.length > 8;
+        final tokenPrefix = cond
+            ? '${cleanKey.substring(0, 8)}'
+                '...${cleanKey.substring(cleanKey.length - 8)}'
+            : 'SHORT...';
         throw ChatServiceException(
-          _describeError(resp.statusCode, body),
+          _describeError(
+            resp.statusCode,
+            body,
+            baseUrl: base,
+            tokenPrefix: tokenPrefix,
+          ),
           statusCode: resp.statusCode,
+          url: '$base/chat/completions',
+          tokenPrefix: tokenPrefix,
         );
       }
 
@@ -1086,10 +1098,17 @@ class ChatService {
     return null;
   }
 
-  String _describeError(int code, String body) {
+  String _describeError(
+    int code,
+    String body, {
+    String baseUrl = '',
+    String tokenPrefix = '',
+  }) {
+    if (code == 401) {
+      return 'Ошибка авторизации (401). URL: $baseUrl/chat/completions. '
+          'Токен: $tokenPrefix';
+    }
     switch (code) {
-      case 401:
-        return 'Неверный API-ключ (401). Проверьте его в настройках.';
       case 402:
         return 'Недостаточно средств на балансе (402).';
       case 429:
