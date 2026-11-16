@@ -35,6 +35,13 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
   String _debugParsed = '';
   String _debugError = '';
 
+  /// PKCE-диагностика: префиксы сгенерированного и отправленного
+  /// code_verifier, признак совпадения и код PKCE-ошибки.
+  String _cvGen = '';
+  String _cvSent = '';
+  String _cvMatch = '';
+  String _pkceError = '';
+
   /// Диалог «OAuth Debug» показывается не чаще одного раза за сессию.
   static bool _debugDialogShown = false;
 
@@ -58,11 +65,21 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
     final raw = await storage.getString('polza_oauth_debug_raw') ?? '';
     final parsed = await storage.getString('polza_oauth_debug_parsed') ?? '';
     final err = await storage.getString('polza_oauth_debug_error') ?? '';
+    final cvGen = await storage.getString('polza_oauth_debug_cv') ?? '';
+    final cvSent = await storage.getString('polza_oauth_debug_cv_sent') ?? '';
+    final cvMatch =
+        await storage.getString('polza_oauth_debug_pkce_match') ?? '';
+    final pkceErr =
+        await storage.getString('polza_oauth_debug_pkce_error') ?? '';
     if (!mounted) return;
     setState(() {
       _debugRaw = raw;
       _debugParsed = parsed;
       _debugError = err;
+      _cvGen = cvGen;
+      _cvSent = cvSent;
+      _cvMatch = cvMatch;
+      _pkceError = pkceErr;
     });
     if (_debugDialogShown ||
         _debugError.trim().isEmpty ||
@@ -98,11 +115,19 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
     await storage.setString('polza_oauth_debug_raw', '');
     await storage.setString('polza_oauth_debug_parsed', '');
     await storage.setString('polza_oauth_debug_error', '');
+    await storage.setString('polza_oauth_debug_cv', '');
+    await storage.setString('polza_oauth_debug_cv_sent', '');
+    await storage.setString('polza_oauth_debug_pkce_match', '');
+    await storage.setString('polza_oauth_debug_pkce_error', '');
     if (!mounted) return;
     setState(() {
       _debugRaw = '';
       _debugParsed = '';
       _debugError = '';
+      _cvGen = '';
+      _cvSent = '';
+      _cvMatch = '';
+      _pkceError = '';
     });
   }
 
@@ -217,6 +242,14 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
     final err = _debugError.trim();
     final text = 'DEBUG: key=$key | raw=$rawShort'
         '${err.isEmpty ? '' : ' | error=$err'}';
+    // PKCE-диагностика: префиксы сгенерированного и отправленного
+    // code_verifier, признак совпадения и код ошибки.
+    final bool hasPkce = _cvGen.isNotEmpty || _cvSent.isNotEmpty;
+    final String pkceLine = hasPkce
+        ? 'DEBUG PKCE: cv_gen=$_cvGen | cv_sent=$_cvSent | '
+            'match=${_cvMatch.isEmpty ? '?' : _cvMatch}'
+            '${_pkceError.isEmpty ? '' : ' | pkce_error=$_pkceError'}'
+        : '';
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: Container(
@@ -270,6 +303,22 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                 ),
               ),
             ),
+            if (pkceLine.isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: SelectableText(
+                  pkceLine,
+                  style: TextStyle(
+                    fontSize: 10,
+                    height: 1.4,
+                    color: p.text,
+                    fontFamily: 'JetBrains Mono',
+                    fontFamilyFallback: const ['monospace'],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),

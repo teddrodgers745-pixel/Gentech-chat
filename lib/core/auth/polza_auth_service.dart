@@ -236,6 +236,17 @@ class PolzaAuthService extends ChangeNotifier {
   /// Имя приложения, которое Polza ожидает в параметре app_name.
   static const String appName = 'GenTech Chat';
 
+  /// PKCE (RFC 7636): допустимый формат code_verifier —
+  /// 43-128 символов из [A-Za-z0-9-._~].
+  static final RegExp _cvPattern = RegExp(r'^[A-Za-z0-9\-._~]{43,128}$');
+
+  /// Префикс/суффикс code_verifier для debug-вывода
+  /// ('ABCD1234...WXYZ9876'); короткие строки возвращаются целиком.
+  static String _cvDebug(String cv) {
+    if (cv.length <= 16) return cv;
+    return '${cv.substring(0, 8)}...${cv.substring(cv.length - 8)}';
+  }
+
   final SecureTokenStore _tokenStore = SecureTokenStore();
   final Dio _dio = Dio(
     BaseOptions(
@@ -329,6 +340,28 @@ class PolzaAuthService extends ChangeNotifier {
 
     final pkce = PkcePair.generate();
     _pendingPkce = pkce;
+
+    // Диагностика PKCE (RFC 7636): code_verifier обязан быть 43-128
+    // символов из [A-Za-z0-9-._~]. Он хранится ТОЛЬКО в памяти
+    // (_pendingPkce) — шифрование (_seal) и хэширование к нему
+    // НЕ применяются, иначе сервер получил бы не тот verifier.
+    // Для отладки сохраняем первые/последние 8 символов verifier
+    // (ключ polza_oauth_debug_cv) и проверяем формат.
+    final String cv = pkce.codeVerifier;
+    final bool cvOk = _cvPattern.hasMatch(cv);
+    // Контроль: challenge = BASE64URL(SHA256(verifier)) без '=' на конце —
+    // пересчитываем и сравниваем с сохранённым (защита от ошибок генерации).
+    final bool challengeOk = pkce.codeChallenge ==
+        PkcePair._b64u(_Sha256.convert(ascii.encode(cv)));
+    debugPrint('[pkce] cv gen: len=${cv.length}, formatOk=$cvOk, '
+        'challengeOk=$challengeOk, ${_cvDebug(cv)}');
+    try {
+      await storage.setString('polza_oauth_debug_cv', _cvDebug(cv));
+      await storage.setString(
+        'polza_oauth_debug_pkce_error',
+        cvOk && challengeOk ? '' : 'cv_bad_format',
+      );
+    } catch (_) {}
 
     // Loopback-сервер (RFC 8252) для перехвата редиректа; при недоступности
     // порта используем custom scheme gentech://auth/polza/callback.
@@ -469,6 +502,32 @@ class PolzaAuthService extends ChangeNotifier {
   Future<bool> _exchangeCodeForToken(String code) async {
     final pkce = _pendingPkce;
     final redirectUri = _pendingRedirectUri ?? 'gentech://auth/polza/callback';
+    // Диагностика PKCE: code_verifier отправляется КАК ЕСТЬ из памяти
+    // (_pendingPkce) — он не проходит через SecureTokenStore._seal и не
+    // хэшируется перед отправкой. Для отладки сохраняем первые/последние
+    // 8 символов отправленного verifier и сравниваем с сохранённым
+    // при генерации: расхождение означает cv_mismatch.
+    final String cvSent = pkce?.codeVerifier ?? '';
+    try {
+      await storage.setString(
+        'polza_oauth_debug_cv_sent',
+        _cvDebug(cvSent),
+      );
+      final genStored =
+          await storage.getString('polza_oauth_debug_cv') ?? '';
+      final bool match =
+          genStored.isNotEmpty && genStored == _cvDebug(cvSent);
+      await storage.setString(
+        'polza_oauth_debug_pkce_match',
+        match ? 'true' : 'false',
+      );
+      await storage.setString(
+        'polza_oauth_debug_pkce_error',
+        match ? '' : 'cv_mismatch',
+      );
+      debugPrint('[pkce] cv sent: len=${cvSent.length}, '
+          'match=$match, ${_cvDebug(cvSent)}');
+    } catch (_) {}
     try {
       final response = await _dio.post<dynamic>(
         polzaTokenEndpoint,
