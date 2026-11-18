@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'core/auth/polza_auth_service.dart';
+import 'core/auth/routerai_auth_service.dart';
 import 'core/catalog/provider_catalog_service.dart';
 import 'core/search/search_strategy.dart';
 import 'core/storage.dart';
@@ -104,6 +105,31 @@ EffectiveConfig effectiveConfig() {
     return EffectiveConfig(
       baseUrl: polzaUrl,
       apiKey: polzaKey,
+      model: (pr?.model ?? settings.model).trim(),
+      systemPrompt:
+          isUserPreset ? pr.systemPrompt : settings.systemPrompt,
+      stream: pr?.stream ?? true,
+      temperature: isUserPreset ? pr.temperature : null,
+    );
+  }
+  if (routerAiAuth.isAuthenticated) {
+    // Приоритет 2: активна OAuth-сессия RouterAI (Polza не авторизован) —
+    // подключение целиком из RouterAI-сессии (ключ sk-... + Base URL
+    // routerai.ru/api/v1), модель и поведение — из активного пресета
+    // либо настроек, как в Polza-ветке.
+    final routerKey = routerAiAuth.accessToken.trim();
+    final routerUrl = RouterAiAuthService.routeraiBaseUrl;
+    final isUserPreset = pr != null && pr.id != PresetStore.defaultPresetId;
+    assert(() {
+      debugPrint(
+        '[auth] effectiveConfig: RouterAI OAuth активна, '
+        'ключ: ${routerKey.length >= 8 ? routerKey.substring(0, 8) : routerKey}',
+      );
+      return true;
+    }());
+    return EffectiveConfig(
+      baseUrl: routerUrl,
+      apiKey: routerKey,
       model: (pr?.model ?? settings.model).trim(),
       systemPrompt:
           isUserPreset ? pr.systemPrompt : settings.systemPrompt,
