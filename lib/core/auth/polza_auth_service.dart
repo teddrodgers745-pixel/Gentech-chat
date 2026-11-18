@@ -645,13 +645,43 @@ class PolzaAuthService extends ChangeNotifier {
       accessToken: accessToken,
       refreshToken: refreshToken,
     );
+    // Фикс 401 (финал): новый ключ pza_... применяется БЕЗУСЛОВНО.
+    // applyToSettings -> settings.setConnection перезаписывает
+    // settings.apiKey и settings.baseUrl свежими значениями, а активный
+    // Polza-пресет дополнительно обновляется тем же токеном: иначе запросы
+    // продолжали уходить со старым ключом из settings/preset и падали
+    // с 401, хотя polzaAuth.accessToken уже был правильным.
     applyToSettings();
+    await _updateActivePreset(accessToken);
     notifyListeners();
     await refreshAccountStatus();
     return true;
   }
 
+  /// Фикс 401 (финал): обновляет активный пресет свежим OAuth-токеном
+  /// Polza AI. Пресет считается «Polza-пресетом», если его baseUrl
+  /// указывает на polza.ai (включая старый api.polza.ai): его apiKey
+  /// и baseUrl перезаписываются принудительно, чтобы старый ключ не
+  /// уходил в запросах. Пресеты других провайдеров (RouterAI и т.п.)
+  /// не затрагиваются — их явные ключи должны продолжать работать.
+  Future<void> _updateActivePreset(String token) async {
+    try {
+      final pr = presets.active;
+      if (pr == null) return;
+      if (!pr.baseUrl.trim().toLowerCase().contains('polza.ai')) return;
+      pr.apiKey = token;
+      pr.baseUrl = polzaBaseUrl;
+      await presets.upsert(pr);
+    } catch (_) {
+      // Сбой хранилища не роняет вход: токен уже сохранён и применён.
+    }
+  }
+
   /// Применяет URL, ключ и дефолтную модель Polza AI к активным настройкам.
+  ///
+  /// Фикс 401 (финал): при успешном логине вызывается БЕЗУСЛОВНО —
+  /// settings.setConnection перезаписывает settings.apiKey и settings.baseUrl
+  /// свежим токеном pza_..., даже если там уже был сохранён старый ключ.
   void applyToSettings() {
     final token = _accessToken;
     if (token == null || token.isEmpty) return;

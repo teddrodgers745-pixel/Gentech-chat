@@ -110,6 +110,13 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
     });
   }
 
+  /// Первые 8 символов ключа для диагностики; пустой ключ — прочерк.
+  static String _prefix8(String raw) {
+    final s = raw.trim();
+    if (s.isEmpty) return '-';
+    return s.length <= 8 ? s : s.substring(0, 8);
+  }
+
   /// Очищает debug-лог (кнопка-крестик).
   Future<void> _clearDebug() async {
     await storage.setString('polza_oauth_debug_raw', '');
@@ -236,12 +243,23 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
   /// мелкий моноширинный шрифт (10), серым цветом темы.
   Widget _debugBlock(Palette p) {
     final raw = _debugRaw;
-    if (raw.trim().isEmpty) return const SizedBox.shrink();
+    // Диагностика ключей показывается и без сырого ответа — когда сессия
+    // активна либо ключ уже был распарсен (фикс 401).
+    final showKeys =
+        polzaAuth.isAuthenticated || _debugParsed.trim().isNotEmpty;
+    if (raw.trim().isEmpty && !showKeys) return const SizedBox.shrink();
     final rawShort = raw.length > 200 ? raw.substring(0, 200) : raw;
     final key = _debugParsed.trim().isEmpty ? 'null' : _debugParsed;
     final err = _debugError.trim();
-    final text = 'DEBUG: key=$key | raw=$rawShort'
-        '${err.isEmpty ? '' : ' | error=$err'}';
+    final text = raw.trim().isEmpty
+        ? 'DEBUG: raw=—'
+        : 'DEBUG: key=$key | raw=$rawShort'
+            '${err.isEmpty ? '' : ' | error=$err'}';
+    // Диагностика 401 (фикс): префиксы (8 символов) всех трёх источников
+    // ключа — сразу видно, какой ключ застрял в настройках или пресете.
+    final keysLine = 'DEBUG KEYS: polzaAuth=${_prefix8(polzaAuth.accessToken)}'
+        ' | settings=${_prefix8(settings.apiKey)}'
+        ' | preset=${_prefix8(presets.active?.apiKey ?? '')}';
     // PKCE-диагностика: префиксы сгенерированного и отправленного
     // code_verifier, признак совпадения и код ошибки.
     final bool hasPkce = _cvGen.isNotEmpty || _cvSent.isNotEmpty;
@@ -298,6 +316,20 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                   fontSize: 10,
                   height: 1.4,
                   color: p.muted,
+                  fontFamily: 'JetBrains Mono',
+                  fontFamilyFallback: const ['monospace'],
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: SelectableText(
+                keysLine,
+                style: TextStyle(
+                  fontSize: 10,
+                  height: 1.4,
+                  color: p.text,
                   fontFamily: 'JetBrains Mono',
                   fontFamilyFallback: const ['monospace'],
                 ),

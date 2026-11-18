@@ -91,6 +91,16 @@ EffectiveConfig effectiveConfig() {
     // Пользователь залогинен в Polza AI и пресет не указывает явно на
     // RouterAI: подключение целиком из Polza-сессии (токен + Base URL),
     // модель и поведение — из активного пресета, как раньше.
+    // Фикс 401 (финал): polzaAuth.accessToken здесь имеет НАИВЫСШИЙ
+    // приоритет — никакие старые settings.apiKey или pr.apiKey не могут
+    // его перебить (исключение — только явный RouterAI-пресет выше).
+    assert(() {
+      debugPrint(
+        '[auth] effectiveConfig: Polza OAuth активна, '
+        'ключ: ${polzaKey.length >= 8 ? polzaKey.substring(0, 8) : polzaKey}',
+      );
+      return true;
+    }());
     return EffectiveConfig(
       baseUrl: polzaUrl,
       apiKey: polzaKey,
