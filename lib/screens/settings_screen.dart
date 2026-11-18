@@ -14,6 +14,7 @@ import 'preset_edit_screen.dart';
 import '../theme.dart';
 import '../widgets/global_connection_section.dart';
 import '../widgets/polza_auth_section.dart';
+import '../widgets/routerai_auth_section.dart';
 import '../widgets/search_settings_section.dart';
 import '../ui/screens/mcp_screen.dart';
 import '../ui/screens/tools_screen.dart';
@@ -202,6 +203,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
             children: [
               const PolzaAuthSection(),
+              const RouterAiAuthSection(),
               const GlobalConnectionSection(),
               _section(p, 'ОЗВУЧКА'),
               SwitchListTile(

@@ -166,3 +166,8 @@ _Last updated: 2026-11-16_
 - 2026-11-18: OAuth Polza полностью перезаписан по фиксу Gemini 4 Argon.
   Исправлены race conditions в loopback-сервере, добавлен fallback на
   form-urlencoded, изоляция сессий PKCE. Токен сохраняется корректно.
+- 2026-11-18: Добавлен OAuth RouterAI. Создан RouterAiAuthService, UI для
+  входа (RouterAiAuthSection в настройках), обновлен effectiveConfig()
+  (приоритет: Polza -> RouterAI -> пресеты/settings). Ключ валидируется
+  префиксом sk-, обмен кода — POST /api/v1/auth/keys без grant_type,
+  ответ data['key']. Карточка подключена ниже Polza в settings_screen.
