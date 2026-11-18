@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'app_state.dart';
 import 'core/auth/polza_auth_service.dart';
+import 'core/auth/routerai_auth_service.dart';
 import 'core/catalog/provider_catalog_service.dart';
 import 'core/generation/generation_capability_resolver.dart';
 import 'core/generation/reasoning_capability_resolver.dart';
@@ -22,6 +23,7 @@ Future<void> main() async {
   await store.load();
   await presets.load();
   await polzaAuth.load();
+  await routerAiAuth.load();
   await _seedDefaultTools();
   runApp(const GenTechChatApp());
 
