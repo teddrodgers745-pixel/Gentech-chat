@@ -93,7 +93,6 @@ class PolzaAccountInfo {
 }
 
 /// Параметры рукопожатия OAuth 2.0 PKCE (RFC 7636).
-/// Живут исключительно в оперативной памяти на время сессии входа.
 class PkcePair {
   final String codeVerifier;
   final String codeChallenge;
@@ -105,10 +104,10 @@ class PkcePair {
     required this.state,
   });
 
-  /// code_verifier: 64 случайных байта -> base64url без паддинга
-  /// (86 символов из [A-Za-z0-9-_], внутри допустимых 43-128).
-  /// state: 16 случайных байта. code_challenge: BASE64URL(SHA256(verifier))
-  /// без '=' на конце — стандартный пакет crypto (метод S256).
+  /// code_verifier: 64 случайных байта -> base64url без паддинга (86
+  /// символов [A-Za-z0-9-_], допустимо 43-128). state: 16 случайных
+  /// байта. code_challenge: BASE64URL(SHA256(verifier)) — пакет crypto,
+  /// метод S256.
   static PkcePair generate() {
     final rnd = Random.secure();
     final verifierBytes = List<int>.generate(64, (_) => rnd.nextInt(256));
@@ -127,10 +126,9 @@ class PkcePair {
       base64Url.encode(bytes).replaceAll('=', '');
 }
 
-/// Хранилище OAuth-ключа Polza AI и кэша профиля. Токен хранится в
-/// обычном SharedPreferences БЕЗ самописного шифрования: pza_... — это
-/// долгоживущий API-ключ, а не краткоживущий access-токен. Старые
-/// запечатанные значения ('v1:...') игнорируются и затираются.
+/// Хранилище OAuth-ключа Polza AI и кэша профиля. Ключ — долгоживущий
+/// API-ключ формата pza_...; старые запечатанные значения ('v1:...')
+/// игнорируются и затираются.
 class SecureTokenStore {
   static const String _kAccessKey = 'polza_secure_access_token_v1';
   static const String _kAccountKey = 'polza_account_info_v1';
@@ -141,8 +139,6 @@ class SecureTokenStore {
   Future<String?> readAccessToken() async {
     final raw = await storage.getString(_kAccessKey);
     if (raw == null || raw.isEmpty) return null;
-    // Ключ Polza всегда начинается с 'pza_' — прочее (в т.ч. старое
-    // 'v1:...') невалидно и затирается.
     if (!raw.startsWith('pza_')) {
       await storage.setString(_kAccessKey, '');
       return null;
@@ -171,19 +167,21 @@ class SecureTokenStore {
   }
 }
 
-/// Сервис авторизации через Polza AI по протоколу OAuth 2.0 PKCE
-/// (официальная схема Polza):
-///  1. code_verifier — случайная строка 43-128 символов [A-Za-z0-9-._~];
-///  2. code_challenge = BASE64URL(SHA256(code_verifier)) без '=';
-///  3. системный браузер открывается на /api/auth/authorize с параметрами
-///     response_type=code, callback_url, code_challenge,
-///     code_challenge_method=S256, state, app_name;
-///  4. callback ловится локальным loopback-сервером (RFC 8252);
-///  5. код обменивается на POST /api/auth/token с JSON-телом
-///     {grant_type: 'authorization_code', code, code_verifier, callback_url};
-///  6. ответ {key: 'pza_...', user_id: 'usr_...'}: ключ сохраняется,
-///     статус становится authenticated, слушатели уведомляются.
-/// Refresh-токены Polza не выдаёт — их здесь нет вовсе.
+/// Сервис авторизации через Polza AI по OAuth 2.0 PKCE.
+///
+/// ФИНАЛЬНЫЙ ФИКС обмена кода (главная причина ошибки
+/// «Не удалось обменять код авторизации...»):
+///  1. callback_url генерируется ОДИН РАЗ при старте потока входа и
+///     хранится в переменной класса [_pendingRedirectUri]. Один и тот же
+///     URL отправляется и в /auth/authorize (параметр callback_url),
+///     и в POST /auth/token (поле callback_url) — строгое совпадение,
+///     которого требует сервер Polza.
+///  2. Ответ /auth/token читается как СЫРАЯ СТРОКА при любом статусе
+///     (validateStatus: (_) => true): тело 4xx доступно и показывается
+///     пользователю в формате 'HTTP 400: <сырой JSON>'.
+///  3. Ключ принимается только с префиксом 'pza_'.
+///  4. Перед отправкой в лог выводится callback_url и длина
+///     code_verifier.
 class PolzaAuthService extends ChangeNotifier {
   static const String polzaBaseUrl = 'https://polza.ai/api/v1';
   static const String polzaAuthEndpoint = 'https://polza.ai/api/auth/authorize';
@@ -194,11 +192,16 @@ class PolzaAuthService extends ChangeNotifier {
   /// Имя приложения, которое Polza ожидает в параметре app_name.
   static const String appName = 'GenTech Chat';
 
+  /// Ключи OAuth-отладки; их читает секция PolzaAuthSection.
+  static const String debugRawKey = 'polza_oauth_debug_raw';
+  static const String debugParsedKey = 'polza_oauth_debug_parsed';
+  static const String debugErrorKey = 'polza_oauth_debug_error';
+
   final SecureTokenStore _tokenStore = SecureTokenStore();
   final Dio _dio = Dio(
     BaseOptions(
-      connectTimeout: const Duration(seconds: 12),
-      receiveTimeout: const Duration(seconds: 12),
+      connectTimeout: const Duration(seconds: 15),
+      receiveTimeout: const Duration(seconds: 15),
     ),
   );
 
@@ -209,14 +212,15 @@ class PolzaAuthService extends ChangeNotifier {
   bool _loadingBalance = false;
 
   PkcePair? _pendingPkce;
+
+  /// ЕДИНЫЙ callback_url текущего потока входа: генерируется один раз
+  /// и отправляется и в authorize, и в token.
   String? _pendingRedirectUri;
   HttpServer? _loopbackServer;
   Timer? _timeoutTimer;
 
   PolzaAuthStatus get status => _status;
 
-  /// Ключ доступа: используется EffectiveConfig и секциями настроек
-  /// как ключ по умолчанию при активной сессии Polza AI.
   String get accessToken => _accessToken ?? '';
 
   bool get isAuthenticated =>
@@ -227,7 +231,7 @@ class PolzaAuthService extends ChangeNotifier {
   PolzaAccountInfo? get account => _account;
   String? get errorMessage => _errorMessage;
 
-  /// Маскированное представление токена для безопасного показа в UI.
+  /// Маскированное представление токена для показа в UI.
   String get maskedToken {
     final t = _accessToken ?? '';
     if (t.isEmpty) return '';
@@ -237,18 +241,16 @@ class PolzaAuthService extends ChangeNotifier {
     return '$prefix••••$suffix';
   }
 
-  /// Алиас по заданию: запуск входа в один клик.
+  /// Алиас: запуск входа в один клик.
   Future<void> login() => startOAuthPkceFlow();
 
-  /// Инициализация при старте приложения: восстановление сохранённой
-  /// сессии. Ошибка чтения не роняет запуск.
+  /// Восстановление сессии при старте приложения.
   Future<void> load() async {
     try {
       _accessToken = await _tokenStore.readAccessToken();
       _account = await _tokenStore.readAccount();
       if (_accessToken != null && _accessToken!.isNotEmpty) {
         _status = PolzaAuthStatus.authenticated;
-        // Если глобальный ключ ещё не задан, подставляем Polza автоматически.
         if (settings.apiKey.trim().isEmpty) applyToSettings();
         notifyListeners();
         unawaited(refreshAccountStatus());
@@ -258,8 +260,8 @@ class PolzaAuthService extends ChangeNotifier {
     }
   }
 
-  /// Запуск входа в один клик по OAuth 2.0 PKCE. Если сохранённый ключ
-  /// уже есть — сессия просто восстанавливается без браузера.
+  /// Запуск входа в один клик. Если ключ уже сохранён — сессия
+  /// восстанавливается без браузера.
   Future<void> startOAuthPkceFlow() async {
     if (_accessToken != null && _accessToken!.isNotEmpty) {
       _status = PolzaAuthStatus.authenticated;
@@ -275,16 +277,22 @@ class PolzaAuthService extends ChangeNotifier {
     final pkce = PkcePair.generate();
     _pendingPkce = pkce;
 
-    // Loopback-сервер (RFC 8252) для перехвата редиректа; при недоступности
-    // порта используется custom scheme gentech://auth/polza/callback.
-    var redirectUri = 'gentech://auth/polza/callback';
+    // callback_url генерируется ОДИН РАЗ и сохраняется в переменной
+    // класса: этот же URL уйдёт и в authorize, и в POST /auth/token.
+    final HttpServer server;
     try {
-      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-      _loopbackServer = server;
-      redirectUri = 'http://127.0.0.1:${server.port}/auth/polza/callback';
-      unawaited(_listenLoopback(server));
-    } catch (_) {}
+      server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    } catch (_) {
+      cancelAuthFlow(
+        error: 'Не удалось запустить локальный callback-сервер. '
+            'Проверьте сеть и повторите.',
+      );
+      return;
+    }
+    _loopbackServer = server;
+    final redirectUri = 'http://127.0.0.1:${server.port}/auth/polza/callback';
     _pendingRedirectUri = redirectUri;
+    unawaited(_listenLoopback(server));
 
     // Таймаут ожидания подтверждения в браузере — 5 минут.
     _timeoutTimer?.cancel();
@@ -323,12 +331,12 @@ class PolzaAuthService extends ChangeNotifier {
   Future<void> _listenLoopback(HttpServer server) async {
     try {
       await for (final HttpRequest request in server) {
-        final uri = request.uri;
         request.response.statusCode = HttpStatus.ok;
         request.response.headers.contentType =
             ContentType('text', 'html', charset: 'utf-8');
         request.response.write(_callbackHtml);
         await request.response.close();
+        final uri = request.uri;
         if (uri.path.contains('callback') ||
             uri.queryParameters.containsKey('code') ||
             uri.queryParameters.containsKey('key')) {
@@ -370,7 +378,7 @@ class PolzaAuthService extends ChangeNotifier {
 </html>
 ''';
 
-  /// Обрабатывает редирект от провайдера OAuth 2.0 PKCE.
+  /// Обрабатывает редирект от провайдера.
   Future<bool> handleCallbackUri(Uri uri) async {
     final params = uri.queryParameters;
     if (params.containsKey('error')) {
@@ -391,9 +399,9 @@ class PolzaAuthService extends ChangeNotifier {
       return false;
     }
 
-    // Провайдер мог вернуть готовый ключ прямо в callback — принимаем.
+    // Провайдер мог вернуть готовый ключ прямо в callback.
     final directKey = params['key'] ?? params['api_key'];
-    if (directKey != null && directKey.trim().isNotEmpty) {
+    if (directKey != null && directKey.trim().startsWith('pza_')) {
       return _finalizeLogin(accessToken: directKey.trim());
     }
 
@@ -405,57 +413,104 @@ class PolzaAuthService extends ChangeNotifier {
     return _exchangeCodeForToken(code);
   }
 
-  /// Обмен `authorization_code` + `code_verifier` (PKCE) на ключ Polza.
+  /// Обмен authorization_code + code_verifier (PKCE) на ключ Polza.
   Future<bool> _exchangeCodeForToken(String code) async {
     final pkce = _pendingPkce;
-    final redirectUri = _pendingRedirectUri ?? 'gentech://auth/polza/callback';
+    // Один и тот же callback_url, что был отправлен на /auth/authorize.
+    final callbackUrl = _pendingRedirectUri ?? '';
+    final codeVerifier = pkce?.codeVerifier ?? '';
+    debugPrint(
+      'Exchanging code. callback_url: $callbackUrl, '
+      'code_verifier length: ${codeVerifier.length}',
+    );
+    if (callbackUrl.isEmpty || codeVerifier.isEmpty) {
+      cancelAuthFlow(error: 'PKCE-сессия истекла. Запустите вход заново.');
+      return false;
+    }
     try {
-      final response = await _dio.post<dynamic>(
+      final response = await _dio.post<String>(
         polzaTokenEndpoint,
         data: <String, dynamic>{
           'grant_type': 'authorization_code',
           'code': code,
-          'code_verifier': pkce?.codeVerifier ?? '',
-          'callback_url': redirectUri,
+          'code_verifier': codeVerifier,
+          'callback_url': callbackUrl,
         },
         options: Options(
           headers: const <String, String>{
             'Content-Type': 'application/json',
             'Accept': 'application/json',
           },
+          // Сырое тело при ЛЮБОМ статусе — 4xx не теряется.
           responseType: ResponseType.plain,
-          validateStatus: (s) => s != null && s < 500,
+          validateStatus: (_) => true,
         ),
       );
-      final Object? rawBody = response.data;
-      final String responseBody =
-          rawBody is String ? rawBody : (rawBody?.toString() ?? '');
-      Map<String, dynamic> data = <String, dynamic>{};
-      try {
-        final Object? decoded = jsonDecode(responseBody);
-        if (decoded is Map) {
-          data = Map<String, dynamic>.from(decoded);
+      final body = response.data ?? '';
+      final status = response.statusCode ?? 0;
+      debugPrint('[auth] /auth/token -> HTTP $status: '
+          '${body.length > 500 ? '${body.substring(0, 500)}…' : body}');
+
+      if (status >= 200 && status < 300) {
+        Map<String, dynamic> data = <String, dynamic>{};
+        try {
+          final decoded = jsonDecode(body);
+          if (decoded is Map) {
+            data = Map<String, dynamic>.from(decoded);
+          }
+        } catch (_) {}
+        final key = (data['key'] ?? '').toString().trim();
+        final userId = (data['user_id'] ?? '').toString().trim();
+        if (key.startsWith('pza_')) {
+          await _saveDebug(raw: body, parsed: key, error: '');
+          return _finalizeLogin(accessToken: key, userId: userId);
         }
-      } catch (_) {}
-      // Официальный ответ Polza: {"key": "pza_...", "user_id": "usr_..."}.
-      final String key = (data['key'] ?? '').toString().trim();
-      final String userId = (data['user_id'] ?? '').toString().trim();
-      if (response.statusCode == 200 && key.isNotEmpty) {
-        return _finalizeLogin(accessToken: key, userId: userId);
+        // 200, но ключ не pza_: показываем сырой ответ.
+        await _saveDebug(raw: body, parsed: key, error: 'HTTP $status');
+        cancelAuthFlow(
+          error: 'Сервер Polza вернул ответ без ключа pza_. '
+              'HTTP $status: ${_clip(body)}',
+        );
+        return false;
       }
+
+      // Ошибка обмена (400 и т.п.): выводим СЫРОЙ ответ на экран.
+      await _saveDebug(raw: body, parsed: '', error: 'HTTP $status');
       cancelAuthFlow(
-        error: 'Не удалось обменять код авторизации на токен Polza AI.',
+        error: 'Не удалось обменять код авторизации на токен Polza AI. '
+            'HTTP $status: ${_clip(body)}',
       );
       return false;
-    } catch (_) {
+    } catch (e) {
+      await _saveDebug(raw: e.toString(), parsed: '', error: 'network');
       cancelAuthFlow(
-        error: 'Сетевая ошибка при обмене кода PKCE на токен Polza AI.',
+        error: 'Сетевая ошибка при обмене кода PKCE на токен Polza AI: $e',
       );
       return false;
     }
   }
 
-  /// Ручное завершение входа: ссылка редиректа, код авторизации либо ключ.
+  /// Обрезка сырого тела для сообщения об ошибке (читаемость в UI).
+  static String _clip(String raw) {
+    final t = raw.replaceAll('\n', ' ').trim();
+    return t.length > 800 ? '${t.substring(0, 800)}…' : t;
+  }
+
+  /// Запись OAuth-отладки в хранилище (её читает PolzaAuthSection);
+  /// сбой записи не влияет на поток входа.
+  Future<void> _saveDebug({
+    required String raw,
+    required String parsed,
+    required String error,
+  }) async {
+    try {
+      await storage.setString(debugRawKey, raw);
+      await storage.setString(debugParsedKey, parsed);
+      await storage.setString(debugErrorKey, error);
+    } catch (_) {}
+  }
+
+  /// Ручное завершение входа: ссылка редиректа, код либо ключ.
   Future<bool> completeWithCodeOrKey(String rawInput) async {
     final input = rawInput.trim();
     if (input.isEmpty) return false;
@@ -469,8 +524,12 @@ class PolzaAuthService extends ChangeNotifier {
       final uri = Uri.tryParse(input);
       if (uri != null) return handleCallbackUri(uri);
     }
-    if (_pendingPkce != null && !input.startsWith('sk-')) {
+    if (_pendingPkce != null) {
       return _exchangeCodeForToken(input);
+    }
+    if (!input.startsWith('pza_')) {
+      cancelAuthFlow(error: 'Ключ Polza должен начинаться с pza_.');
+      return false;
     }
     return _finalizeLogin(accessToken: input);
   }
@@ -483,6 +542,7 @@ class PolzaAuthService extends ChangeNotifier {
   }) async {
     _timeoutTimer?.cancel();
     _pendingPkce = null;
+    _pendingRedirectUri = null;
     await _stopLoopbackServer();
 
     _accessToken = accessToken;
@@ -504,9 +564,9 @@ class PolzaAuthService extends ChangeNotifier {
 
     await _tokenStore.saveTokens(accessToken: accessToken);
     await _tokenStore.saveAccount(_account!);
-    // Новый ключ pza_... применяется безусловно: settings.setConnection
-    // перезаписывает settings.apiKey и settings.baseUrl свежими значениями,
-    // а активный Polza-пресет обновляется тем же токеном.
+    // Свежий ключ pza_... применяется безусловно: settings.setConnection
+    // перезаписывает settings.apiKey и settings.baseUrl, а активный
+    // Polza-пресет обновляется тем же токеном.
     applyToSettings();
     await _updateActivePreset(accessToken);
     notifyListeners();
@@ -514,9 +574,8 @@ class PolzaAuthService extends ChangeNotifier {
     return true;
   }
 
-  /// Обновляет активный пресет свежим OAuth-токеном Polza AI. Пресет
-  /// считается «Polza-пресетом», если его baseUrl указывает на polza.ai;
-  /// пресеты других провайдеров (RouterAI и т.п.) не затрагиваются.
+  /// Обновляет активный пресет свежим OAuth-токеном Polza AI; пресеты
+  /// других провайдеров (RouterAI и т.п.) не затрагиваются.
   Future<void> _updateActivePreset(String token) async {
     try {
       final pr = presets.active;
@@ -525,13 +584,10 @@ class PolzaAuthService extends ChangeNotifier {
       pr.apiKey = token;
       pr.baseUrl = polzaBaseUrl;
       await presets.upsert(pr);
-    } catch (_) {
-      // Сбой хранилища не роняет вход: токен уже сохранён и применён.
-    }
+    } catch (_) {}
   }
 
-  /// Жёстко прописывает URL, ключ Polza AI и дефолтную модель
-  /// в активные настройки.
+  /// Прописывает URL, ключ Polza AI и модель в активные настройки.
   void applyToSettings() {
     final token = _accessToken;
     if (token == null || token.isEmpty) return;
@@ -661,6 +717,7 @@ class PolzaAuthService extends ChangeNotifier {
   void cancelAuthFlow({String? error}) {
     _timeoutTimer?.cancel();
     _pendingPkce = null;
+    _pendingRedirectUri = null;
     unawaited(_stopLoopbackServer());
     _errorMessage = error;
     _status = error != null
@@ -675,6 +732,7 @@ class PolzaAuthService extends ChangeNotifier {
   Future<void> logout() async {
     _timeoutTimer?.cancel();
     _pendingPkce = null;
+    _pendingRedirectUri = null;
     await _stopLoopbackServer();
     final oldToken = _accessToken;
     _accessToken = null;
