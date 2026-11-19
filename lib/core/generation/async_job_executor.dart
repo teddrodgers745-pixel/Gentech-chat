@@ -67,21 +67,29 @@ class AsyncJobExecutor extends GenerationExecutor {
   static const Duration _requestTimeout = Duration(seconds: 60);
 
   /// Пути создания задачи: первый удачный; 404/405 -> следующий.
+  /// '/media' — эндпоинт Polza Media API (POST {baseUrl}/media) для
+  /// создания видео-задачи; стоит первым, чтобы Polza не упиралась
+  /// в 404 на прочих путях.
   static const List<String> _createPaths = <String>[
+    '/media',
     '/videos/generations',
     '/generations',
     '/videos',
   ];
 
   /// Пути опроса статуса (к каждому добавляется идентификатор задачи).
+  /// '/media/{id}' — опрос статуса Polza Media API (GET {baseUrl}/media/{id}),
+  /// опрашивается каждые 3 секунды, пока status не станет completed/failed.
   static const List<String> _pollPrefixes = <String>[
+    '/media/',
     '/videos/',
     '/generations/',
     '/jobs/',
   ];
 
   static const Set<String> _doneStatuses = <String>{
-    'succeeded', 'success', 'complete', 'completed', 'done', 'finished', 'ok',
+    'succeeded', 'success', 'succeed', 'complete', 'completed', 'done',
+    'finished', 'ok',
   };
   static const Set<String> _failedStatuses = <String>{
     'failed', 'failure', 'error', 'canceled', 'cancelled', 'rejected',
@@ -92,7 +100,7 @@ class AsyncJobExecutor extends GenerationExecutor {
   /// для них генерируется оптимистичный процент по прошедшему времени.
   static const Set<String> _runningStatuses = <String>{
     'queued', 'pending', 'starting', 'processing', 'in_progress', 'running',
-    'created',
+    'created', 'submitted', 'generating', 'modifying', 'started',
   };
 
   /// Активные исполнители по jobId — для отмены из интерфейса
@@ -364,13 +372,17 @@ class AsyncJobExecutor extends GenerationExecutor {
     // Stage 4.1 (c): для video-моделей добавляем 'async': true —
     // создание асинхронной задачи защищает от 120-секундного клиентского
     // таймаута на долгих видео-генерациях (Polza Media API).
+    // AsyncJobExecutor по построению работает только с видео-задачами,
+    // поэтому 'async': true отправляется всегда: модель с нераспознанным
+    // маршрутом иначе упиралась бы в клиентский таймаут (вечные 0%).
     final isVideoModel = info.outputModalities.contains(Modality.video) ||
         info.route == GenerationRoute.asyncJob;
+    debugPrint('[PolzaVideo] create: async=true (video route: $isVideoModel)');
     final bodyMap = <String, dynamic>{
       'model': request.model,
       'prompt': prompt,
       ...translated,
-      if (isVideoModel) 'async': true,
+      'async': true,
     };
     final body = jsonEncode(bodyMap);
     for (final path in _createPaths) {
@@ -517,10 +529,12 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
     final url = _findVideoUrl(json, 0) ?? _urlFromMessage(json) ?? '';
     final pct = _findPercent(json, 0);
+    final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
+    // Видно в логах, что опрос идёт и статус задачи меняется.
+    debugPrint('[PolzaVideo] polling status: $status');
     if (url.isNotEmpty) {
       return _PollResult(videoUrl: url, percent: pct ?? 100);
     }
-    final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
     if (_failedStatuses.contains(status)) {
       return _PollResult(
         fatal: UnknownGenError(details: _pollErrorText(json)),

@@ -177,3 +177,17 @@ _Last updated: 2026-11-19_
   effectiveConfig() (Polza -> RouterAI -> пресет/настройки), при RouterAI
   OAuth выбор модели пишется через settings.setConnection; в
   _collectConnections добавлена RouterAI-сессия (id 'routerai').
+- 2026-11-19: КОМПЛЕКСНЫЙ ФИКС. (1) UI настроек: кнопка «Загрузить
+  модели» вынесена наверх, под карточки OAuth (секция «АКТИВНОЕ
+  ПОДКЛЮЧЕНИЕ», Polza -> RouterAI -> пресет/настройки); в блоке «Новое
+  подключение» осталась своя кнопка; автозагрузка каталога
+  (providerCatalog.sync force) при старте и после OAuth-логина
+  (PolzaAuthService/RouterAiAuthService._syncCatalog). (2) Фикс вечного
+  0% при генерации видео на Polza: добавлены пути создания '/media' и
+  опроса '/media/{id}' (GET /v1/media/{id} каждые 3 с), debugPrint
+  '[PolzaVideo] polling status', 'async': true отправляется всегда.
+  (3) Фикс reasoning пресетов RouterAI: если API не отдал
+  supported_efforts, уровни ['off','high'] вместо выдуманных градаций.
+  (4) Аудио-модели оставлены в каталоге. Для них потребуется отдельный
+  UI для ввода параметров (voice, format, text) — вынести в отдельную
+  задачу (Stage 2c/2d).

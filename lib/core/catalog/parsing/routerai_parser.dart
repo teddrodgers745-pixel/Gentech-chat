@@ -198,11 +198,12 @@ abstract final class RouterAiParser {
           false,
         );
       }
-      // Словарь без списка усилий: базовые уровни.
+      // Словарь без списка усилий: RouterAI не передал градации —
+      // не выдумываем их, используем минимальный набор off/high.
       return (
         CatalogReasoning(
           levels: normalizeReasoningLevels(
-            List<String>.of(defaultReasoningLevels),
+            List<String>.of(supportedParamsReasoningLevels),
             mandatory: candidate['mandatory'] == true,
           ),
           defaultEffort: normalizeReasoningEffort(def),
@@ -212,11 +213,12 @@ abstract final class RouterAiParser {
       );
     }
     if (marker) {
-      // reasoning: true — уровни не перечислены.
+      // reasoning: true — уровни не перечислены API: минимальный набор
+      // off/high вместо выдуманных градаций.
       return (
         CatalogReasoning(
           levels: normalizeReasoningLevels(
-            List<String>.of(defaultReasoningLevels),
+            List<String>.of(supportedParamsReasoningLevels),
           ),
         ),
         false,

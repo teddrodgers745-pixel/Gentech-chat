@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../app_state.dart';
+import '../catalog/provider_catalog_service.dart';
 import '../storage.dart';
 import 'polza_auth_service.dart' show PkcePair;
 
@@ -165,10 +166,27 @@ class RouterAiAuthService extends ChangeNotifier {
         _status = RouterAiAuthStatus.authenticated;
         if (settings.apiKey.trim().isEmpty) applyToSettings();
         notifyListeners();
+        _syncCatalog(_accessToken!);
       }
     } catch (_) {
       _status = RouterAiAuthStatus.unauthenticated;
     }
+  }
+
+  /// Автозагрузка каталога моделей RouterAI (providerCatalog.sync):
+  /// вызывается при восстановлении сессии на старте приложения и после
+  /// успешного OAuth-входа. Ошибки сети игнорируются.
+  void _syncCatalog(String token) {
+    try {
+      unawaited(providerCatalog.sync(
+        CatalogConnection(
+          id: 'routerai',
+          baseUrl: routeraiBaseUrl,
+          apiKey: token,
+        ),
+        force: true,
+      ));
+    } catch (_) {}
   }
 
   /// Запуск входа: поднимаем loopback-сервер и открываем страницу
@@ -568,6 +586,7 @@ class RouterAiAuthService extends ChangeNotifier {
     applyToSettings();
     await _updateActivePreset(accessToken);
     notifyListeners();
+    _syncCatalog(accessToken);
     return true;
   }
 
