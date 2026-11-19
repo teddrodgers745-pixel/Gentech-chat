@@ -1,6 +1,6 @@
 # GenTech Lab — Project State
 
-_Last updated: 2026-11-16_
+_Last updated: 2026-11-19_
 
 ## Repo & workflow
 - `~/gentech_work` — Flutter app `gentech_lab`.
@@ -171,3 +171,9 @@ _Last updated: 2026-11-16_
   (приоритет: Polza -> RouterAI -> пресеты/settings). Ключ валидируется
   префиксом sk-, обмен кода — POST /api/v1/auth/keys без grant_type,
   ответ data['key']. Карточка подключена ниже Polza в settings_screen.
+- 2026-11-19: Исправлена кнопка «Загрузить модели» при OAuth. Секция
+  «Подключение» переименована в «Новое подключение». Поля ручного ввода
+  предназначены для сторонних API. Кнопка берёт подключение из
+  effectiveConfig() (Polza -> RouterAI -> пресет/настройки), при RouterAI
+  OAuth выбор модели пишется через settings.setConnection; в
+  _collectConnections добавлена RouterAI-сессия (id 'routerai').

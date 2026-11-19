@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
 import '../core/auth/polza_auth_service.dart';
+import '../core/auth/routerai_auth_service.dart';
 import '../core/catalog/provider_catalog_service.dart';
 
 /// Секция «ПОДКЛЮЧЕНИЕ» в настройках: Base URL, API-ключ и модель
@@ -15,11 +16,12 @@ import '../core/catalog/provider_catalog_service.dart';
 /// Значения хранятся в SharedPreferences (ключи baseUrl/apiKey/model),
 /// поэтому старые данные пользователя сохраняются при обновлении.
 ///
-/// При активной сессии Polza AI (polzaAuth.isAuthenticated) поля Base URL,
-/// API-ключ и текстовый ввод модели скрываются: подключение работает через
-/// OAuth-токен и Base URL Polza, кнопка «Загрузить модели» автоматически
-/// использует токен, а выбор модели пишется через settings.setConnection
-/// (тот, в свою очередь, синхронизирует PresetStore).
+/// При активной OAuth-сессии (Polza либо RouterAI) поля Base URL,
+/// API-ключ и текстовый ввод модели скрываются: подключение работает
+/// через OAuth-токен и Base URL провайдера, кнопка «Загрузить модели»
+/// автоматически использует effectiveConfig(), а выбор модели пишется
+/// через settings.setConnection (тот, в свою очередь, синхронизирует
+/// PresetStore). Без OAuth-сессии поля остаются для сторонних API.
 class GlobalConnectionSection extends StatefulWidget {
   const GlobalConnectionSection({super.key});
 
@@ -74,14 +76,44 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
     );
   }
 
-  /// GET {Base URL}/models. Авторизация: при активной сессии Polza AI —
-  /// OAuth-токен и Base URL Polza, иначе ключ и адрес из полей секции.
+  /// GET {Base URL}/models. Источник подключения — effectiveConfig():
+  /// активная OAuth-сессия (Polza -> RouterAI), затем активный пресет
+  /// либо глобальные настройки. Поля ручного ввода — запасной источник
+  /// для сторонних API, когда effectiveConfig() не заполнен. Кнопка
+  /// больше не требует ручного ввода при активной OAuth-сессии.
   Future<void> _loadModels() async {
     if (_loadingModels) return;
-    final authed = polzaAuth.isAuthenticated;
-    final base = (authed ? PolzaAuthService.polzaBaseUrl : _url.text.trim())
-        .replaceAll(RegExp(r'/+$'), '');
-    final key = authed ? polzaAuth.accessToken.trim() : _key.text.trim();
+    final cfg = effectiveConfig();
+    final polzaAuthed = polzaAuth.isAuthenticated;
+    final routerAuthed = routerAiAuth.isAuthenticated;
+    String base;
+    String key;
+    String cid;
+    if (polzaAuthed &&
+        cfg.apiKey.trim() == polzaAuth.accessToken.trim()) {
+      // OAuth-сессия Polza — это активное подключение effectiveConfig().
+      base = cfg.baseUrl.trim();
+      key = cfg.apiKey.trim();
+      cid = 'polza';
+    } else if (routerAuthed &&
+        cfg.apiKey.trim() == routerAiAuth.accessToken.trim()) {
+      // OAuth-сессия RouterAI — это активное подключение effectiveConfig().
+      base = cfg.baseUrl.trim();
+      key = cfg.apiKey.trim();
+      cid = 'routerai';
+    } else if (cfg.baseUrl.trim().isNotEmpty &&
+        cfg.apiKey.trim().isNotEmpty) {
+      // Активный пресет либо заполненные глобальные настройки.
+      base = cfg.baseUrl.trim();
+      key = cfg.apiKey.trim();
+      cid = 'global';
+    } else {
+      // Ручное подключение стороннего API: поля секции.
+      base = _url.text.trim();
+      key = _key.text.trim();
+      cid = 'global';
+    }
+    base = base.replaceAll(RegExp(r'/+$'), '');
     if (base.isEmpty ||
         !(base.startsWith('http://') || base.startsWith('https://'))) {
       _snack('Base URL должен начинаться с http:// или https://');
@@ -98,11 +130,7 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
     // Параллельно обновляем каталог моделей этого подключения
     // (возможности и цены), не задерживая загрузку списка моделей.
     unawaited(providerCatalog.sync(
-      CatalogConnection(
-        id: authed ? 'polza' : 'global',
-        baseUrl: base,
-        apiKey: key,
-      ),
+      CatalogConnection(id: cid, baseUrl: base, apiKey: key),
       force: true,
     ));
     try {
@@ -164,10 +192,13 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge(<Listenable>[polzaAuth, settings]),
+      listenable:
+          Listenable.merge(<Listenable>[polzaAuth, routerAiAuth, settings]),
       builder: (context, _) {
         final p = settings.palette;
-        final authed = polzaAuth.isAuthenticated;
+        final polzaAuthed = polzaAuth.isAuthenticated;
+        final routerAuthed = routerAiAuth.isAuthenticated;
+        final authed = polzaAuthed || routerAuthed;
         final currentModel =
             authed ? settings.model.trim() : _model.text.trim();
         final dropdownValue =
@@ -176,7 +207,7 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'ПОДКЛЮЧЕНИЕ',
+              'НОВОЕ ПОДКЛЮЧЕНИЕ',
               style: TextStyle(
                 fontSize: 16,
                 fontWeight: FontWeight.w700,
@@ -187,8 +218,13 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
             const SizedBox(height: 10),
             Text(
               authed
-                  ? 'Активно подключение через аккаунт Polza AI.'
-                  : 'Используется, когда не выбран ни один пресет.',
+                  ? (polzaAuthed
+                      ? 'Активно подключение через аккаунт Polza AI. '
+                          'Кнопка «Загрузить модели» использует эту сессию.'
+                      : 'Активно подключение через аккаунт RouterAI. '
+                          'Кнопка «Загрузить модели» использует эту сессию.')
+                  : 'Поля для сторонних API: используются, когда не выбран '
+                      'ни один пресет и нет OAuth-сессии.',
               style: TextStyle(color: p.muted, fontSize: 13),
             ),
             if (!authed) ...[
@@ -285,12 +321,20 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
                   if (v == null) return;
                   _model.text = v;
                   _model.selection = TextSelection.collapsed(offset: v.length);
-                  if (authed) {
+                  if (polzaAuthed) {
                     // OAuth-сессия: адрес, токен и модель Polza AI пишутся
                     // в настройки напрямую (и синхронизируются в пресет).
                     settings.setConnection(
                       url: PolzaAuthService.polzaBaseUrl,
                       key: polzaAuth.accessToken,
+                      mdl: v,
+                    );
+                  } else if (routerAuthed) {
+                    // OAuth-сессия RouterAI: адрес, ключ и модель пишутся
+                    // в настройки напрямую (и синхронизируются в пресет).
+                    settings.setConnection(
+                      url: RouterAiAuthService.routeraiBaseUrl,
+                      key: routerAiAuth.accessToken,
                       mdl: v,
                     );
                   } else {

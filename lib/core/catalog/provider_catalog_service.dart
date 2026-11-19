@@ -10,6 +10,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../app_state.dart';
 import '../auth/polza_auth_service.dart';
+import '../auth/routerai_auth_service.dart';
 import '../generation/curated_parameter_catalog.dart';
 import '../models/model_id_normalizer.dart';
 import '../models/model_info.dart' show GenerationRoute;
@@ -244,8 +245,8 @@ class ProviderCatalogService extends ChangeNotifier {
     }
   }
 
-  /// Подключения из пресетов, общих настроек и активной Polza-сессии.
-  /// Дубликаты по паре (baseUrl, ключ) убираются.
+  /// Подключения из пресетов, общих настроек и активных OAuth-сессий
+  /// (Polza, RouterAI). Дубликаты по паре (baseUrl, ключ) убираются.
   List<CatalogConnection> _collectConnections() {
     final out = <CatalogConnection>[];
     final seen = <String>{};
@@ -264,6 +265,13 @@ class ProviderCatalogService extends ChangeNotifier {
       add('global', settings.baseUrl, settings.apiKey);
       if (polzaAuth.isAuthenticated) {
         add('polza', PolzaAuthService.polzaBaseUrl, polzaAuth.accessToken);
+      }
+      if (routerAiAuth.isAuthenticated) {
+        add(
+          'routerai',
+          RouterAiAuthService.routeraiBaseUrl,
+          routerAiAuth.accessToken,
+        );
       }
     } catch (_) {}
     return out;
