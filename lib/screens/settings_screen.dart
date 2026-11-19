@@ -1,15 +1,20 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+// ignore: unused_import
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+// ignore: unused_import
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
+// ignore: unused_import
 import '../core/auth/polza_auth_service.dart';
+// ignore: unused_import
 import '../core/auth/routerai_auth_service.dart';
+// ignore: unused_import
 import '../core/catalog/provider_catalog_service.dart';
 import '../core/storage.dart';
 import '../core/utils/currency_format.dart';
@@ -49,211 +54,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
-  // ---------- Активное подключение: «Загрузить модели» наверху ----------
-
-  bool _activeLoading = false;
-  String? _activeError;
-  List<String> _activeModels = const <String>[];
-
-  /// Активное подключение: (id, baseUrl, apiKey). Приоритет: OAuth-сессия
-  /// Polza -> OAuth-сессия RouterAI -> активный пресет -> глобальные
-  /// настройки. null — нет ни ключа, ни адреса.
-  (String, String, String)? _activeConnection() {
-    if (polzaAuth.isAuthenticated) {
-      return (
-        'polza',
-        PolzaAuthService.polzaBaseUrl,
-        polzaAuth.accessToken.trim(),
-      );
-    }
-    if (routerAiAuth.isAuthenticated) {
-      return (
-        'routerai',
-        RouterAiAuthService.routeraiBaseUrl,
-        routerAiAuth.accessToken.trim(),
-      );
-    }
-    final pr = presets.active;
-    if (pr != null &&
-        pr.id != PresetStore.defaultPresetId &&
-        pr.baseUrl.trim().isNotEmpty &&
-        pr.apiKey.trim().isNotEmpty) {
-      return (
-        'preset:${pr.id}',
-        pr.baseUrl.trim().replaceAll(RegExp(r'/+$'), ''),
-        pr.apiKey.trim(),
-      );
-    }
-    final base = settings.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    final key = settings.apiKey.trim();
-    if (base.isEmpty || key.isEmpty) return null;
-    return ('global', base, key);
-  }
-
-  /// Загружает модели АКТИВНОГО подключения: параллельно синхронизирует
-  /// каталог возможностей (providerCatalog.sync) и обновляет список
-  /// моделей для выбора.
-  Future<void> _loadActiveModels() async {
-    if (_activeLoading) return;
-    final conn = _activeConnection();
-    if (conn == null) {
-      _snack('Нет активного подключения: войдите или укажите ключ');
-      return;
-    }
-    final (cid, base, key) = conn;
-    setState(() {
-      _activeLoading = true;
-      _activeError = null;
-    });
-    unawaited(providerCatalog.sync(
-      CatalogConnection(id: cid, baseUrl: base, apiKey: key),
-      force: true,
-    ));
-    try {
-      final resp = await http
-          .get(
-            Uri.parse('$base/models'),
-            headers: <String, String>{
-              'Authorization': 'Bearer $key',
-              'Accept': 'application/json',
-            },
-          )
-          .timeout(const Duration(seconds: 30));
-      if (!mounted) return;
-      if (resp.statusCode != 200) {
-        setState(() {
-          _activeLoading = false;
-          _activeError = 'Ошибка ${resp.statusCode}. Проверьте ключ и адрес.';
-        });
-        return;
-      }
-      final ids = <String>{};
-      try {
-        final j = jsonDecode(resp.body);
-        if (j is Map && j['data'] is List) {
-          for (final e in (j['data'] as List)) {
-            String? id;
-            if (e is Map) {
-              final v = e['id'] ?? e['name'];
-              if (v is String && v.trim().isNotEmpty) id = v.trim();
-            } else if (e is String && e.trim().isNotEmpty) {
-              id = e.trim();
-            }
-            if (id != null) ids.add(id);
-          }
-        }
-      } catch (_) {}
-      final sorted = ids.toList()..sort();
-      if (!mounted) return;
-      setState(() {
-        _activeLoading = false;
-        _activeModels = sorted;
-        if (sorted.isEmpty) {
-          _activeError = 'Сервер не вернул ни одной модели.';
-        }
-      });
-    } on TimeoutException {
-      if (!mounted) return;
-      setState(() {
-        _activeLoading = false;
-        _activeError = 'Сервер не ответил за 30 секунд.';
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _activeLoading = false;
-        _activeError = 'Не удалось загрузить модели: проверьте адрес и сеть.';
-      });
-    }
-  }
-
-  /// Секция «АКТИВНОЕ ПОДКЛЮЧЕНИЕ»: кнопка «Загрузить модели» вынесена
-  /// наверх, под карточки OAuth; загружает модели активной сессии
-  /// (Polza / RouterAI) либо активного пресета и предлагает выбор модели.
-  Widget _activeConnectionSection(Palette p) {
-    return ListenableBuilder(
-      listenable:
-          Listenable.merge(<Listenable>[polzaAuth, routerAiAuth, settings]),
-      builder: (context, _) {
-        final source = polzaAuth.isAuthenticated
-            ? 'Активна сессия Polza AI — модели загружаются для неё.'
-            : routerAiAuth.isAuthenticated
-                ? 'Активна сессия RouterAI — модели загружаются для неё.'
-                : 'Активный пресет либо глобальные настройки.';
-        final currentModel = settings.model.trim();
-        final dropdownValue =
-            _activeModels.contains(currentModel) ? currentModel : null;
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _section(p, 'АКТИВНОЕ ПОДКЛЮЧЕНИЕ'),
-            Text(
-              source,
-              style: TextStyle(color: p.muted, fontSize: 13),
-            ),
-            const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed: _activeLoading ? null : _loadActiveModels,
-              style: OutlinedButton.styleFrom(
-                side: BorderSide(
-                  color: p.accent.withValues(alpha: 0.6),
-                  width: 1,
-                ),
-              ),
-              icon: _activeLoading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.keyboard_double_arrow_down, size: 24),
-              label: const Text('Загрузить модели'),
-            ),
-            if (_activeError != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  _activeError!,
-                  style: TextStyle(color: p.muted, fontSize: 13),
-                ),
-              ),
-            if (_activeModels.isNotEmpty) ...[
-              const SizedBox(height: 4),
-              DropdownButtonFormField<String>(
-                key: ValueKey<String?>(dropdownValue),
-                initialValue: dropdownValue,
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Выберите модель',
-                ),
-                items: [
-                  for (final m in _activeModels)
-                    DropdownMenuItem<String>(
-                      value: m,
-                      child: Text(
-                        m,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                ],
-                onChanged: (v) {
-                  if (v == null) return;
-                  final target = _activeConnection();
-                  if (target == null) return;
-                  settings.setConnection(
-                    url: target.$2,
-                    key: target.$3,
-                    mdl: v,
-                  );
-                },
-              ),
-            ],
-          ],
-        );
-      },
-    );
-  }
+  // Секция «АКТИВНОЕ ПОДКЛЮЧЕНИЕ» и общая кнопка «Загрузить модели»
+  // удалены: Polza и RouterAI можно подключать одновременно, поэтому
+  // кнопка «Загрузить модели» и список моделей теперь живут ВНУТРИ
+  // карточек PolzaAuthSection / RouterAiAuthSection и появляются только
+  // после успешного OAuth-входа. «НОВОЕ ПОДКЛЮЧЕНИЕ» (ручной ввод)
+  // остаётся ниже отдельной секцией.
 
   /// Экспорт: все пресеты из Storage -> JSON без API-ключей -> буфер обмена.
   Future<void> _exportPresets() async {
@@ -415,7 +221,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
             children: [
               const PolzaAuthSection(),
               const RouterAiAuthSection(),
-              _activeConnectionSection(p),
               const GlobalConnectionSection(),
               _section(p, 'ОЗВУЧКА'),
               SwitchListTile(

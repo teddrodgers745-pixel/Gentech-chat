@@ -531,7 +531,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     final pct = _findPercent(json, 0);
     final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
     // Видно в логах, что опрос идёт и статус задачи меняется.
-    debugPrint('[PolzaVideo] polling status: $status');
+    debugPrint('[Polling] status: $status, progress: ${pct ?? '-'}');
     if (url.isNotEmpty) {
       return _PollResult(videoUrl: url, percent: pct ?? 100);
     }
