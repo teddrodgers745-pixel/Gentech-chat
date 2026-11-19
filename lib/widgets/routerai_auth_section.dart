@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../app_state.dart';
 import '../core/auth/routerai_auth_service.dart';
-import '../core/storage.dart';
 import '../theme.dart';
 import 'connection_models_panel.dart';
 
@@ -14,9 +13,7 @@ import 'connection_models_panel.dart';
 /// До входа: кнопка «Войти через RouterAI» (системный браузер и локальный
 /// loopback-перехват редиректа), состояние ожидания и ручной ввод кода
 /// или ключа. После входа: статус, маскированный ключ (sk-...) и выход.
-///
-/// OAuth Debug: сырой ответ обмена кода и распарсенный ключ выводятся
-/// мелким моноширинным шрифтом под карточкой; крестик очищает лог.
+/// Панель «Загрузить модели» рендерится снаружи, сразу под карточкой.
 class RouterAiAuthSection extends StatefulWidget {
   const RouterAiAuthSection({super.key});
 
@@ -28,49 +25,6 @@ class RouterAiAuthSection extends StatefulWidget {
 }
 
 class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
-  String _debugRaw = '';
-  String _debugParsed = '';
-  String _debugError = '';
-
-  @override
-  void initState() {
-    super.initState();
-    routerAiAuth.addListener(_loadDebug);
-    _loadDebug();
-  }
-
-  @override
-  void dispose() {
-    routerAiAuth.removeListener(_loadDebug);
-    super.dispose();
-  }
-
-  Future<void> _loadDebug() async {
-    final raw =
-        (await storage.getString(RouterAiAuthService.debugRawKey)) ?? '';
-    final parsed =
-        (await storage.getString(RouterAiAuthService.debugParsedKey)) ?? '';
-    final err =
-        (await storage.getString(RouterAiAuthService.debugErrorKey)) ?? '';
-    if (!mounted) return;
-    setState(() {
-      _debugRaw = raw;
-      _debugParsed = parsed;
-      _debugError = err;
-    });
-  }
-
-  Future<void> _clearDebug() async {
-    await storage.setString(RouterAiAuthService.debugRawKey, '');
-    await storage.setString(RouterAiAuthService.debugParsedKey, '');
-    await storage.setString(RouterAiAuthService.debugErrorKey, '');
-    if (!mounted) return;
-    setState(() {
-      _debugRaw = '';
-      _debugParsed = '';
-      _debugError = '';
-    });
-  }
 
   Future<void> _manualCodeDialog(BuildContext context) async {
     final controller = TextEditingController();
@@ -128,13 +82,6 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
     if (ok == true) await routerAiAuth.logout();
   }
 
-  /// Первые 8 символов ключа для диагностики; пустой ключ — прочерк.
-  static String _prefix8(String raw) {
-    final s = raw.trim();
-    if (s.isEmpty) return '-';
-    return s.length <= 8 ? s : s.substring(0, 8);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -144,115 +91,42 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
         builder: (context, _) {
           final p = settings.palette;
           final authed = routerAiAuth.isAuthenticated;
-          return Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: p.surface,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: authed ? p.accent.withValues(alpha: 0.55) : p.border,
-                width: authed ? 1.4 : 1.0,
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: p.surface,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: authed ? p.accent.withValues(alpha: 0.55) : p.border,
+                    width: authed ? 1.4 : 1.0,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    authed
+                        ? _buildAuthed(context, p)
+                        : _buildUnsigned(context, p),
+                  ],
+                ),
               ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                authed
-                    ? _buildAuthed(context, p)
-                    : _buildUnsigned(context, p),
-                _debugBlock(p),
+              // Панель «Загрузить модели» рендерится СНАРУЖИ карточки,
+              // сразу под ней, и только после успешного OAuth-входа.
+              if (authed) ...[
+                const SizedBox(height: 8),
+                ConnectionModelsPanel(
+                  key: const ValueKey<String>('routerai_models_panel'),
+                  connectionId: 'routerai',
+                  baseUrl: RouterAiAuthService.routeraiBaseUrl,
+                  apiKey: routerAiAuth.accessToken,
+                ),
               ],
-            ),
+            ],
           );
         },
-      ),
-    );
-  }
-
-  Widget _debugBlock(Palette p) {
-    final raw = _debugRaw;
-    final showKeys =
-        routerAiAuth.isAuthenticated || _debugParsed.trim().isNotEmpty;
-    if (raw.trim().isEmpty && !showKeys) return const SizedBox.shrink();
-    final rawShort = raw.length > 200 ? raw.substring(0, 200) : raw;
-    final key = _debugParsed.trim().isEmpty ? 'null' : _debugParsed;
-    final err = _debugError.trim();
-    final text = raw.trim().isEmpty
-        ? 'DEBUG: raw=—'
-        : 'DEBUG: key=$key | raw=$rawShort'
-            '${err.isEmpty ? '' : ' | error=$err'}';
-    final keysLine =
-        'DEBUG KEYS: routerAiAuth=${_prefix8(routerAiAuth.accessToken)}'
-        ' | settings=${_prefix8(settings.apiKey)}'
-        ' | preset=${_prefix8(presets.active?.apiKey ?? '')}';
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(10, 4, 4, 10),
-        decoration: BoxDecoration(
-          color: p.bg.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: p.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'OAuth Debug',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6,
-                      color: p.muted,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Очистить лог',
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(
-                    minWidth: 30,
-                    minHeight: 30,
-                  ),
-                  padding: EdgeInsets.zero,
-                  icon: Icon(Icons.close_rounded, size: 16, color: p.muted),
-                  onPressed: _clearDebug,
-                ),
-              ],
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: SelectableText(
-                text,
-                style: TextStyle(
-                  fontSize: 10,
-                  height: 1.4,
-                  color: p.muted,
-                  fontFamily: 'JetBrains Mono',
-                  fontFamilyFallback: const ['monospace'],
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: SelectableText(
-                keysLine,
-                style: TextStyle(
-                  fontSize: 10,
-                  height: 1.4,
-                  color: p.text,
-                  fontFamily: 'JetBrains Mono',
-                  fontFamilyFallback: const ['monospace'],
-                ),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -419,7 +293,6 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
   }
 
   Widget _buildAuthed(BuildContext context, Palette p) {
-    final acc = routerAiAuth.account;
     final isActive = settings.baseUrl.trim() ==
         RouterAiAuthService.routeraiBaseUrl;
     return Column(
@@ -441,13 +314,11 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
                     children: [
                       Flexible(
                         child: Text(
-                          (acc?.label.isNotEmpty == true)
-                              ? acc!.label
-                              : 'RouterAI',
+                          'RouterAI',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 16,
+                            fontSize: 17,
                             fontWeight: FontWeight.w700,
                             color: p.text,
                           ),
@@ -486,15 +357,6 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
               label: const Text('Выйти'),
             ),
           ],
-        ),
-        const SizedBox(height: 12),
-        // Загрузка и выбор моделей прямо в карточке RouterAI: панель
-        // появляется только после успешного OAuth-входа.
-        ConnectionModelsPanel(
-          key: const ValueKey<String>('routerai_models_panel'),
-          connectionId: 'routerai',
-          baseUrl: RouterAiAuthService.routeraiBaseUrl,
-          apiKey: routerAiAuth.accessToken,
         ),
       ],
     );

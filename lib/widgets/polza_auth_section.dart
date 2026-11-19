@@ -215,25 +215,41 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
         builder: (context, _) {
           final p = settings.palette;
           final authed = polzaAuth.isAuthenticated;
-          return Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: p.surface,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: authed ? p.accent.withValues(alpha: 0.55) : p.border,
-                width: authed ? 1.4 : 1.0,
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: p.surface,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: authed ? p.accent.withValues(alpha: 0.55) : p.border,
+                    width: authed ? 1.4 : 1.0,
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    authed
+                        ? _buildAuthed(context, p)
+                        : _buildUnsigned(context, p),
+                    _debugBlock(p),
+                  ],
+                ),
               ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                authed
-                    ? _buildAuthed(context, p)
-                    : _buildUnsigned(context, p),
-                _debugBlock(p),
+              // Панель «Загрузить модели» рендерится СНАРУЖИ карточки,
+              // сразу под ней, и только после успешного OAuth-входа.
+              if (authed) ...[
+                const SizedBox(height: 8),
+                ConnectionModelsPanel(
+                  key: const ValueKey<String>('polza_models_panel'),
+                  connectionId: 'polza',
+                  baseUrl: PolzaAuthService.polzaBaseUrl,
+                  apiKey: polzaAuth.accessToken,
+                ),
               ],
-            ),
+            ],
           );
         },
       ),
@@ -566,13 +582,11 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                     children: [
                       Flexible(
                         child: Text(
-                          (acc?.label.isNotEmpty == true)
-                              ? acc!.label
-                              : 'Polza AI',
+                          'Polza AI',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 16,
+                            fontSize: 17,
                             fontWeight: FontWeight.w700,
                             color: p.text,
                           ),
@@ -656,15 +670,6 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
             ),
           ],
         ),
-        const SizedBox(height: 12),
-        // Загрузка и выбор моделей прямо в карточке Polza AI: панель
-        // появляется только после успешного OAuth-входа.
-        ConnectionModelsPanel(
-          key: const ValueKey<String>('polza_models_panel'),
-          connectionId: 'polza',
-          baseUrl: PolzaAuthService.polzaBaseUrl,
-          apiKey: polzaAuth.accessToken,
-        ),
       ],
     );
   }
@@ -689,12 +694,13 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
           const SizedBox(height: 4),
           Text(
             value,
-            maxLines: 1,
+            maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: 15,
+              fontSize: 13.5,
               fontWeight: FontWeight.w700,
               color: p.text,
+              height: 1.25,
             ),
           ),
           if (progress != null) ...[
