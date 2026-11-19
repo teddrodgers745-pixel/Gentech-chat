@@ -6,6 +6,7 @@ import '../app_state.dart';
 import '../core/auth/routerai_auth_service.dart';
 import '../core/storage.dart';
 import '../theme.dart';
+import 'connection_models_panel.dart';
 
 /// Карточка аккаунта RouterAI (OAuth 2.0 PKCE) — вторая секция настроек,
 /// размещается ниже карточки Polza AI.
@@ -485,6 +486,15 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
               label: const Text('Выйти'),
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        // Загрузка и выбор моделей прямо в карточке RouterAI: панель
+        // появляется только после успешного OAuth-входа.
+        ConnectionModelsPanel(
+          key: const ValueKey<String>('routerai_models_panel'),
+          connectionId: 'routerai',
+          baseUrl: RouterAiAuthService.routeraiBaseUrl,
+          apiKey: routerAiAuth.accessToken,
         ),
       ],
     );

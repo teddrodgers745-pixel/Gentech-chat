@@ -7,21 +7,23 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
+// ignore: unused_import
 import '../core/auth/polza_auth_service.dart';
+// ignore: unused_import
 import '../core/auth/routerai_auth_service.dart';
 import '../core/catalog/provider_catalog_service.dart';
 
-/// Секция «ПОДКЛЮЧЕНИЕ» в настройках: Base URL, API-ключ и модель
-/// по умолчанию. Используются, когда не выбран ни один пресет.
-/// Значения хранятся в SharedPreferences (ключи baseUrl/apiKey/model),
-/// поэтому старые данные пользователя сохраняются при обновлении.
+/// Секция «НОВОЕ ПОДКЛЮЧЕНИЕ» в настройках: ручной ввод Base URL и
+/// API-ключа для сторонних OpenAI-совместимых API.
 ///
-/// При активной OAuth-сессии (Polza либо RouterAI) поля Base URL,
-/// API-ключ и текстовый ввод модели скрываются: подключение работает
-/// через OAuth-токен и Base URL провайдера, кнопка «Загрузить модели»
-/// автоматически использует effectiveConfig(), а выбор модели пишется
-/// через settings.setConnection (тот, в свою очередь, синхронизирует
-/// PresetStore). Без OAuth-сессии поля остаются для сторонних API.
+/// Идёт отдельной секцией НИЖЕ карточек OAuth-подключений (Polza AI,
+/// RouterAI): у каждого OAuth-подключения своя кнопка «Загрузить модели»
+/// ВНУТРИ его карточки, поэтому здесь нет ни глобального статуса
+/// «Активное подключение», ни дублирующей кнопки для OAuth-сессий.
+/// Загрузка моделей использует исключительно введённые здесь адрес и
+/// ключ; после успешной загрузки список моделей остаётся под секцией
+/// и не исчезает. Выбор модели сохраняется в настройки
+/// (и синхронизируется в пресет).
 class GlobalConnectionSection extends StatefulWidget {
   const GlobalConnectionSection({super.key});
 
@@ -43,8 +45,13 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
   @override
   void initState() {
     super.initState();
-    _url = TextEditingController(text: settings.baseUrl);
-    _key = TextEditingController(text: settings.apiKey);
+    // Если в настройках лежит адрес/ключ OAuth-провайдера, в ручные поля
+    // их не подставляем: секция предназначена для сторонних API.
+    final storedBase = settings.baseUrl.trim();
+    final isOAuthUrl =
+        storedBase.contains('polza.ai') || storedBase.contains('routerai.ru');
+    _url = TextEditingController(text: isOAuthUrl ? '' : storedBase);
+    _key = TextEditingController(text: isOAuthUrl ? '' : settings.apiKey);
     _model = TextEditingController(text: settings.model);
   }
 
@@ -76,44 +83,11 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
     );
   }
 
-  /// GET {Base URL}/models. Источник подключения — effectiveConfig():
-  /// активная OAuth-сессия (Polza -> RouterAI), затем активный пресет
-  /// либо глобальные настройки. Поля ручного ввода — запасной источник
-  /// для сторонних API, когда effectiveConfig() не заполнен. Кнопка
-  /// больше не требует ручного ввода при активной OAuth-сессии.
+  /// GET {Base URL}/models по ВВЕДЁННЫМ здесь адресу и ключу.
   Future<void> _loadModels() async {
     if (_loadingModels) return;
-    final cfg = effectiveConfig();
-    final polzaAuthed = polzaAuth.isAuthenticated;
-    final routerAuthed = routerAiAuth.isAuthenticated;
-    String base;
-    String key;
-    String cid;
-    if (polzaAuthed &&
-        cfg.apiKey.trim() == polzaAuth.accessToken.trim()) {
-      // OAuth-сессия Polza — это активное подключение effectiveConfig().
-      base = cfg.baseUrl.trim();
-      key = cfg.apiKey.trim();
-      cid = 'polza';
-    } else if (routerAuthed &&
-        cfg.apiKey.trim() == routerAiAuth.accessToken.trim()) {
-      // OAuth-сессия RouterAI — это активное подключение effectiveConfig().
-      base = cfg.baseUrl.trim();
-      key = cfg.apiKey.trim();
-      cid = 'routerai';
-    } else if (cfg.baseUrl.trim().isNotEmpty &&
-        cfg.apiKey.trim().isNotEmpty) {
-      // Активный пресет либо заполненные глобальные настройки.
-      base = cfg.baseUrl.trim();
-      key = cfg.apiKey.trim();
-      cid = 'global';
-    } else {
-      // Ручное подключение стороннего API: поля секции.
-      base = _url.text.trim();
-      key = _key.text.trim();
-      cid = 'global';
-    }
-    base = base.replaceAll(RegExp(r'/+$'), '');
+    final base = _url.text.trim().replaceAll(RegExp(r'/+$'), '');
+    final key = _key.text.trim();
     if (base.isEmpty ||
         !(base.startsWith('http://') || base.startsWith('https://'))) {
       _snack('Base URL должен начинаться с http:// или https://');
@@ -123,14 +97,11 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
       _snack('Введите API-ключ');
       return;
     }
-    setState(() {
-      _loadingModels = true;
-      _modelsError = null;
-    });
+    setState(() => _loadingModels = true);
     // Параллельно обновляем каталог моделей этого подключения
-    // (возможности и цены), не задерживая загрузку списка моделей.
+    // (возможности и цены), не задерживая загрузку списка.
     unawaited(providerCatalog.sync(
-      CatalogConnection(id: cid, baseUrl: base, apiKey: key),
+      CatalogConnection(id: 'global', baseUrl: base, apiKey: key),
       force: true,
     ));
     try {
@@ -168,8 +139,10 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
       if (!mounted) return;
       setState(() {
         _loadingModels = false;
-        _models = ids.toList()..sort();
-        if (_models.isEmpty) {
+        if (ids.isNotEmpty) {
+          _models = ids.toList()..sort();
+          _modelsError = null;
+        } else {
           _modelsError = 'Сервер не вернул ни одной модели.';
         }
       });
@@ -192,17 +165,11 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable:
-          Listenable.merge(<Listenable>[polzaAuth, routerAiAuth, settings]),
+      listenable: settings,
       builder: (context, _) {
         final p = settings.palette;
-        final polzaAuthed = polzaAuth.isAuthenticated;
-        final routerAuthed = routerAiAuth.isAuthenticated;
-        final authed = polzaAuthed || routerAuthed;
-        final currentModel =
-            authed ? settings.model.trim() : _model.text.trim();
         final dropdownValue =
-            _models.contains(currentModel) ? currentModel : null;
+            _models.contains(_model.text.trim()) ? _model.text.trim() : null;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -217,60 +184,52 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
             ),
             const SizedBox(height: 10),
             Text(
-              authed
-                  ? (polzaAuthed
-                      ? 'Активно подключение через аккаунт Polza AI. '
-                          'Кнопка «Загрузить модели» использует эту сессию.'
-                      : 'Активно подключение через аккаунт RouterAI. '
-                          'Кнопка «Загрузить модели» использует эту сессию.')
-                  : 'Поля для сторонних API: используются, когда не выбран '
-                      'ни один пресет и нет OAuth-сессии.',
+              'Сторонний OpenAI-совместимый API: введите Base URL и '
+              'API-ключ, затем загрузите список моделей.',
               style: TextStyle(color: p.muted, fontSize: 13),
             ),
-            if (!authed) ...[
-              const SizedBox(height: 10),
-              TextField(
-                controller: _url,
-                autocorrect: false,
-                keyboardType: TextInputType.url,
-                cursorColor: p.accent,
-                onChanged: (_) => _changed(),
-                decoration: const InputDecoration(
-                  labelText: 'Base URL',
-                  hintText: 'https://api.polza.ai/v1',
-                ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _url,
+              autocorrect: false,
+              keyboardType: TextInputType.url,
+              cursorColor: p.accent,
+              onChanged: (_) => _changed(),
+              decoration: const InputDecoration(
+                labelText: 'Base URL',
+                hintText: 'https://api.example.com/v1',
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _key,
-                obscureText: !_showKey,
-                autocorrect: false,
-                enableSuggestions: false,
-                cursorColor: p.accent,
-                onChanged: (_) => _changed(),
-                decoration: InputDecoration(
-                  labelText: 'API-ключ',
-                  suffixIcon: IconButton(
-                    tooltip: _showKey ? 'Скрыть ключ' : 'Показать ключ',
-                    icon: Icon(
-                      _showKey ? Icons.visibility_off : Icons.visibility,
-                    ),
-                    onPressed: () => setState(() => _showKey = !_showKey),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _key,
+              obscureText: !_showKey,
+              autocorrect: false,
+              enableSuggestions: false,
+              cursorColor: p.accent,
+              onChanged: (_) => _changed(),
+              decoration: InputDecoration(
+                labelText: 'API-ключ',
+                suffixIcon: IconButton(
+                  tooltip: _showKey ? 'Скрыть ключ' : 'Показать ключ',
+                  icon: Icon(
+                    _showKey ? Icons.visibility_off : Icons.visibility,
                   ),
+                  onPressed: () => setState(() => _showKey = !_showKey),
                 ),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _model,
-                autocorrect: false,
-                cursorColor: p.accent,
-                onChanged: (_) => _changed(),
-                decoration: const InputDecoration(
-                  labelText: 'Модель',
-                  hintText: 'ID модели',
-                ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _model,
+              autocorrect: false,
+              cursorColor: p.accent,
+              onChanged: (_) => _changed(),
+              decoration: const InputDecoration(
+                labelText: 'Модель',
+                hintText: 'ID модели',
               ),
-            ],
+            ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
               onPressed: _loadingModels ? null : _loadModels,
@@ -320,26 +279,9 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
                 onChanged: (v) {
                   if (v == null) return;
                   _model.text = v;
-                  _model.selection = TextSelection.collapsed(offset: v.length);
-                  if (polzaAuthed) {
-                    // OAuth-сессия: адрес, токен и модель Polza AI пишутся
-                    // в настройки напрямую (и синхронизируются в пресет).
-                    settings.setConnection(
-                      url: PolzaAuthService.polzaBaseUrl,
-                      key: polzaAuth.accessToken,
-                      mdl: v,
-                    );
-                  } else if (routerAuthed) {
-                    // OAuth-сессия RouterAI: адрес, ключ и модель пишутся
-                    // в настройки напрямую (и синхронизируются в пресет).
-                    settings.setConnection(
-                      url: RouterAiAuthService.routeraiBaseUrl,
-                      key: routerAiAuth.accessToken,
-                      mdl: v,
-                    );
-                  } else {
-                    _changed();
-                  }
+                  _model.selection =
+                      TextSelection.collapsed(offset: v.length);
+                  _changed();
                   setState(() {});
                 },
               ),
@@ -350,3 +292,4 @@ class _GlobalConnectionSectionState extends State<GlobalConnectionSection> {
     );
   }
 }
+

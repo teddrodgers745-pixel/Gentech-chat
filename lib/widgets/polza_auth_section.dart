@@ -7,6 +7,7 @@ import '../app_state.dart';
 import '../core/auth/polza_auth_service.dart';
 import '../core/storage.dart';
 import '../theme.dart';
+import 'connection_models_panel.dart';
 
 /// Карточка аккаунта Polza AI (OAuth 2.0 PKCE) — первая секция настроек.
 ///
@@ -654,6 +655,15 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
               label: const Text('Выйти'),
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        // Загрузка и выбор моделей прямо в карточке Polza AI: панель
+        // появляется только после успешного OAuth-входа.
+        ConnectionModelsPanel(
+          key: const ValueKey<String>('polza_models_panel'),
+          connectionId: 'polza',
+          baseUrl: PolzaAuthService.polzaBaseUrl,
+          apiKey: polzaAuth.accessToken,
         ),
       ],
     );
