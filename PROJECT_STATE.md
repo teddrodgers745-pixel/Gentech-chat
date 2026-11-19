@@ -1,209 +1,97 @@
-# GenTech Lab — Project State
+# PROJECT_STATE — GenTech Chat
 
-_Last updated: 2026-11-19_
+Автор и владелец: Minkail. Приложение собирается только в GitHub Actions
+(папка android/ не хранится в репозитории, генерируется workflow'ом через
+flutter create + tools/android_patch.py).
 
-## Repo & workflow
-- `~/gentech_work` — Flutter app `gentech_lab`.
-- Agent: `~/agent.py`. Providers: `glm` (regular, quality — default),
-  `glm53`, `flash` (только для тривиальных задач).
-- Workflow: `~/run_*.py` -> `--auto-merge` в `origin/main` -> CI -> APK.
-- Правило импортов: НЕ удалять существующие импорты даже при `unused_import`
-  (использовать `// ignore: unused_import`).
+## Текущее состояние
 
-## Closed stages
-- ✅ Multimodal v2 + Curated params: `CuratedParameterCatalog`,
-  `UserParamOverrideStore`, `ParameterTranslator`, `ModelParamsBar`,
-  `ManualParamsSheet`, `QuickAccessSheet`.
-- ✅ Stage 1b (#552): catalog parsers + dispatcher в `lib/core/catalog/`.
-- ✅ Stage 1c (#555): `parseModelsList` в `syncFromConnection`.
-- ✅ Reasoning normalization (#557): `reasoning_levels.dart` + нормализация
-  `none→off`, `minimal→low`, canonical sort, drop `off` при mandatory.
-  Применено в polza/routerai/openrouter parsers + provider_catalog_service.
-  APK `gentech-lab-v2-101609.apk`.
-- ✅ Media parsers fix: aspectRatios/resolutions для Polza/RouterAI
-  теперь парсятся из реальных полей API (flux.2-pro, seedream-4.5 и др.).
-- ✅ Stage 2a: (a) lookup изолирован по connectionId; (d) reasoning
-  pass-through проверен и пофикшен.
+Сборка: должна быть зелёной (flutter analyze — 0 issues, flutter build apk --release).
 
-### Stage 2b (закрыта)
-- **(b) UI refresh после syncFromConnection** — ПОДТВЕРЖДЕНО (реализовано
-  в 2a, не трогали): `ActiveModelController` слушает `providerCatalog`
-  (`_onCatalogChanged`), пересчитывает `_resolve` и `notifyListeners()`
-  без рестарта; race guard — существующий токен `_resolveToken`
-  (проверка после каждого await); `notifyListeners()` рекурсивно
-  `_resolve` не вызывает. Добавлен только подтверждающий комментарий.
-- **(c) Приоритет и merge по полям**: в `active_model_controller.dart`
-  добавлены `_paramCandidates`, `_loadUserOverride`, `_loadCuratedParams`,
-  `_mergeFieldLevel`; сборка params в `_resolve` переделана с
-  «всё или ничего» на field-level merge:
-  `UserParamOverrideStore > CatalogEntry/кэш OpenRouter > curated >
-  unknown`. Непустое поле более приоритетного источника всегда побеждает,
-  пустое поле источника пропускается (curated добивает недостающие поля
-  даже при непустом CatalogEntry); constraints объединяются из всех
-  источников; confidence='user' и isUserDefined при вкладе override.
-  `_fillFromReference` (OpenRouter reference) не тронут — дизайн корректен.
-- **(e) Media params в UI**: CatalogEntry (aspectRatios, durations —
-  discrete и range, resolutions, qualities) теперь попадает в
-  `caps.params` через merge (c) и отрисовывается чипсами
-  `AdaptiveChatInputBar`; добавлены чипсы качества и колбэки
-  `onResolutionChanged`/`onQualityChanged`; выбранные resolution/quality
-  передаются в `GenerationRequest.parameters` (видео — оба поля,
-  изображение — quality), `ImagesApiExecutor` мержит `request.parameters`
-  в rawParams перед `ParameterTranslator.translateWithCatalog`.
-  `ParameterTranslator.toImageBody/toVideoBody` уже переводит
-  aspect_ratio / size / duration / resolution / quality — изменений
-  не потребовалось. Только image/video моделей: у chat-моделей
-  media-чипсы не показываются (composer строится только для media-kind).
+## Что уже сделано (завершённые этапы)
 
-## Архитектурные правила
-- Для known providers (polza/routerai/openrouter): только их /v1/models.
-  OpenRouter reference — только для сторонних API. null от провайдера =
-  чипсы скрыты, curated fallback ТОЛЬКО для media-полей (не reasoning).
-- Реактивная защита: 400 с metadata.raw → retry без поля (один раз).
-  warnings[] от Media API → in-memory blacklist по модели.
-- async:true для video — защита от 120-сек таймаута.
+- Базовый чат по OpenAI-совместимому API (/chat/completions, SSE-стриминг):
+  пользователь сам вводит адрес провайдера, ключ и строку модели.
+- Настройки: поля с плавающей подписью (радиус ~20), заголовки секций капсом
+  акцентным цветом, выбор темы чипами с точкой и галочкой, ползунки в акценте,
+  карточка «Пример ответа» с живым предпросмотром (заголовок, жирный/курсив,
+  инлайн-код, список, блок кода с подписью языка и «Копировать»).
+- Четыре темы: Светлая, Тёмная, Книжная, AMOLED — тёплая гамма
+  (графит ~#1B1A19, карточки ~#242321, акцент ~#D99A6C).
+- Типографика: ответы — Literata (размер по умолчанию 17, интервал 1.55,
+  настраиваются), код — JetBrains Mono; выбор шрифтов сохраняется.
+  Загрузка шрифтов не блокирует первый кадр (fontFamilyFallback + try/catch).
+- Визуальный стиль: три медные четырёхконечные искры как логотип, капсула
+  «Сообщение» с круглой акцентной кнопкой-стрелкой, верхняя панель (меню,
+  название чата, «новый чат», «настройки»), боковая панель «Чаты», пустой
+  экран с искрами и подсказкой про щипок.
+- Инструменты (MCP-подобные): список по умолчанию (Погода, Википедия,
+  Калькулятор, Курсы валют, IP Геолокация, arXiv, Hacker News, Чтение страниц),
+  редактор инструментов, вызовы из чата.
+- Live-режим (голосовой), режим генерации изображений, режим генерации видео.
+- Поиск: настройки поиска, проба провайдера, стратегии поиска.
+- Галерея артефактов, предпросмотр файлов (WebView/изображение/текст/markdown),
+  сохранение и шеринг файлов от модели.
+- Голосовой ввод (speech_to_text) и TTS-озвучка ответов.
+- Пресеты моделей и пресеты параметров; переопределения параметров
+  (пользовательские и по моделям), универсальный транслятор параметров.
+- OAuth-подключения к провайдерам: Polza (PKCE + SecureTokenStore) и RouterAI
+  (RouterAiTokenStore). Статусы авторизации, аккаунты, выход.
+- Каталоги моделей по подключениям: фоновая синхронизация при запуске
+  (TTL 24 ч), кэши медиа/reasoning/search-возможностей (TTL 7 дней),
+  справочник OpenRouter.
+- Асинхронные задачи (видео/картинки): ActiveJobsStore, AsyncJobExecutor
+  (POST с 'async': true, опрос GET {baseUrl}/media/{id} каждые 3 с,
+  лог '[Polling] status: ..., progress: ...'), ArtifactRepository.
 
-## Next stages
-- **Stage 2c (закрыта 2026-11-14, Stage 2c-2)** — остатки (e):
-  - ✅ resolution в image-запросе: `chat_screen._sendImage` пробрасывает
-    `ParamKeys.resolution` в `GenerationRequest.parameters`;
-    `ParameterTranslator.toImageBody` отдаёт безопасный дефолт
-    `'resolution'` (совместим с RouterAI и Media API), а
-    `ImagesApiExecutor` при `providerId == 'polza'` дополнительно
-    дублирует значение в `'image_resolution'` (реальное имя в Polza
-    Media API). Перевод сделан в исполнителе по существующему
-    провайдер-флагу — без хардкода по baseUrl и без ломки сигнатуры
-    транслятора.
-  - ✅ качества/разрешения в ручном override: `ManualParamsSheet` получил
-    секцию MEDIA — чипсы resolutions/qualities из caps.params (тап
-    подставляет значение в поле шторки); сохранение — прежним путём через
-    `UserParamOverrideStore`. `AdaptiveChatInputBar._openManualParamsDialog`
-    теперь открывает эту шторку и передаёт списки из caps; тип модели
-    фиксируется в override (видео-модель не превращается в image).
-  - merge каталога подключения в `ParameterTranslator.translateWithCatalog`
-    — перенесён в Stage 2c-3 (см. ниже).
-- ✅ **Stage 2c-3 (закрыта 2026-11-15)**: merge CatalogEntry в
-  `ParameterTranslator.translateWithCatalog`. Итоговые merged-параметры
-  контроллера (field-level: User > CatalogEntry > Curated) публикуются
-  в статическом реестре ActiveModelController (`mergedParamsFor`) —
-  GenerationRequest, исполнители и UI не менялись. Транслятор берёт
-  merged как базовый источник и применяет свежий UserOverride поверх
-  по полям (constraints объединяются); без merged — прежний путь
-  (UserOverride > Curated).
-- **Stage 2d (открыта)**: sizes-chips — отложено, в API Polza/RouterAI
-  нет отдельного поля 'sizes' (есть image_resolution/resolutions — это
-  уже показывается как resolutions). Если появится источник — вернуться.
-- **Stage 3:** сквозные регрессионные тесты каталога, контроллера, парсеров.
+## Изменения текущего этапа (UI подключений, автообновление моделей, видео)
 
-## Changelog
-- 2026-11-13: создан файл. Stage 2 разбита на 2a (backend+verification)
-  и 2b (UX+media) для изоляции рисков.
-- 2026-11-13: Stage 2a закрыта. (a) lookup изолирован по connectionId;
-  (d) reasoningLevels pass-through проверен и пофикшен.
-- 2026-11-13: медиа-парсеры пофикшены. polza_parser: params['resolution']
-  → params['image_resolution'] (реальное имя в API). routerai_parser:
-  supported_resolutions → supported_image_sizes. Добавлен парсинг цен по
-  разрешению в mediaParams['pricing_tiers'] / ['pricing_variants'].
-- 2026-11-13: Stage 2b закрыта. (b) UI refresh с race guard (подтверждено
-  из 2a); (c) field-level priority merge (user > catalog > curated);
-  (e) media params в чипсах композера + проброс resolution/quality в
-  запрос (частично: sizes и image-resolution — в Stage 2c).
-- 2026-11-14: media-парсеры расширены. RouterAI: в mediaParams
-  добавлены output_formats/backgrounds/max_image_count/max_image_references/
-  supports_image_references/image_seed/supports_negative_prompt.
-  Polza: в mediaParams добавлены images_min/images_max/prompt_max_length.
-  Существующие pricing_tiers/pricing_variants сохранены. UI пока эти поля
-  не использует — данные для будущих stages.
-- 2026-11-14: Stage 2c-2. (1) image_resolution в image-запросе —
-  resolution пробрасывается в GenerationRequest.parameters (chat_screen),
-  toImageBody отдаёт 'resolution', ImagesApiExecutor для Polza
-  дополнительно дублирует в 'image_resolution'. (3) ManualParamsSheet
-  media-чипсы (resolution/quality) + подключение из AdaptiveChatInputBar.
-  (2) — отложено: merge CatalogEntry в translateWithCatalog требует
-  изменения сигнатуры, перенос в Stage 2c-3.
-- 2026-11-15: Stage 4.1. (a) _needsReference skip для known providers
-  (polza/routerai/openrouter): фильтр в lookup по baseUrl подключения
-  (_isKnownProviderConnection), сигнатура _needsReference не менялась,
-  _fillFromReference сохранён для сторонних API. (b) retry 400 через
-  error.metadata.raw — реализован в реальном исполнителе POST
-  /chat/completions (ChatService._roundOnce): извлечение имени поля
-  (3 паттерна), один retry с удалением поля, повторный 400 — пользователю.
-  (c) async:true для video-моделей в AsyncJobExecutor._createJob.
-  (d) warnings[] медиа-ответа → in-memory blacklist
-  _unsupportedParamsByModel в ImagesApiExecutor (параметр не отправляется
-  повторно, лог '[media] dropped unsupported param'). Stage 2c пункт (2)
-  остаётся в Stage 2c-3.
-- 2026-11-15: Stage 2c-3. ParameterTranslator теперь принимает итоговые
-  merged params из контроллера (User > Catalog > Curated).
-- 2026-11-15: фикс 401. Ключ и baseUrl теперь берутся из активного пресета
-  (preset.apiKey/baseUrl), а не из глобальных settings, если пресет заполнен.
-- 2026-11-16: фикс 401 (часть 2). effectiveConfig() теперь отдаёт приоритет
-  polzaAuth.accessToken, если polzaAuth.isAuthenticated, кроме случая
-  явного RouterAI-пресета. Устранён конфликт со старыми ключами в
-  settings/preset.
-- 2026-11-16: OAuth Polza. Добавлен refreshAccessToken() (grant_type=refresh_token),
-  авто-refresh при 401 в chat_service (один retry), prompt=login в URL
-  авторизации (браузер больше не подхватывает старую сессию).
-- 2026-11-16: ФИКС 401 НАЙДЕН. polzaBaseUrl исправлен с
-  https://api.polza.ai/api/v1 на https://polza.ai/api/v1. Причина:
-  api.polza.ai делает редирект на polza.ai, при котором dart:io
-  HttpClient вырезает заголовок Authorization. Добавлена миграция
-  старого URL в settings.baseUrl при загрузке. Добавлена очистка
-  'Bearer ' в ChatService._roundOnce на случай ручного ввода.
-- 2026-11-16: Убран refreshAccessToken() из обработки 401 (Polza не
-  поддерживает grant_type=refresh_token). При 401 для Polza — разлогин.
-  В текст ошибки 401 добавлены URL и префикс токена для отладки.
-  baseUrl принудительно мигрирует на https://polza.ai/api/v1.
-- 2026-11-16: ФИКС OAuth Polza. Сервер возвращает 'key' (pza_...), а не
-  'access_token'. Код обмена исправлен: парсится data['key'], сохраняется
-  как API-ключ. Refresh-токены удалены (не поддерживаются).
-- 2026-11-16: OAuth Debug на экране. Сырой ответ /auth/token и распарсенный ключ выводятся в настройках Polza. Если ключ не pza_ — AlertDialog.
-- 2026-11-16: Диагностика PKCE. Выведен code_verifier (начало/конец), проверка соответствия regex, проверка совпадения сгенерированного и отправленного. Убрано шифрование code_verifier.
-- 2026-11-18: Исправлена генерация PKCE code_challenge. Удален багованный самописный SHA-256, заменен на стандартный пакет crypto. Это исправляет ошибку 'Невалидный code_verifier' от Polza.
-- 2026-11-18: Финальный фикс 401. Ключ pza_... из OAuth принудительно перезаписывает settings.apiKey и активный пресет при логине. effectiveConfig() отдает приоритет polzaAuth.accessToken.
-- 2026-11-18: Полная перезапись OAuth Polza с нуля. Использован стандартный crypto для PKCE, убраны самописные велосипеды. Сохранение ключа pza_... и приоритет над пресетами.
-- 2026-11-18: OAuth Polza финальный фикс. Переход на надежный метод получения callback (flutter_web_auth_2 или жесткий контроль loopback). Вывод сырого ответа при ошибке обмена.
-- 2026-11-18: OAuth Polza полностью перезаписан по фиксу Gemini 4 Argon.
-  Исправлены race conditions в loopback-сервере, добавлен fallback на
-  form-urlencoded, изоляция сессий PKCE. Токен сохраняется корректно.
-- 2026-11-18: Добавлен OAuth RouterAI. Создан RouterAiAuthService, UI для
-  входа (RouterAiAuthSection в настройках), обновлен effectiveConfig()
-  (приоритет: Polza -> RouterAI -> пресеты/settings). Ключ валидируется
-  префиксом sk-, обмен кода — POST /api/v1/auth/keys без grant_type,
-  ответ data['key']. Карточка подключена ниже Polza в settings_screen.
-- 2026-11-19: Исправлена кнопка «Загрузить модели» при OAuth. Секция
-  «Подключение» переименована в «Новое подключение». Поля ручного ввода
-  предназначены для сторонних API. Кнопка берёт подключение из
-  effectiveConfig() (Polza -> RouterAI -> пресет/настройки), при RouterAI
-  OAuth выбор модели пишется через settings.setConnection; в
-  _collectConnections добавлена RouterAI-сессия (id 'routerai').
-- 2026-11-19: КОМПЛЕКСНЫЙ ФИКС. (1) UI настроек: кнопка «Загрузить
-  модели» вынесена наверх, под карточки OAuth (секция «АКТИВНОЕ
-  ПОДКЛЮЧЕНИЕ», Polza -> RouterAI -> пресет/настройки); в блоке «Новое
-  подключение» осталась своя кнопка; автозагрузка каталога
-  (providerCatalog.sync force) при старте и после OAuth-логина
-  (PolzaAuthService/RouterAiAuthService._syncCatalog). (2) Фикс вечного
-  0% при генерации видео на Polza: добавлены пути создания '/media' и
-  опроса '/media/{id}' (GET /v1/media/{id} каждые 3 с), debugPrint
-  '[PolzaVideo] polling status', 'async': true отправляется всегда.
-  (3) Фикс reasoning пресетов RouterAI: если API не отдал
-  supported_efforts, уровни ['off','high'] вместо выдуманных градаций.
-  (4) Аудио-модели оставлены в каталоге. Для них потребуется отдельный
-  UI для ввода параметров (voice, format, text) — вынести в отдельную
-  задачу (Stage 2c/2d).
-- 2026-11-19: ЗАВЕРШЕНИЕ ПЕРЕДЕЛКИ UI ПОДКЛЮЧЕНИЙ. (1) Кнопка
-  «Загрузить модели» перенесена ВНУТРИ карточек Polza/RouterAI: новый
-  виджет ConnectionModelsPanel (lib/widgets/connection_models_panel.dart)
-  добавлен в _buildAuthed обеих карточек; при отсутствии OAuth-сессии
-  кнопки нет. Список моделей отображается под соответствующей карточкой
-  и НЕ исчезает после загрузки (хранится в состоянии виджета).
-  (2) Секция «НОВОЕ ПОДКЛЮЧЕНИЕ» (GlobalConnectionSection) теперь всегда
-  показывает ручной ввод Base URL/API-ключа и загружает модели только из
-  своих полей — без глобального статуса и подмены OAuth-сессией; при
-  активной OAuth-сессии в поля не подставляются адрес/токен провайдера.
-  (3) Автообновление моделей: Timer.periodic каждые 2 часа внутри
-  ConnectionModelsPanel (отмена в dispose), кнопка — ручное обновление;
-  обновление параллельно синхронизирует providerCatalog.sync(force).
-  (4) Видео-фикс подтверждён в коде AsyncJobExecutor: 'async': true
-  отправляется всегда, опрос GET {base}/media/{id} каждые 3 с
-  (_pollPrefixes, _pollInterval), лог '[Polling] status: ..., progress: ...'.
+1. UI настроек — карточки подключений:
+   - Убрана глобальная секция «АКТИВНОЕ ПОДКЛЮЧЕНИЕ» из settings_screen:
+     теперь Polza и RouterAI можно подключать одновременно, у каждого своя
+     карточка со своим статусом.
+   - Кнопка «Загрузить модели» перенесена внутрь карточки каждого подключения
+     (сразу под «Войти»/статусом «Подключено») — виджет
+     lib/widgets/connection_models_panel.dart.
+   - Кнопка появляется ТОЛЬКО после успешного OAuth-входа соответствующего
+     провайдера (панель рендерится в ветке authenticated).
+   - Список загруженных моделей отображается прямо под соответствующей
+     карточкой (под Polza — модели Polza, под RouterAI — модели RouterAI).
+   - Секция «НОВОЕ ПОДКЛЮЧЕНИЕ» (ручной ввод Base URL / API Key,
+     lib/widgets/global_connection_section.dart) идёт отдельно ниже и грузит
+     модели только из собственных полей; список появляется под ней.
+2. Автообновление моделей:
+   - После успешной загрузки список моделей сохраняется в состоянии виджета
+     и не исчезает (пустой ответ тоже не стирает прежний список).
+   - Фоновое автообновление активных подключений: Timer.periodic каждые
+     2 часа, таймер отменяется в dispose. Кнопка «Загрузить модели» —
+     ручное обновление (плюс параллельный providerCatalog.sync(force: true)).
+3. Фикс вечной генерации видео:
+   - При POST на генерацию видео передаётся "async": true.
+   - Опрос статуса: GET {baseUrl}/media/{id} каждые 3 секунды, пока статус
+     не станет completed или failed; сам факт ответа на опрос больше не
+     считается готовым видео (ссылка опроса не завершает задачу).
+   - Добавлено логирование: debugPrint('[Polling] status: $status, progress: $progress').
+   - ChatService и парсеры не затронуты.
+
+## Архитектура (кратко)
+
+- lib/core — auth (Polza/RouterAI OAuth), catalog, generation (исполнители,
+  каталоги возможностей, параметрами), models, providers (адаптеры каталогов),
+  search, storage, utils.
+- lib/features — composer (режимы ввода: текст, картинки, видео, live),
+  chat (ошибки), gallery.
+- lib/screens, lib/ui/screens — экраны (чат, настройки, quick setup, пресеты,
+  инструменты, MCP, live).
+- lib/widgets — переиспользуемые виджеты, включая auth-секции провайдеров,
+  ConnectionModelsPanel, GlobalConnectionSection.
+- lib/app_state.dart — глобальные singleton'ы: settings, store, presets,
+  providerCatalog, polzaAuth, routerAiAuth и др.
+
+## Ограничения и правила
+
+- INTERNET-разрешение не удалять/не ослаблять (tools/android_patch.py).
+- android/ в репозитории нет — менять только tools/android_patch.py.
+- Секреты не хранить и не коммитить; ключи только из пользовательского ввода.
+- Зависимости минимальны и проверены; данные пользователя переживают обновление.
+- Пользовательские тексты — на русском; визуальный стиль — тёплый «книжный».
