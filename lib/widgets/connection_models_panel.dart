@@ -8,7 +8,6 @@ import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
 import '../core/catalog/provider_catalog_service.dart';
-import '../theme.dart';
 
 /// Панель моделей внутри карточки подключения: кнопка «Загрузить модели»
 /// и выпадающий список загруженных моделей.
