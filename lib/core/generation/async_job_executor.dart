@@ -737,7 +737,23 @@ class AsyncJobExecutor extends GenerationExecutor {
   }
 
   /// Рекурсивный поиск ссылки на видео в JSON-ответе провайдера.
+  /// Строковые элементы списков (например, output: ["https://...mp4"])
+  /// тоже распознаются: URL, похожий на видеофайл, принимается как ответ —
+  /// задача не завершается «пустой» ссылкой и не теряет mp4-файл.
   static String? _findVideoUrl(Object? node, int depth) {
+    if (node is String) {
+      final s = node.trim();
+      if (s.isEmpty) return null;
+      final isUrl = s.startsWith('http://') ||
+          s.startsWith('https://') ||
+          s.startsWith('data:video');
+      final lower = s.toLowerCase();
+      final looksLikeVideo = lower.contains('.mp4') ||
+          lower.contains('.webm') ||
+          lower.contains('.mov') ||
+          lower.contains('video');
+      return isUrl && looksLikeVideo ? s : null;
+    }
     if (node == null || depth > 8) return null;
     if (node is Map) {
       for (final entry in node.entries) {
@@ -849,9 +865,15 @@ class AsyncJobExecutor extends GenerationExecutor {
       }
       for (final entry in node.entries) {
         final k = entry.key.toString().toLowerCase();
-        if ((k == 'id' || k == 'uuid') && entry.value is String) {
-          final s = (entry.value as String).trim();
-          if (s.isNotEmpty && s.length <= 128) return s;
+        if (k == 'id' || k == 'uuid') {
+          final v = entry.value;
+          if (v is String) {
+            final s = v.trim();
+            if (s.isNotEmpty && s.length <= 128) return s;
+          } else if (v is num) {
+            // Числовой идентификатор задачи тоже принимаем.
+            return v.toString();
+          }
         }
       }
       for (final entry in node.entries) {

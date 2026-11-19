@@ -5,7 +5,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../app_state.dart';
 import '../core/auth/polza_auth_service.dart';
-import '../core/storage.dart';
 import '../theme.dart';
 import 'connection_models_panel.dart';
 
@@ -16,10 +15,7 @@ import 'connection_models_panel.dart';
 /// кода/ключа. После входа: статус, email/имя, маскированный токен,
 /// баланс с обновлением, лимиты с прогресс-баром, «Пополнить» и «Выйти».
 ///
-/// OAuth Debug: если после обмена кода сохранён сырой ответ сервера
-/// (ключ 'polza_oauth_debug_raw'), он выводится мелким моноширинным
-/// шрифтом под карточкой — пользователь может сделать скриншот и
-/// прислать разработчику. Кнопка-крестик очищает debug-лог.
+/// Панель «Загрузить модели» рендерится снаружи, сразу под карточкой.
 class PolzaAuthSection extends StatefulWidget {
   const PolzaAuthSection({super.key});
 
@@ -31,113 +27,6 @@ class PolzaAuthSection extends StatefulWidget {
 }
 
 class _PolzaAuthSectionState extends State<PolzaAuthSection> {
-  /// Debug-данные последнего обмена кода на токен (SharedPreferences).
-  String _debugRaw = '';
-  String _debugParsed = '';
-  String _debugError = '';
-
-  /// PKCE-диагностика: префиксы сгенерированного и отправленного
-  /// code_verifier, признак совпадения и код PKCE-ошибки.
-  String _cvGen = '';
-  String _cvSent = '';
-  String _cvMatch = '';
-  String _pkceError = '';
-
-  /// Диалог «OAuth Debug» показывается не чаще одного раза за сессию.
-  static bool _debugDialogShown = false;
-
-  @override
-  void initState() {
-    super.initState();
-    polzaAuth.addListener(_loadDebug);
-    _loadDebug();
-  }
-
-  @override
-  void dispose() {
-    polzaAuth.removeListener(_loadDebug);
-    super.dispose();
-  }
-
-  /// Читает debug-записи из SharedPreferences. При ключе не формата pza_
-  /// (флаг 'polza_oauth_debug_error') один раз за сессию показывает
-  /// AlertDialog с сырым ответом сервера.
-  Future<void> _loadDebug() async {
-    final raw = await storage.getString('polza_oauth_debug_raw') ?? '';
-    final parsed = await storage.getString('polza_oauth_debug_parsed') ?? '';
-    final err = await storage.getString('polza_oauth_debug_error') ?? '';
-    final cvGen = await storage.getString('polza_oauth_debug_cv') ?? '';
-    final cvSent = await storage.getString('polza_oauth_debug_cv_sent') ?? '';
-    final cvMatch =
-        await storage.getString('polza_oauth_debug_pkce_match') ?? '';
-    final pkceErr =
-        await storage.getString('polza_oauth_debug_pkce_error') ?? '';
-    if (!mounted) return;
-    setState(() {
-      _debugRaw = raw;
-      _debugParsed = parsed;
-      _debugError = err;
-      _cvGen = cvGen;
-      _cvSent = cvSent;
-      _cvMatch = cvMatch;
-      _pkceError = pkceErr;
-    });
-    if (_debugDialogShown ||
-        _debugError.trim().isEmpty ||
-        _debugRaw.trim().isEmpty) {
-      return;
-    }
-    _debugDialogShown = true;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('OAuth Debug'),
-          content: SelectableText(
-            'Raw: $_debugRaw\n'
-            'Parsed: ${_debugParsed.trim().isEmpty ? 'null' : _debugParsed}\n'
-            'Expected: pza_...',
-            style: const TextStyle(fontSize: 13, height: 1.4),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('OK'),
-            ),
-          ],
-        ),
-      );
-    });
-  }
-
-  /// Первые 8 символов ключа для диагностики; пустой ключ — прочерк.
-  static String _prefix8(String raw) {
-    final s = raw.trim();
-    if (s.isEmpty) return '-';
-    return s.length <= 8 ? s : s.substring(0, 8);
-  }
-
-  /// Очищает debug-лог (кнопка-крестик).
-  Future<void> _clearDebug() async {
-    await storage.setString('polza_oauth_debug_raw', '');
-    await storage.setString('polza_oauth_debug_parsed', '');
-    await storage.setString('polza_oauth_debug_error', '');
-    await storage.setString('polza_oauth_debug_cv', '');
-    await storage.setString('polza_oauth_debug_cv_sent', '');
-    await storage.setString('polza_oauth_debug_pkce_match', '');
-    await storage.setString('polza_oauth_debug_pkce_error', '');
-    if (!mounted) return;
-    setState(() {
-      _debugRaw = '';
-      _debugParsed = '';
-      _debugError = '';
-      _cvGen = '';
-      _cvSent = '';
-      _cvMatch = '';
-      _pkceError = '';
-    });
-  }
 
   Future<void> _manualCodeDialog(BuildContext context) async {
     final controller = TextEditingController();
@@ -234,7 +123,6 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                     authed
                         ? _buildAuthed(context, p)
                         : _buildUnsigned(context, p),
-                    _debugBlock(p),
                   ],
                 ),
               ),
@@ -252,124 +140,6 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
             ],
           );
         },
-      ),
-    );
-  }
-
-  /// Блок OAuth Debug: сырой ответ /auth/token и извлечённый ключ,
-  /// мелкий моноширинный шрифт (10), серым цветом темы.
-  Widget _debugBlock(Palette p) {
-    final raw = _debugRaw;
-    // Диагностика ключей показывается и без сырого ответа — когда сессия
-    // активна либо ключ уже был распарсен (фикс 401).
-    final showKeys =
-        polzaAuth.isAuthenticated || _debugParsed.trim().isNotEmpty;
-    if (raw.trim().isEmpty && !showKeys) return const SizedBox.shrink();
-    final rawShort = raw.length > 200 ? raw.substring(0, 200) : raw;
-    final key = _debugParsed.trim().isEmpty ? 'null' : _debugParsed;
-    final err = _debugError.trim();
-    final text = raw.trim().isEmpty
-        ? 'DEBUG: raw=—'
-        : 'DEBUG: key=$key | raw=$rawShort'
-            '${err.isEmpty ? '' : ' | error=$err'}';
-    // Диагностика 401 (фикс): префиксы (8 символов) всех трёх источников
-    // ключа — сразу видно, какой ключ застрял в настройках или пресете.
-    final keysLine = 'DEBUG KEYS: polzaAuth=${_prefix8(polzaAuth.accessToken)}'
-        ' | settings=${_prefix8(settings.apiKey)}'
-        ' | preset=${_prefix8(presets.active?.apiKey ?? '')}';
-    // PKCE-диагностика: префиксы сгенерированного и отправленного
-    // code_verifier, признак совпадения и код ошибки.
-    final bool hasPkce = _cvGen.isNotEmpty || _cvSent.isNotEmpty;
-    final String pkceLine = hasPkce
-        ? 'DEBUG PKCE: cv_gen=$_cvGen | cv_sent=$_cvSent | '
-            'match=${_cvMatch.isEmpty ? '?' : _cvMatch}'
-            '${_pkceError.isEmpty ? '' : ' | pkce_error=$_pkceError'}'
-        : '';
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.fromLTRB(10, 4, 4, 10),
-        decoration: BoxDecoration(
-          color: p.bg.withValues(alpha: 0.55),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: p.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'OAuth Debug',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.6,
-                      color: p.muted,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Очистить лог',
-                  visualDensity: VisualDensity.compact,
-                  constraints: const BoxConstraints(
-                    minWidth: 30,
-                    minHeight: 30,
-                  ),
-                  padding: EdgeInsets.zero,
-                  icon: Icon(Icons.close_rounded, size: 16, color: p.muted),
-                  onPressed: _clearDebug,
-                ),
-              ],
-            ),
-            const SizedBox(height: 2),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: SelectableText(
-                text,
-                style: TextStyle(
-                  fontSize: 10,
-                  height: 1.4,
-                  color: p.muted,
-                  fontFamily: 'JetBrains Mono',
-                  fontFamilyFallback: const ['monospace'],
-                ),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: SelectableText(
-                keysLine,
-                style: TextStyle(
-                  fontSize: 10,
-                  height: 1.4,
-                  color: p.text,
-                  fontFamily: 'JetBrains Mono',
-                  fontFamilyFallback: const ['monospace'],
-                ),
-              ),
-            ),
-            if (pkceLine.isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: SelectableText(
-                  pkceLine,
-                  style: TextStyle(
-                    fontSize: 10,
-                    height: 1.4,
-                    color: p.text,
-                    fontFamily: 'JetBrains Mono',
-                    fontFamilyFallback: const ['monospace'],
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
       ),
     );
   }
@@ -697,7 +467,7 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              fontSize: 13.5,
+              fontSize: 12.5,
               fontWeight: FontWeight.w700,
               color: p.text,
               height: 1.25,
