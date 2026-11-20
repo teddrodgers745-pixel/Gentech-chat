@@ -98,7 +98,7 @@ class ImagesApiExecutor extends GenerationExecutor {
       );
       if (_cancelled) return;
       final status = resp.statusCode ?? 0;
-      var body = resp.data ?? '';
+      final body = resp.data ?? '';
       if (status < 200 || status >= 300) {
         yield GenerationFailure(_mapError(status, body));
         return;

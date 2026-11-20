@@ -186,7 +186,7 @@ abstract final class PolzaParser {
 
     // Проверяем сначала top_provider.reasoning, затем m.reasoning,
     // затем parameters.reasoning (в соответствии со структурой Polza API).
-    Map<String, dynamic>? candidate =
+    final Map<String, dynamic>? candidate =
         asMap(tpRaw) ?? asMap(m['reasoning']) ?? paramReasoning;
     final marker =
         identical(tpRaw, true) || identical(m['reasoning'], true);
