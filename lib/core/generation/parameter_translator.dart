@@ -9,10 +9,8 @@ import 'parameter_validation_exception.dart';
 import 'user_param_override_store.dart';
 
 /// Универсальные параметры генерации, собранные интерфейсом нейтрально:
-/// пропорция, длительность, разрешение, размер холста и качество.
-/// Переводятся в формат конкретной модели методами
-/// [ParameterTranslator.toImageBody] / [ParameterTranslator.toVideoBody]
-/// по её [ModelParameters].
+/// пропорция (`aspect_ratio` формата "16:9"), длительность (`duration` — int),
+/// разрешение (`resolution` — строка), размер холста и качество.
 class UniversalParams {
   final String? aspectRatio;
   final int? duration;
@@ -29,21 +27,59 @@ class UniversalParams {
   });
 
   /// Читает нейтральные параметры из сырой карты запроса (ключи
-  /// [ParamKeys]); пустые и нестроковые значения считаются отсутствующими.
-  factory UniversalParams.fromRaw(Map<String, dynamic> raw) {
+  /// [ParamKeys] и альтернативные имена ключей), подставляя выбранные в UI
+  /// значения из [ActiveModelController] как фоллбэк, если поле не было
+  /// передано в [raw].
+  factory UniversalParams.fromRaw(
+    Map<String, dynamic> raw, {
+    bool useControllerFallback = true,
+  }) {
+    final rawRatio = _aspectRatio(
+      raw[ParamKeys.aspectRatio] ?? raw['aspectRatio'] ?? raw['ratio'],
+    );
+    final rawDuration = _int(
+      raw[ParamKeys.duration] ?? raw['seconds'] ?? raw['duration_seconds'],
+    );
+    final rawResolution = _string(
+      raw[ParamKeys.resolution] ?? raw['image_resolution'],
+    );
+    final rawSize = _string(raw[ParamKeys.size]);
+    final rawQuality = _string(raw[ParamKeys.quality]);
+
     return UniversalParams(
-      aspectRatio: _string(raw[ParamKeys.aspectRatio]),
-      duration: _int(raw[ParamKeys.duration]),
-      resolution: _string(raw[ParamKeys.resolution]),
-      size: _string(raw[ParamKeys.size]),
-      quality: _string(raw[ParamKeys.quality]),
+      aspectRatio: rawRatio ??
+          (useControllerFallback
+              ? _aspectRatio(ActiveModelController.selectedAspectRatio)
+              : null),
+      duration: rawDuration ??
+          (useControllerFallback
+              ? ActiveModelController.selectedDuration
+              : null),
+      resolution: rawResolution ??
+          (useControllerFallback
+              ? _string(ActiveModelController.selectedResolution)
+              : null),
+      size: rawSize,
+      quality: rawQuality ??
+          (useControllerFallback
+              ? _string(ActiveModelController.selectedQuality)
+              : null),
     );
   }
 
   static String? _string(Object? v) {
-    if (v is! String) return null;
-    final t = v.trim();
+    if (v == null) return null;
+    final t = v.toString().trim();
     return t.isEmpty ? null : t;
+  }
+
+  static String? _aspectRatio(Object? v) {
+    final s = _string(v);
+    if (s == null) return null;
+    // Формат "16:9", "9:16", "1:1" и т.п.
+    final m = RegExp(r'^(\d+)\s*[:/]\s*(\d+)$').firstMatch(s);
+    if (m != null) return '${m.group(1)}:${m.group(2)}';
+    return s;
   }
 
   static int? _int(Object? v) {
@@ -61,14 +97,6 @@ class UniversalParams {
 }
 
 /// Нормализация параметров генерации под конкретную модель.
-///
-/// Два уровня:
-///  1. [translateWithCatalog] — курированный каталог
-///     ([CuratedParameterCatalog]) и пользовательский override
-///     ([UserParamOverrideStore], приоритет user > curated) с правилами
-///     ограничений модели ([ModelParameters.constraints]);
-///  2. [translate] — прежний путь по [GenerationSchema] модели;
-///     используется как fallback, когда модель неизвестна каталогу.
 abstract final class ParameterTranslator {
   /// Приводит [rawParams] к формату payload модели [model].
   /// Возвращает новую карту; исходная не меняется.
@@ -76,22 +104,83 @@ abstract final class ParameterTranslator {
     Map<String, dynamic> rawParams,
     ModelInfo model,
   ) {
+    final enriched = _enrichRawWithSelected(rawParams, isVideo: model.isVideoGenerator);
     final schema = model.generationSchema;
-    if (schema == null) return rawParams;
-    final clean = schema.sanitize(rawParams);
-    return switch (schema.payloadStyle) {
+    if (schema == null) return _normalizeRawTypes(enriched, isImage: model.isImageGenerator);
+    final clean = schema.sanitize(enriched);
+    final result = switch (schema.payloadStyle) {
       PayloadStyle.sizeOnly => _sizeOnly(clean, schema),
       PayloadStyle.openAiSora => _sora(clean, schema),
       PayloadStyle.openRouterChatConfig => _openRouterConfig(clean),
       PayloadStyle.standardFlat => _standardFlat(clean, model),
     };
+    // Если схема отфильтровала явно выбранные пользователем параметры
+    // (aspect_ratio, duration, resolution), сохраняем их в корректных типах.
+    if (schema.payloadStyle == PayloadStyle.standardFlat) {
+      final p = UniversalParams.fromRaw(enriched);
+      if (p.aspectRatio != null && !result.containsKey(ParamKeys.aspectRatio)) {
+        result[ParamKeys.aspectRatio] = p.aspectRatio!;
+      }
+      if (p.duration != null &&
+          model.isVideoGenerator &&
+          !result.containsKey(ParamKeys.duration)) {
+        result[ParamKeys.duration] = p.duration!;
+      }
+      if (p.resolution != null &&
+          !result.containsKey(ParamKeys.resolution) &&
+          !result.containsKey('image_resolution')) {
+        result[ParamKeys.resolution] = p.resolution!;
+      }
+    }
+    return result;
+  }
+
+  static Map<String, dynamic> _enrichRawWithSelected(
+    Map<String, dynamic> rawParams, {
+    required bool isVideo,
+  }) {
+    final out = Map<String, dynamic>.of(rawParams);
+    final ratio = UniversalParams._aspectRatio(
+      out[ParamKeys.aspectRatio] ?? ActiveModelController.selectedAspectRatio,
+    );
+    if (ratio != null) out[ParamKeys.aspectRatio] = ratio;
+
+    final dur = UniversalParams._int(
+      out[ParamKeys.duration] ??
+          (isVideo ? ActiveModelController.selectedDuration : null),
+    );
+    if (dur != null) out[ParamKeys.duration] = dur;
+
+    final res = UniversalParams._string(
+      out[ParamKeys.resolution] ??
+          out['image_resolution'] ??
+          ActiveModelController.selectedResolution,
+    );
+    if (res != null) out[ParamKeys.resolution] = res;
+
+    final qual = UniversalParams._string(
+      out[ParamKeys.quality] ?? ActiveModelController.selectedQuality,
+    );
+    if (qual != null) out[ParamKeys.quality] = qual;
+    return out;
+  }
+
+  static Map<String, dynamic> _normalizeRawTypes(
+    Map<String, dynamic> params, {
+    bool isImage = false,
+  }) {
+    final out = <String, dynamic>{};
+    final p = UniversalParams.fromRaw(params);
+    if (p.aspectRatio != null) out[ParamKeys.aspectRatio] = p.aspectRatio!;
+    if (!isImage && p.duration != null) out[ParamKeys.duration] = p.duration!;
+    if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
+    if (p.size != null) out[ParamKeys.size] = p.size!;
+    if (p.quality != null) out[ParamKeys.quality] = p.quality!;
+    return out;
   }
 
   // ---------- каталог параметров (приоритет user > curated) ----------
 
-  /// Параметры модели: сначала override пользователя, затем курированный
-  /// каталог; null — модель неизвестна ни там, ни там.
-  ///
   static Future<ModelParameters?> resolveParams(
     String modelId,
     UserParamOverrideStore ov,
@@ -102,14 +191,6 @@ abstract final class ParameterTranslator {
   }
 
   /// Тело параметров REST-запроса генерации изображения.
-  ///
-  /// Правила по ограничениям модели:
-  ///  - 'no aspect_ratio' — провайдер понимает только size: пропорция
-  ///    конвертируется в размер холста (16:9 -> 1792x1024,
-  ///    9:16 -> 1024x1792, 1:1 -> 1024x1024);
-  ///  - 'width/height rejected' — отправляется только aspect_ratio;
-  ///  - '1080p only with 6s' — проверка комбинации, иначе
-  ///    [ParameterValidationException].
   static Map<String, dynamic> toImageBody(
     UniversalParams p,
     ModelParameters spec,
@@ -119,62 +200,72 @@ abstract final class ParameterTranslator {
     if (_hasConstraint(spec, 'no aspect_ratio')) {
       final size = _sizeFor(p);
       if (size != null) out[ParamKeys.size] = size;
+      if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
       _addQuality(out, p, spec);
       return out;
     }
     if (_hasConstraint(spec, 'width/height rejected')) {
       final r = p.aspectRatio;
       if (r != null) out[ParamKeys.aspectRatio] = r;
+      if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
+      _addQuality(out, p, spec);
       return out;
     }
-    if (p.aspectRatio != null) out[ParamKeys.aspectRatio] = p.aspectRatio!;
+    final ratio = p.aspectRatio ??
+        (spec.aspectRatios.isNotEmpty ? spec.aspectRatios.first : null);
+    if (ratio != null) out[ParamKeys.aspectRatio] = ratio;
     if (p.size != null) out[ParamKeys.size] = p.size!;
-    if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
+    final res = p.resolution ??
+        (spec.resolutions.isNotEmpty ? spec.resolutions.first : null);
+    if (res != null) out[ParamKeys.resolution] = res;
     _addQuality(out, p, spec);
     return out;
   }
 
-  /// Тело параметров запроса генерации видео (те же правила ограничений,
-  /// плюс duration/resolution/quality).
+  /// Тело параметров запроса генерации видео:
+  /// `aspect_ratio` — String ("16:9"), `duration` — int, `resolution` — String.
   static Map<String, dynamic> toVideoBody(
     UniversalParams p,
     ModelParameters spec,
   ) {
     _validateCombination(p, spec);
     final out = <String, dynamic>{};
+    final defaultRatio =
+        spec.aspectRatios.isNotEmpty ? spec.aspectRatios.first : null;
     if (_hasConstraint(spec, 'no aspect_ratio')) {
       final size = _sizeFor(p);
       if (size != null) out[ParamKeys.size] = size;
     } else if (_hasConstraint(spec, 'width/height rejected')) {
-      // Только aspect_ratio: размерные поля не отправляются вовсе.
-      // Ранний return убран: duration/resolution/quality добавляются
-      // ниже в общем пути.
-      final r = p.aspectRatio;
+      final r = p.aspectRatio ?? defaultRatio;
       if (r != null) out[ParamKeys.aspectRatio] = r;
     } else {
-      if (p.aspectRatio != null) out[ParamKeys.aspectRatio] = p.aspectRatio!;
+      final r = p.aspectRatio ?? defaultRatio;
+      if (r != null) out[ParamKeys.aspectRatio] = r;
       if (p.size != null) out[ParamKeys.size] = p.size!;
     }
-    if (p.duration != null) out[ParamKeys.duration] = p.duration!;
-    if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
+    final discDurations = spec.durations?.discrete;
+    final defaultDuration = (discDurations != null && discDurations.isNotEmpty)
+        ? discDurations.first
+        : spec.durations?.min;
+    final duration = p.duration ?? defaultDuration;
+    if (duration != null) out[ParamKeys.duration] = duration;
+
+    final defaultResolution =
+        spec.resolutions.isNotEmpty ? spec.resolutions.first : null;
+    final resolution = p.resolution ?? defaultResolution;
+    if (resolution != null) out[ParamKeys.resolution] = resolution;
+
     _addQuality(out, p, spec);
     return out;
   }
 
-  /// Точка входа для исполнителей: если модель известна каталогу
-  /// (user override либо curated), тело собирается по правилам
-  /// ограничений; если универсальные параметры пусты или модель
-  /// неизвестна — используется [fallback] (прежнее поведение).
+  /// Точка входа для исполнителей: собирает и приводит параметры
+  /// `aspect_ratio` (String), `duration` (int), `resolution` (String).
   static Future<Map<String, dynamic>> translateWithCatalog({
     required String modelId,
     required Map<String, dynamic> rawParams,
     required Map<String, dynamic> Function() fallback,
   }) async {
-    // Stage 2c-3: итоговые merged-параметры контроллера (field-level:
-    // User > CatalogEntry/кэш OpenRouter > Curated) — базовый источник
-    // спецификации. Свежий пользовательский override применяется поверх
-    // по полям: свежее сохранение подхватывается даже до пересчёта
-    // контроллера.
     var spec = ActiveModelController.mergedParamsFor(modelId);
     if (spec != null && spec.hasAny) {
       ModelParameters? user;
@@ -187,29 +278,49 @@ abstract final class ParameterTranslator {
         spec = _userOverBase(user, spec);
       }
     } else {
-      // Контроллер ещё не разрешал модель либо merged пуст: прежний путь
-      // (UserOverride > Curated).
       if (!CuratedParameterCatalog.isLoaded) {
         await CuratedParameterCatalog.load();
       }
       spec = await resolveParams(modelId, userParamOverrideStore);
     }
-    if (spec == null || !spec.hasAny) return fallback();
-    final p = UniversalParams.fromRaw(rawParams);
+
+    final isHeuristicVid = ActiveModelController.isHeuristicVideo(modelId);
+    final p = UniversalParams.fromRaw(rawParams, useControllerFallback: true);
+
+    if (spec == null || !spec.hasAny) {
+      final fb = Map<String, dynamic>.of(fallback());
+      if (p.aspectRatio != null &&
+          !fb.containsKey(ParamKeys.aspectRatio) &&
+          !fb.containsKey(ParamKeys.size)) {
+        fb[ParamKeys.aspectRatio] = p.aspectRatio!;
+      }
+      if (isHeuristicVid && p.duration != null) {
+        fb[ParamKeys.duration] = p.duration!;
+      } else if (fb[ParamKeys.duration] != null) {
+        final dInt = UniversalParams._int(fb[ParamKeys.duration]);
+        if (dInt != null) fb[ParamKeys.duration] = dInt;
+      }
+      if (p.resolution != null &&
+          !fb.containsKey(ParamKeys.resolution) &&
+          !fb.containsKey('image_resolution')) {
+        fb[ParamKeys.resolution] = p.resolution!;
+      }
+      if (p.quality != null && !fb.containsKey(ParamKeys.quality)) {
+        fb[ParamKeys.quality] = p.quality!;
+      }
+      return fb;
+    }
+
     final durations = spec.durations;
     final isVideo = spec.type == 'video' ||
         (durations != null && !durations.isEmpty) ||
         p.duration != null ||
-        ActiveModelController.isHeuristicVideo(modelId);
+        isHeuristicVid;
     final body = isVideo ? toVideoBody(p, spec) : toImageBody(p, spec);
     if (body.isEmpty) return fallback();
     return body;
   }
 
-  /// Stage 2c-3: применяет пользовательский override ПОВЕРХ базовой
-  /// merged-спецификации по полям: непустое поле пользователя побеждает,
-  /// пустое поле пропускается (база добирает недостающие), ограничения
-  /// объединяются из обоих источников.
   static ModelParameters _userOverBase(
     ModelParameters user,
     ModelParameters base,
@@ -243,7 +354,6 @@ abstract final class ParameterTranslator {
 
   // ---------- правила ограничений ----------
 
-  /// Есть ли у модели ограничение, содержащее [needle] (без регистра).
   static bool _hasConstraint(ModelParameters spec, String needle) {
     final n = needle.toLowerCase();
     for (final c in spec.constraints) {
@@ -252,8 +362,6 @@ abstract final class ParameterTranslator {
     return false;
   }
 
-  /// Правило '1080p only with 6s': разрешение 1080p допустимо только
-  /// при явно заданной длительности 6 секунд.
   static void _validateCombination(UniversalParams p, ModelParameters spec) {
     if (!_hasConstraint(spec, '1080p only with 6s')) return;
     final res = (p.resolution ?? '').trim().toLowerCase();
@@ -267,8 +375,6 @@ abstract final class ParameterTranslator {
     }
   }
 
-  /// Размер холста для тела: явный size пользователя, иначе пропорция,
-  /// конвертированная по правилу 'no aspect_ratio'; null — не задано.
   static String? _sizeFor(UniversalParams p) {
     final s = p.size;
     if (s != null && s.isNotEmpty) return s;
@@ -277,7 +383,6 @@ abstract final class ParameterTranslator {
     return _sizeForRatio(r);
   }
 
-  /// 16:9 -> 1792x1024, 9:16 -> 1024x1792, 1:1 и прочее -> 1024x1024.
   static String _sizeForRatio(String ratio) {
     switch (ratio.trim()) {
       case '16:9':
@@ -289,14 +394,13 @@ abstract final class ParameterTranslator {
     }
   }
 
-  /// Качество уходит в тело, только если модель его заявляет
-  /// (либо список качеств неизвестен).
   static void _addQuality(
     Map<String, dynamic> out,
     UniversalParams p,
     ModelParameters spec,
   ) {
-    final q = p.quality;
+    final q = p.quality ??
+        (spec.qualities.isNotEmpty ? spec.qualities.first : null);
     if (q == null) return;
     if (spec.qualities.isNotEmpty && !spec.qualities.contains(q)) return;
     out[ParamKeys.quality] = q;
@@ -304,8 +408,6 @@ abstract final class ParameterTranslator {
 
   // ---------- стили payload (прежний путь по GenerationSchema) ----------
 
-  /// sizeOnly: единственное поле `size` из mappedSize пропорции либо
-  /// из значения параметра size. Ключ aspect_ratio не отправляется.
   static Map<String, dynamic> _sizeOnly(
     Map<String, dynamic> params,
     GenerationSchema schema,
@@ -316,8 +418,6 @@ abstract final class ParameterTranslator {
     };
   }
 
-  /// OpenAI Sora: пропорция -> size через mappedSize,
-  /// длительность -> seconds (int).
   static Map<String, dynamic> _sora(
     Map<String, dynamic> params,
     GenerationSchema schema,
@@ -330,8 +430,6 @@ abstract final class ParameterTranslator {
     return out;
   }
 
-  /// OpenRouter chat/completions: aspect_ratio/quality/size упаковываются
-  /// внутрь image_config.
   static Map<String, dynamic> _openRouterConfig(Map<String, dynamic> params) {
     final cfg = <String, dynamic>{};
     void take(String key) {
@@ -349,16 +447,14 @@ abstract final class ParameterTranslator {
     return <String, dynamic>{'image_config': cfg};
   }
 
-  /// Плоские поля рядом с model/prompt: aspect_ratio, duration (int),
-  /// resolution (для генераторов изображений — image_resolution).
   static Map<String, dynamic> _standardFlat(
     Map<String, dynamic> params,
     ModelInfo model,
   ) {
     final out = <String, dynamic>{};
-    final ratio = params[ParamKeys.aspectRatio];
-    if (ratio is String && ratio.trim().isNotEmpty) {
-      out[ParamKeys.aspectRatio] = ratio.trim();
+    final ratio = UniversalParams._aspectRatio(params[ParamKeys.aspectRatio]);
+    if (ratio != null && ratio.isNotEmpty) {
+      out[ParamKeys.aspectRatio] = ratio;
     }
     final duration = _asInt(params[ParamKeys.duration]);
     if (duration != null) out[ParamKeys.duration] = duration;
@@ -373,8 +469,6 @@ abstract final class ParameterTranslator {
 
   // ---------- помощники ----------
 
-  /// Размер холста: mappedSize выбранного варианта пропорции (или само
-  /// значение варианта), иначе явный параметр size.
   static String _resolveSize(
     Map<String, dynamic> params,
     GenerationSchema schema,
@@ -409,12 +503,5 @@ abstract final class ParameterTranslator {
     return null;
   }
 
-  /// Значение к int: int как есть, num округляется, строка через
-  /// int.tryParse. null — привести не удалось.
-  static int? _asInt(Object? value) {
-    if (value is int) return value;
-    if (value is num) return value.round();
-    if (value is String) return int.tryParse(value.trim());
-    return null;
-  }
+  static int? _asInt(Object? value) => UniversalParams._int(value);
 }

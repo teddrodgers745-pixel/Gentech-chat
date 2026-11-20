@@ -528,10 +528,63 @@ class ChatService {
     return null;
   }
 
-  /// RouterAI: провайдер, у которого уровни размышлений ограничены
-  /// ('off'/'high'); определяется по Base URL (host содержит routerai).
+  /// RouterAI: провайдер, определяемый по Base URL (host содержит routerai).
   static bool _isRouterAI(String baseUrl) =>
-      ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'routerai';
+      ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'routerai' ||
+      baseUrl.trim().toLowerCase().contains('routerai');
+
+  /// Polza AI: провайдер, определяемый по Base URL (host содержит polza.ai).
+  static bool _isPolza(String baseUrl) =>
+      ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'polza' ||
+      baseUrl.trim().toLowerCase().contains('polza.ai');
+
+  /// Формирует payload параметра размышлений (reasoning) согласно документации
+  /// провайдера:
+  ///  - если effort пустой, но в настройках выбран не 'off'/'none', берём
+  ///    значение из settings.reasoningEffort;
+  ///  - 'off'/'none' — параметр не отправляется;
+  ///  - Polza AI (https://polza.ai/docs/osobennosti/reasoning-tokens.md):
+  ///    `reasoning: {"effort": "<level>"}`;
+  ///  - RouterAI: `reasoning_effort: "<level>"`;
+  ///  - прочие провайдеры: через [ReasoningMapper.mapToApi].
+  static Map<String, dynamic> _buildReasoningPayload({
+    required String baseUrl,
+    required String model,
+    required String? reasoningEffort,
+  }) {
+    var effort = (reasoningEffort ?? '').trim().toLowerCase();
+    if (effort.isEmpty) {
+      try {
+        effort = settings.reasoningEffort.trim().toLowerCase();
+      } catch (_) {}
+    }
+    if (effort.isEmpty || effort == 'off' || effort == 'none') {
+      return const <String, dynamic>{};
+    }
+    // Приводим синонимы к стандартным уровням API.
+    final normalizedEffort = switch (effort) {
+      'max' => 'high',
+      'min' => 'low',
+      _ => effort,
+    };
+    if (_isPolza(baseUrl)) {
+      return <String, dynamic>{
+        'reasoning': <String, dynamic>{'effort': normalizedEffort},
+      };
+    }
+    if (_isRouterAI(baseUrl)) {
+      return <String, dynamic>{
+        'reasoning_effort': normalizedEffort,
+      };
+    }
+    final mapped = ReasoningMapper.mapToApi(
+      ReasoningMapper.fromId(normalizedEffort),
+      model,
+    );
+    return mapped.isNotEmpty
+        ? mapped
+        : <String, dynamic>{'reasoning_effort': normalizedEffort};
+  }
 
   /// Один запрос к /chat/completions с автоповтором для RouterAI:
   /// если пользователь выбрал уровень 'high' либо 'max' и провайдер
@@ -636,29 +689,12 @@ class ChatService {
     try {
       final base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
       final uri = Uri.parse('$base/chat/completions');
-      // Stage 4.1 (b): запрос создаётся непосредственно перед отправкой
-      // (см. блок ретрая ниже — один повтор при 400 с удалением поля).
       final builtin = _builtinToolsPayload();
-      // Единый селектор Reasoning Effort: off/none — поле в запрос не
-      // уходит; известные уровни форматирует ReasoningMapper.mapToApi
-      // ('reasoning_effort' для прямых провайдеров,
-      // 'reasoning: {effort: ...}' для идентификаторов с префиксом
-      // владельца); неизвестные уровни уходят как есть в reasoning_effort.
-      final cleanEffort = (reasoningEffort ?? '').trim().toLowerCase();
-      final Map<String, dynamic> reasoningPayload;
-      if (cleanEffort.isEmpty ||
-          cleanEffort == 'off' ||
-          cleanEffort == 'none') {
-        reasoningPayload = const <String, dynamic>{};
-      } else {
-        final mapped = ReasoningMapper.mapToApi(
-          ReasoningMapper.fromId(cleanEffort),
-          model,
-        );
-        reasoningPayload = mapped.isNotEmpty
-            ? mapped
-            : <String, dynamic>{'reasoning_effort': cleanEffort};
-      }
+      final reasoningPayload = _buildReasoningPayload(
+        baseUrl: base,
+        model: model,
+        reasoningEffort: reasoningEffort,
+      );
       Map<String, dynamic> bodyMap = {
         'model': model,
         'messages': history,
@@ -781,7 +817,16 @@ class ChatService {
           if (choices != null && choices.isNotEmpty) {
             final msg = (choices[0] as Map)['message'] as Map?;
             content = (msg?['content'] as String?) ?? '';
-            reasoning = (msg?['reasoning_content'] as String?) ?? '';
+            final rc = (msg?['reasoning_content'] as String?) ?? '';
+            var rs = '';
+            final rawReasoning = msg?['reasoning'];
+            if (rawReasoning is String) {
+              rs = rawReasoning;
+            } else if (rawReasoning is Map) {
+              final t = rawReasoning['content'] ?? rawReasoning['text'];
+              if (t is String) rs = t;
+            }
+            reasoning = rc.isNotEmpty ? rc : rs;
             calls = _parseToolCalls(msg?['tool_calls'] as List?);
           }
           usage = _usageOf(j['usage']);

@@ -41,14 +41,6 @@ class ActiveModelController extends ChangeNotifier {
         _supportsNativeSearch =
             supportsNativeSearch ?? SearchCapabilityResolver.supportsNativeSearch {
     _presetController.addListener(_onPresetChanged);
-    // Stage 2b (b): подписка на завершение sync уже реализована в ходе 2a —
-    // ProviderCatalogService уведомляет слушателей после успешной
-    // синхронизации, контроллер пересчитывает _resolve для активной модели
-    // и вызывает notifyListeners() без рестарта (_onCatalogChanged).
-    // Race guard — существующий механизм токена в _resolve
-    // (token = ++_resolveToken; проверки после каждого await), отдельные
-    // мьютексы не нужны. Рекурсии нет: notifyListeners() не вызывает
-    // _resolve (слушатели — только перестройка UI). Подтверждено, не меняем.
     providerCatalog.addListener(_onCatalogChanged);
   }
 
@@ -99,6 +91,47 @@ class ActiveModelController extends ChangeNotifier {
   /// правки UI).
   static final Map<String, ModelParameters> _publishedMerged =
       <String, ModelParameters>{};
+
+  /// Выбранные пользователем в UI медиа-пресеты (aspect_ratio, duration,
+  /// resolution, quality). Служат надёжным резервным источником для
+  /// [ParameterTranslator], если вызывающий код не положил их в
+  /// GenerationRequest.parameters.
+  static String? _selectedAspectRatio;
+  static int? _selectedDuration;
+  static String? _selectedResolution;
+  static String? _selectedQuality;
+
+  static String? get selectedAspectRatio => _selectedAspectRatio;
+  static int? get selectedDuration => _selectedDuration;
+  static String? get selectedResolution => _selectedResolution;
+  static String? get selectedQuality => _selectedQuality;
+
+  /// Обновляет выбранные медиа-пресеты из панели ввода.
+  static void updateSelectedMediaParams({
+    String? aspectRatio,
+    int? duration,
+    String? resolution,
+    String? quality,
+    bool clearNulls = false,
+  }) {
+    if (aspectRatio != null || clearNulls) {
+      final clean = aspectRatio?.trim();
+      _selectedAspectRatio =
+          (clean != null && clean.isNotEmpty) ? clean : null;
+    }
+    if (duration != null || clearNulls) {
+      _selectedDuration = duration;
+    }
+    if (resolution != null || clearNulls) {
+      final clean = resolution?.trim();
+      _selectedResolution =
+          (clean != null && clean.isNotEmpty) ? clean : null;
+    }
+    if (quality != null || clearNulls) {
+      final clean = quality?.trim();
+      _selectedQuality = (clean != null && clean.isNotEmpty) ? clean : null;
+    }
+  }
 
   /// Итоговые merged-параметры для модели (результат Stage 2b (c));
   /// null — контроллер ещё не разрешал модель либо параметров нет.
@@ -193,9 +226,6 @@ class ActiveModelController extends ChangeNotifier {
 
   Future<void> _onPresetChanged() async {
     if (_resolving) return;
-    // Guard на время разрешения: смена пресета (текст/картинка/видео)
-    // пересчитывает capabilities без устаревших значений — параллельные
-    // пересчёты (в т.ч. от каталога) не вмешиваются, гонка гасится токеном.
     _resolving = true;
     try {
       final presetModel = _presetController.active?.model.trim() ?? '';
@@ -632,13 +662,6 @@ class ActiveModelController extends ChangeNotifier {
     if (token != _resolveToken) return;
 
     // ---- Параметры генерации (Stage 2b (c): merge по каждому полю) ----
-    // Приоритет по КАЖДОМУ полю отдельно:
-    //  1. UserParamOverrideStore (SharedPreferences) — всегда побеждает;
-    //  2. динамический каталог: CatalogEntry подключения, пробелы добирает
-    //     кэш OpenRouter (GenerationCapabilityResolver);
-    //  3. курированный каталог и пресеты — только для пустых полей;
-    //  4. unknown/пусто. Reasoning обрабатывается отдельно ниже (2a):
-    //    явный пустой список уровней от провайдера там НЕ добирается.
     ModelParameters? params;
     String paramsSource = 'нет';
     final userOverride = await _loadUserOverride(modelId, norm);
@@ -648,11 +671,8 @@ class ActiveModelController extends ChangeNotifier {
     var dynSource = 'каталог (${entry?.capabilitiesSource ?? 'нет'})';
     if (dynamicParams == null) {
       try {
-        // Догрузка дискового кэша: no-op, если уже загружен в main.dart.
         await GenerationCapabilityResolver.loadCache();
-      } catch (_) {
-        // Кэш недоступен — продолжаем с каталогом/пресетами.
-      }
+      } catch (_) {}
       final genCap = _genCapabilityQuietly(norm);
       if (genCap != null) {
         dynamicParams = _withConfidence(genCap, 'openrouter');
@@ -707,15 +727,24 @@ class ActiveModelController extends ChangeNotifier {
                 (catalogFallback.durations == null ||
                     catalogFallback.durations!.isEmpty) &&
                 (params != null && params.hasAny))) {
-          params = catalogFallback;
+          params = _mergeFieldLevel(
+                user: userOverride,
+                fromCatalog: params,
+                curated: catalogFallback,
+              ) ??
+              catalogFallback;
         }
         if (params == null ||
             !params.hasAny ||
             (kind == ActiveModelKind.video &&
-                (params.durations == null || params.durations!.isEmpty))) {
+                (params.durations == null || params.durations!.isEmpty)) ||
+            (kind == ActiveModelKind.video && params.resolutions.isEmpty)) {
           params = defaultMediaParams(kind, norm, params);
           paramsSource = 'дефолт медиа';
         }
+      } else if (kind == ActiveModelKind.video &&
+          params.resolutions.isEmpty) {
+        params = defaultMediaParams(kind, norm, params);
       }
     }
 
@@ -723,13 +752,9 @@ class ActiveModelController extends ChangeNotifier {
       settings.setSearchMode('native');
     }
 
-    // Поддержка нативного веб-поиска: кэш резолвера догружается (no-op,
-    // если уже загружен в main.dart), затем синхронная проверка модели.
     try {
       await SearchCapabilityResolver.loadCache();
-    } catch (_) {
-      // Кэш недоступен — проверка работает по fallback-префиксу.
-    }
+    } catch (_) {}
     final nativeSearch = _supportsNativeSearch(norm);
 
     // ---- Reasoning ----
@@ -742,8 +767,6 @@ class ActiveModelController extends ChangeNotifier {
     if (isText && entry != null) {
       final r = entry.reasoning;
       if (r != null) {
-        // Источник явно сообщил reasoning: уровни как есть,
-        // mandatory убирает 'none'/'off'.
         final levels = <String>[...r.levels];
         if (r.mandatory) {
           levels.removeWhere((l) => l == 'none' || l == 'off');
@@ -763,24 +786,50 @@ class ActiveModelController extends ChangeNotifier {
               'каталог (${entry.capabilitiesSource}), уровни не перечислены';
         }
       } else if (!entry.reasoningUnknown) {
-        // Источник ЯВНО сообщает, что reasoning у модели нет:
-        // капсула скрывается (пустой список уровней).
         supportsReasoning = false;
         reasoningLevels = const <String>[];
         reasoningSource =
             'каталог (${entry.capabilitiesSource}): reasoning отсутствует';
       }
-      // reasoningUnknown == true (данных нет, формат В): принудительное
-      // supportsReasoning = true убрано — работают прежние резолверы
-      // (эвристика по идентификатору / кэш OpenRouter), заданные выше.
     }
-    // Защита от гонки: за время await модель могла смениться again.
     if (token != _resolveToken) return;
 
-    // Stage 2c-3: публикация итоговых merged-параметров (user > каталог >
-    // curated, включая fallback медиа-дефолтов выше) для исполнителей —
-    // ParameterTranslator.translateWithCatalog берёт их как базовый
-    // источник спецификации (см. mergedParamsFor).
+    // Синхронизируем дефолты выбранных медиа-параметров для активной модели.
+    if (kind == ActiveModelKind.video || kind == ActiveModelKind.image) {
+      final ratios = params?.aspectRatios ?? const <String>[];
+      if (ratios.isNotEmpty &&
+          (_selectedAspectRatio == null ||
+              !ratios.contains(_selectedAspectRatio))) {
+        _selectedAspectRatio = ratios.first;
+      }
+      if (kind == ActiveModelKind.video) {
+        final disc = params?.durations?.discrete ?? const <int>[];
+        if (disc.isNotEmpty &&
+            (_selectedDuration == null || !disc.contains(_selectedDuration))) {
+          _selectedDuration = disc.first;
+        }
+      } else {
+        _selectedDuration = null;
+      }
+      final resList = params?.resolutions ?? const <String>[];
+      if (resList.isNotEmpty) {
+        if (_selectedResolution == null ||
+            !resList.contains(_selectedResolution)) {
+          _selectedResolution = resList.first;
+        }
+      } else {
+        _selectedResolution = null;
+      }
+      final qList = params?.qualities ?? const <String>[];
+      if (qList.isNotEmpty) {
+        if (_selectedQuality == null || !qList.contains(_selectedQuality)) {
+          _selectedQuality = qList.first;
+        }
+      } else {
+        _selectedQuality = null;
+      }
+    }
+
     _publishMergedParams(modelId, params);
     _current = ActiveModelCapabilities(
       modelId: modelId,
@@ -809,9 +858,12 @@ class ActiveModelController extends ChangeNotifier {
     final en = e;
     if (en == null) return null;
     final durs = en.durations;
+    final sizes = _entrySizes(en);
     final hasAny = en.aspectRatios.isNotEmpty ||
         en.resolutions.isNotEmpty ||
-        durs.isNotEmpty;
+        durs.isNotEmpty ||
+        en.qualities.isNotEmpty ||
+        sizes.isNotEmpty;
     if (!hasAny) return null;
     return ModelParameters(
       type: en.type.isEmpty ? null : en.type,
@@ -819,7 +871,7 @@ class ActiveModelController extends ChangeNotifier {
       durations:
           durs.isEmpty ? null : DurationRange(discrete: List<int>.of(durs)),
       resolutions: List<String>.of(en.resolutions),
-      sizes: _entrySizes(en),
+      sizes: sizes,
       qualities: List<String>.of(en.qualities),
       constraints: const <String>[],
       confidence: en.capabilitiesSource,
@@ -880,23 +932,9 @@ class ActiveModelController extends ChangeNotifier {
   }
 
   /// Точные уровни размышлений активной модели из
-  /// [ReasoningCapabilityResolver] (кэш каталога OpenRouter) вместо
-  /// прежнего фиксированного списка ['off', 'medium', 'high'].
-  ///
-  /// Правила:
-  ///  - levels берутся из cap.supportedEfforts как есть;
-  ///  - если cap.mandatory == true (размышления обязательны), уровни
-  ///    'none' и 'off' убираются из списка доступных для показа;
-  ///  - cap.defaultEffort сохраняется как рекомендуемый по умолчанию:
-  ///    он остаётся в списке, а если после фильтрации список опустел —
-  ///    возвращается одним уровнем;
-  ///  - для моделей без данных в кэше резолвер отдаёт fallback
-  ///    (['off', 'medium', 'high']) — прежнее поведение сохранено;
-  ///  - любая ошибка резолвера не роняет разрешение модели.
+  /// [ReasoningCapabilityResolver] (кэш каталога OpenRouter).
   Future<List<String>> _reasoningLevelsFor(String normId) async {
     try {
-      // Догрузка дискового кэша: no-op, если уже загружен. Гарантирует,
-      // что getCapability увидит данные даже до фоновой синхронизации.
       await ReasoningCapabilityResolver.loadCache();
       final cap = ReasoningCapabilityResolver.getCapability(normId);
       final levels = <String>[...cap.supportedEfforts];
@@ -906,15 +944,11 @@ class ActiveModelController extends ChangeNotifier {
       if (levels.isNotEmpty) return levels;
       final def = cap.defaultEffort.trim();
       if (def.isNotEmpty) return <String>[def];
-    } catch (_) {
-      // Резолвер недоступен — используем базовый список уровней ниже.
-    }
-    return const <String>['off', 'medium', 'high'];
+    } catch (_) {}
+    return const <String>['off', 'low', 'medium', 'high'];
   }
 
   /// Копия [ModelParameters] с заменённой достоверностью данных.
-  /// Кэш Generation сохраняет записи с confidence='high'; контроллер
-  /// помечает использованные из него данные как 'openrouter'.
   static ModelParameters _withConfidence(
     ModelParameters p,
     String confidence,
@@ -956,9 +990,6 @@ class ActiveModelController extends ChangeNotifier {
       case 'text':
         return ActiveModelKind.text;
     }
-    // Кэш Generation (OpenRouter): если для модели известны длительности
-    // видео — это видео-модель. Ручной override типа (выше) всё ещё
-    // имеет приоритет над кэшем.
     final genCap = _genCapabilityQuietly(normalizedId);
     if (genCap != null) {
       final d = genCap.durations;

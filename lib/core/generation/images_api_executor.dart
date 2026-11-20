@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -19,28 +20,16 @@ import 'parameter_validation_exception.dart';
 
 /// Исполнитель генерации изображений (HTTP через dio).
 ///
-/// Работает с тремя диалектами API ([ImageApiDialect]):
-///  - openAiStandard: POST {baseUrl}/images/generations (Polza и другие
-///    OpenAI-совместимые провайдеры);
+/// Поддерживает:
+///  - Polza Media API: POST {baseUrl}/media (и фоллбэк на /images/generations)
+///    с автоматическим опросом GET {baseUrl}/media/{id} каждые 4 секунды,
+///    если провайдер вернул задачу в статусе `pending`/`processing`;
+///  - openAiStandard: POST {baseUrl}/images/generations;
 ///  - shortImagesPath: POST {baseUrl}/images (RouterAI);
-///  - openRouterChatImages: POST {baseUrl}/chat/completions с полями
-///    modalities и image_config (OpenRouter).
-///
-/// Параметры генерации (size, aspect_ratio, resolution и т.п.) собираются
-/// по generationSchema модели через [ParameterTranslator] и вливаются
-/// в тело POST-запроса; для диалекта OpenRouter — внутри image_config.
-/// Если основной REST-эндпоинт ответил 404/405, запрос автоматически
-/// повторяется на альтернативном эндпоинте.
-///
-/// Промпт берётся из последнего пользовательского сообщения [GenerationRequest].
-/// Результат отдаётся одним событием [GenerationDelta] с markdown-изображением:
-/// ссылка провайдера либо file://-путь локальной копии (URL и data URL
-/// сохраняются через [ArtifactMaterializer]). Ошибка — последнее событие
-/// [GenerationFailure] с типизированным [GenError].
+///  - openRouterChatImages: POST {baseUrl}/chat/completions.
 class ImagesApiExecutor extends GenerationExecutor {
   /// Stage 4.1 (d): in-memory blacklist параметров, не поддерживаемых
-  /// моделью (выучено из 'warnings' медиа-ответа). Ключ — id модели,
-  /// значение — набор имён параметров.
+  /// моделью (выучено из 'warnings' медиа-ответа).
   static final Map<String, Set<String>> _unsupportedParamsByModel =
       <String, Set<String>>{};
 
@@ -48,6 +37,8 @@ class ImagesApiExecutor extends GenerationExecutor {
   final String aspectRatio;
 
   static const Duration _timeout = Duration(seconds: 180);
+  static const Duration _pollInterval = Duration(seconds: 4);
+  static const int _maxPollAttempts = 90;
 
   Dio? _dio;
   CancelToken? _cancelToken;
@@ -78,9 +69,11 @@ class ImagesApiExecutor extends GenerationExecutor {
       return;
     }
     final base = request.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    final providerId =
+        ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '';
     final dialect = ImageDialectResolver.resolve(
       baseUrl: base,
-      providerId: ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '',
+      providerId: providerId,
     );
     final dio = Dio(
       BaseOptions(
@@ -95,19 +88,45 @@ class ImagesApiExecutor extends GenerationExecutor {
     _cancelToken = token;
     try {
       final resp = await _requestImage(
-        dio, token, base, dialect, request, prompt,
+        dio,
+        token,
+        base,
+        providerId,
+        dialect,
+        request,
+        prompt,
       );
       if (_cancelled) return;
       final status = resp.statusCode ?? 0;
-      final body = resp.data ?? '';
+      var body = resp.data ?? '';
       if (status < 200 || status >= 300) {
         yield GenerationFailure(_mapError(status, body));
         return;
       }
-      // Stage 4.1 (d): учим blacklist параметров из 'warnings': [...]
-      // ответа провайдера (в памяти, по модели).
       _learnWarnings(body, request.model);
-      final sources = _extractImageSourcesFromResponse(body);
+      var sources = _extractImageSourcesFromResponse(body);
+
+      // Если POST /v1/media вернул асинхронную задачу (status: pending /
+      // processing и id задачи без готового URL), опрашиваем GET /v1/media/{id}
+      // каждые 4 секунды до статуса completed/failed.
+      if (sources.isEmpty) {
+        final asyncJobId = _extractAsyncJobId(body);
+        if (asyncJobId != null && asyncJobId.isNotEmpty) {
+          yield GenProgress(jobId: asyncJobId, percent: 10);
+          final polledUrl = await _pollMediaStatus(
+            dio: dio,
+            token: token,
+            base: base,
+            apiKey: request.apiKey,
+            jobId: asyncJobId,
+          );
+          if (_cancelled) return;
+          if (polledUrl != null && polledUrl.isNotEmpty) {
+            sources = <String>[polledUrl];
+          }
+        }
+      }
+
       if (_cancelled) return;
       if (sources.isEmpty) {
         yield const GenerationFailure(
@@ -118,6 +137,8 @@ class ImagesApiExecutor extends GenerationExecutor {
       final display = await _toDisplayUri(sources.first, request);
       if (_cancelled) return;
       yield GenerationDelta(content: '![изображение]($display)');
+    } on GenError catch (g) {
+      if (!_cancelled) yield GenerationFailure(g);
     } on DioException catch (e) {
       if (_cancelled || e.type == DioExceptionType.cancel) return;
       final t = e.type;
@@ -148,27 +169,112 @@ class ImagesApiExecutor extends GenerationExecutor {
     }
   }
 
+  /// Опрос GET {baseUrl}/media/{id} каждые 4 секунды по спецификации Polza Media API.
+  Future<String?> _pollMediaStatus({
+    required Dio dio,
+    required CancelToken token,
+    required String base,
+    required String apiKey,
+    required String jobId,
+  }) async {
+    final cleanKey = apiKey
+        .trim()
+        .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
+    final headers = <String, String>{
+      'Authorization': 'Bearer $cleanKey',
+      'Accept': 'application/json',
+    };
+    for (int attempt = 1; attempt <= _maxPollAttempts; attempt++) {
+      await Future<void>.delayed(_pollInterval);
+      if (_cancelled) return null;
+      final resp = await dio.get<String>(
+        '$base/media/$jobId',
+        options: Options(headers: headers),
+        cancelToken: token,
+      );
+      if (_cancelled) return null;
+      final code = resp.statusCode ?? 0;
+      final body = resp.data ?? '';
+      if (code == 401 || code == 403) {
+        throw AuthError(details: _errorDetails(body));
+      }
+      if (code == 402) {
+        throw InsufficientFunds(details: _errorDetails(body));
+      }
+      if (code < 200 || code >= 300) continue;
+
+      Object? json;
+      try {
+        json = jsonDecode(body);
+      } catch (_) {
+        continue;
+      }
+      if (json is! Map) continue;
+      final status = (json['status'] ?? json['state'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+      if (status == 'failed' ||
+          status == 'error' ||
+          status == 'cancelled' ||
+          status == 'canceled') {
+        throw UnknownGenError(details: _errorDetails(body));
+      }
+      final extracted = _extractImageSourcesFromResponse(body);
+      if (extracted.isNotEmpty) return extracted.first;
+      if (status == 'completed' || status == 'succeeded' || status == 'done') {
+        return null;
+      }
+    }
+    throw const JobTimeout(
+      details: 'Генерация изображения не завершилась за отведённое время.',
+    );
+  }
+
+  static String? _extractAsyncJobId(String body) {
+    try {
+      final j = jsonDecode(body);
+      if (j is Map) {
+        final status = (j['status'] ?? j['state'] ?? '')
+            .toString()
+            .trim()
+            .toLowerCase();
+        final id = (j['id'] ?? j['job_id'] ?? j['task_id'] ?? '')
+            .toString()
+            .trim();
+        if (id.isNotEmpty &&
+            (status.isEmpty ||
+                status == 'pending' ||
+                status == 'processing' ||
+                status == 'queued' ||
+                status == 'starting' ||
+                status == 'in_progress')) {
+          return id;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   /// Один запрос картинки с учётом диалекта и автоматическим фоллбэком
-  /// между /images/generations и /images при ответе 404/405.
+  /// между /media, /images/generations и /images при ответе 404/405.
   Future<Response<String>> _requestImage(
     Dio dio,
     CancelToken token,
     String base,
+    String providerId,
     ImageApiDialect dialect,
     GenerationRequest request,
     String prompt,
   ) async {
+    final cleanKey = request.apiKey
+        .trim()
+        .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
     final headers = <String, String>{
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer ${request.apiKey}',
+      'Authorization': 'Bearer $cleanKey',
     };
-    // Сведения о модели (эвристика по идентификатору, каталог в
-    // исполнителе недоступен) и нормализация параметров под её
-    // generationSchema: какие поля и в каком виде ожидает провайдер.
-    final providerId = ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '';
     final info = ModelInfoResolver.resolveModel(providerId, request.model);
-    // Параметры из панели ввода (aspect_ratio, quality) поверх выбранной
-    // конструктором пропорции: нормализуются по схеме/каталогу модели.
     final rawParams = <String, dynamic>{
       ParamKeys.aspectRatio: aspectRatio,
       ...request.parameters,
@@ -178,14 +284,10 @@ class ImagesApiExecutor extends GenerationExecutor {
       rawParams: rawParams,
       fallback: () => ParameterTranslator.translate(rawParams, info),
     );
-    // Stage 4.1 (d): параметры, выученные как неподдерживаемые
-    // (warnings[] предыдущего ответа), повторно не отправляются.
     _dropUnsupportedParams(translated, request.model);
-    // Stage 2c: Polza Media API ожидает разрешение под ключом
-    // 'image_resolution'; универсальный 'resolution' (RouterAI и общий
-    // Media API) остаётся. Дублируем только для Polza — по провайдер-флагу
-    // из ModelCatalogAdapter, без хардкода по baseUrl в трансляторе.
-    if (providerId == 'polza') {
+    final isPolza = providerId == 'polza' ||
+        base.toLowerCase().contains('polza.ai');
+    if (isPolza) {
       final res = translated[ParamKeys.resolution];
       if (res is String && res.trim().isNotEmpty) {
         translated['image_resolution'] = res.trim();
@@ -199,8 +301,22 @@ class ImagesApiExecutor extends GenerationExecutor {
         cancelToken: token,
       );
     }
-    final fallback = ImageDialectResolver.fallbackRestPath(dialect);
     final body = _restBody(request.model, prompt, translated);
+    // Для Polza пробуем сначала /media (единый эндпоинт Polza Media API),
+    // при 404/405 переходим на /images/generations.
+    if (isPolza) {
+      final mediaResp = await dio.post<String>(
+        '$base/media',
+        data: body,
+        options: Options(headers: headers),
+        cancelToken: token,
+      );
+      final mediaCode = mediaResp.statusCode ?? 0;
+      if (mediaCode != 404 && mediaCode != 405) {
+        return mediaResp;
+      }
+    }
+    final fallback = ImageDialectResolver.fallbackRestPath(dialect);
     final first = await dio.post<String>(
       '$base${ImageDialectResolver.primaryPath(dialect)}',
       data: body,
@@ -236,10 +352,7 @@ class ImagesApiExecutor extends GenerationExecutor {
     };
   }
 
-  /// Тело запроса OpenRouter: изображения приходят через chat/completions
-  /// с явным перечислением модальностей; параметры генерации собираются
-  /// в image_config — из результата translate либо из плоских ключей,
-  /// если модель не сообщила openRouterChatConfig-схему.
+  /// Тело запроса OpenRouter.
   Map<String, dynamic> _openRouterBody(
     String model,
     String prompt,
@@ -265,11 +378,6 @@ class ImagesApiExecutor extends GenerationExecutor {
     return body;
   }
 
-  /// Stage 4.1 (d): разбирает 'warnings': [...] из ответа провайдера.
-  /// Паттерны: "Параметр X не поддерживается" (en-варианты ниже) и
-  /// "X ignored". Извлечение терпимо к кавычкам/бэктикам; ложные имена
-  /// безвредны — на отправке отфильтровываются только реально
-  /// присутствующие в теле ключи.
   static void _learnWarnings(String body, String modelId) {
     Object? json;
     try {
@@ -307,7 +415,6 @@ class ImagesApiExecutor extends GenerationExecutor {
     }
   }
 
-  /// Stage 4.1 (d): убирает из тела запроса параметры из blacklist модели.
   static void _dropUnsupportedParams(
     Map<String, dynamic> params,
     String modelId,
@@ -336,8 +443,6 @@ class ImagesApiExecutor extends GenerationExecutor {
     } catch (_) {}
   }
 
-  /// Промпт — текст последнего пользовательского сообщения
-  /// (строка либо массив частей с текстовыми блоками).
   static String _promptFrom(GenerationRequest request) {
     for (final m in request.messages.reversed) {
       if (m['role'] != 'user') continue;
@@ -361,11 +466,8 @@ class ImagesApiExecutor extends GenerationExecutor {
     return '';
   }
 
-  /// Универсальный парсер ответа провайдера: рекурсивный обход JSON
-  /// собирает все источники изображений — поля url/image_url (http, https,
-  /// data URL) и b64_json (оборачивается в data URL). Работает для
-  /// формата {data: [...]}, {images: [...]}, {url: ...} и для ответа
-  /// OpenRouter (choices -> message -> images / content).
+  /// Универсальный парсер ответа провайдера: собирает источники из
+  /// `data.url`, `output`, `url`, `image_url`, `b64_json`.
   static List<String> _extractImageSourcesFromResponse(String body) {
     Object? json;
     try {
@@ -389,11 +491,26 @@ class ImagesApiExecutor extends GenerationExecutor {
             out.add(s.startsWith('data:') ? s : 'data:image/png;base64,$s');
             return;
           }
-          if ((k == 'url' || k == 'image_url') &&
+          if ((k == 'url' || k == 'image_url' || k == 'output') &&
               (s.startsWith('http://') ||
                   s.startsWith('https://') ||
                   s.startsWith('data:image'))) {
             out.add(s);
+          }
+          return;
+        }
+        if (k == 'output' && value is List) {
+          for (final item in value) {
+            if (item is String) {
+              final s = item.trim();
+              if (s.startsWith('http://') ||
+                  s.startsWith('https://') ||
+                  s.startsWith('data:image')) {
+                out.add(s);
+              }
+            } else {
+              _walkForSources(item, out, depth + 1);
+            }
           }
           return;
         }
@@ -408,9 +525,6 @@ class ImagesApiExecutor extends GenerationExecutor {
     }
   }
 
-  /// Источник из ответа -> URI для markdown. URL и data URL сохраняются
-  /// локально (ссылки провайдеров часто временные); при неудаче остаётся
-  /// исходная ссылка — картинка всё равно отображается в чате.
   static Future<String> _toDisplayUri(
     String source,
     GenerationRequest request,
@@ -439,7 +553,6 @@ class ImagesApiExecutor extends GenerationExecutor {
       if (local != null) return 'file://$local';
       return s;
     }
-    // Сырой base64 без префикса: считаем PNG.
     final local = await ArtifactMaterializer.materializeDataUrl(
       'data:image/png;base64,$s',
       prompt: prompt,
@@ -450,7 +563,6 @@ class ImagesApiExecutor extends GenerationExecutor {
     return s;
   }
 
-  /// Текст ошибки провайдера из JSON-ответа (error.message / message).
   static String _errorDetails(String body) {
     try {
       final j = jsonDecode(body);
@@ -463,7 +575,6 @@ class ImagesApiExecutor extends GenerationExecutor {
     return body.length > 300 ? body.substring(0, 300) : body;
   }
 
-  /// Перевод кода ответа в типизированную [GenError].
   static GenError _mapError(int code, String body) {
     final details = _errorDetails(body);
     switch (code) {

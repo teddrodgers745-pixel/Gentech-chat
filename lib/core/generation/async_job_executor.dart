@@ -53,23 +53,20 @@ class _CreateResult {
 
 /// Исполнитель асинхронных видео-задач (kling, veo, sora, wan ...).
 ///
-/// Схема: POST на создание задачи (с фоллбэком на альтернативные
-/// эндпоинты при 404/405) -> сохранение [AsyncJobRecord] в хранилище ->
-/// цикл опроса статуса каждые 3 секунды (до 120 попыток) с эмитом
-/// [GenProgress] -> при успехе скачивание видео через
-/// [ArtifactMaterializer.materializeVideo] и [GenCompleted].
-///
-/// Задача переживает перезапуск приложения: исполнитель продолжается
-/// из сохранённой записи через [resume] (вызывает GenerationService).
+/// Схема Polza Media API (https://polza.ai/docs/api-reference/media/create.md,
+/// https://polza.ai/docs/api-reference/media/status.md):
+///  1. POST {baseUrl}/media -> получаем `id` и `status` (`pending`/`processing`/`completed`/`failed`);
+///  2. Если `status == completed` и `data.url` уже есть — сразу скачиваем;
+///  3. Иначе опрашиваем GET {baseUrl}/media/{id} каждые 4 секунды
+///     (интервал 3-5 с по документации), проверяем статусы
+///     `pending`, `processing`, `completed`, `failed`, извлекаем URL
+///     из `data.url` или `output`.
 class AsyncJobExecutor extends GenerationExecutor {
-  static const Duration _pollInterval = Duration(seconds: 3);
-  static const int _maxAttempts = 120;
+  static const Duration _pollInterval = Duration(seconds: 4);
+  static const int _maxAttempts = 150;
   static const Duration _requestTimeout = Duration(seconds: 60);
 
   /// Пути создания задачи: первый удачный; 404/405 -> следующий.
-  /// '/media' — эндпоинт Polza Media API (POST {baseUrl}/media) для
-  /// создания видео-задачи; стоит первым, чтобы Polza не упиралась
-  /// в 404 на прочих путях.
   static const List<String> _createPaths = <String>[
     '/media',
     '/videos/generations',
@@ -78,8 +75,6 @@ class AsyncJobExecutor extends GenerationExecutor {
   ];
 
   /// Пути опроса статуса (к каждому добавляется идентификатор задачи).
-  /// '/media/{id}' — опрос статуса Polza Media API (GET {baseUrl}/media/{id}),
-  /// опрашивается каждые 3 секунды, пока status не станет completed/failed.
   static const List<String> _pollPrefixes = <String>[
     '/media/',
     '/videos/',
@@ -88,7 +83,7 @@ class AsyncJobExecutor extends GenerationExecutor {
   ];
 
   static const Set<String> _doneStatuses = <String>{
-    'succeeded', 'success', 'succeed', 'complete', 'completed', 'done',
+    'completed', 'succeeded', 'success', 'succeed', 'complete', 'done',
     'finished', 'ok',
   };
   static const Set<String> _failedStatuses = <String>{
@@ -97,9 +92,9 @@ class AsyncJobExecutor extends GenerationExecutor {
   };
 
   /// Статусы «задача ещё выполняется»: при отсутствии явного прогресса
-  /// для них генерируется оптимистичный процент по прошедшему времени.
+  /// для них генерируется плавный процент по попыткам/времени.
   static const Set<String> _runningStatuses = <String>{
-    'queued', 'pending', 'starting', 'processing', 'in_progress', 'running',
+    'pending', 'processing', 'queued', 'starting', 'in_progress', 'running',
     'created', 'submitted', 'generating', 'modifying', 'started',
   };
 
@@ -126,8 +121,7 @@ class AsyncJobExecutor extends GenerationExecutor {
   /// Сниппет 'file: <путь>' добавляется в debugSnippets один раз.
   bool _fileSnippetAdded = false;
 
-  /// Отменяет активную задачу по идентификатору. Задача снимается
-  /// из хранилища, PendingPart в чате убирается обработчиком события.
+  /// Отменяет активную задачу по идентификатору.
   static void cancelJob(String jobId) {
     final id = jobId.trim();
     if (id.isEmpty) return;
@@ -143,8 +137,6 @@ class AsyncJobExecutor extends GenerationExecutor {
 
   @override
   void cancel() {
-    // Отмена текущего экземпляра: цикл опроса завершится с ошибкой
-    // «Задача отменена» на ближайшей проверке флага.
     _cancelled = true;
   }
 
@@ -202,10 +194,11 @@ class AsyncJobExecutor extends GenerationExecutor {
       _jobId = record.jobId;
       _active[_jobId] = this;
       await ActiveJobsStore.instance.save(record);
-      // Первый прогресс сразу после создания: интерфейс узнаёт jobId.
+      // Первый прогресс сразу после создания: интерфейс узнаёт jobId и
+      // стартовый процент (>0, чтобы индикатор не зависал на 0%).
       yield GenProgress(
         jobId: record.jobId,
-        percent: 0,
+        percent: 5,
         debugSnippets: _debugPayload(),
         debugLogPath: debugLogPath,
       );
@@ -251,7 +244,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     try {
       yield GenProgress(
         jobId: _jobId,
-        percent: record.progress,
+        percent: record.progress > 0 ? record.progress : 5,
         debugSnippets: _debugPayload(),
         debugLogPath: debugLogPath,
       );
@@ -268,13 +261,15 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
   }
 
-  /// Цикл опроса: 3 секунды между попытками, максимум 120 попыток.
+  /// Цикл опроса: каждые 4 секунды (3-5 с по доке Polza), максимум 150 попыток.
   Stream<GenerationEvent> _watch(
     http.Client client,
     String base,
     AsyncJobRecord record,
   ) async* {
+    var lastPct = record.progress > 0 ? record.progress : 5.0;
     for (int attempt = 1; attempt <= _maxAttempts; attempt++) {
+      await Future<void>.delayed(_pollInterval);
       if (_cancelled) {
         await ActiveJobsStore.instance.remove(record.jobId);
         yield const GenerationFailure(
@@ -303,6 +298,12 @@ class AsyncJobExecutor extends GenerationExecutor {
         return;
       }
       if (res.isDone) {
+        yield GenProgress(
+          jobId: record.jobId,
+          percent: 100,
+          debugSnippets: _debugPayload(),
+          debugLogPath: debugLogPath,
+        );
         final local = await ArtifactMaterializer.materializeVideo(
           res.videoUrl,
           client: client,
@@ -324,16 +325,16 @@ class AsyncJobExecutor extends GenerationExecutor {
         );
         return;
       }
-      final pct = res.percent ?? _defaultPercent(attempt);
-      await ActiveJobsStore.instance.updateProgress(record.jobId, pct);
+      final computed = res.percent ?? _defaultPercent(attempt);
+      if (computed > lastPct) lastPct = computed;
+      await ActiveJobsStore.instance.updateProgress(record.jobId, lastPct);
       yield GenProgress(
         jobId: record.jobId,
-        percent: pct,
-        indeterminate: res.indeterminate,
+        percent: lastPct,
+        indeterminate: false,
         debugSnippets: _debugPayload(),
         debugLogPath: debugLogPath,
       );
-      await Future<void>.delayed(_pollInterval);
     }
     await ActiveJobsStore.instance.remove(record.jobId);
     yield const GenerationFailure(
@@ -343,8 +344,8 @@ class AsyncJobExecutor extends GenerationExecutor {
 
   /// Плавная оценка прогресса, когда провайдер его не сообщает.
   static double _defaultPercent(int attempt) {
-    final v = attempt * 100 / _maxAttempts;
-    return v > 95 ? 95 : v;
+    final v = 5.0 + attempt * 2.5;
+    return v > 92.0 ? 92.0 : v;
   }
 
   Future<_CreateResult> _createJob(
@@ -357,9 +358,6 @@ class AsyncJobExecutor extends GenerationExecutor {
       'Content-Type': 'application/json',
       ..._authHeaders(request.apiKey),
     };
-    // Нормализация параметров под конкретную модель: duration (intChoice)
-    // уходит как число (5, 8, 10), пропорция — в формат модели
-    // (size, seconds для Sora и т.п.). Без схемы параметры уходят как есть.
     final providerId =
         ModelCatalogAdapter.providerIdFromBaseUrl(base) ?? '';
     final info = ModelInfoResolver.resolveModel(providerId, request.model);
@@ -369,12 +367,6 @@ class AsyncJobExecutor extends GenerationExecutor {
       rawParams: rawParams,
       fallback: () => ParameterTranslator.translate(rawParams, info),
     );
-    // Stage 4.1 (c): для video-моделей добавляем 'async': true —
-    // создание асинхронной задачи защищает от 120-секундного клиентского
-    // таймаута на долгих видео-генерациях (Polza Media API).
-    // AsyncJobExecutor по построению работает только с видео-задачами,
-    // поэтому 'async': true отправляется всегда: модель с нераспознанным
-    // маршрутом иначе упиралась бы в клиентский таймаут (вечные 0%).
     final isVideoModel = info.outputModalities.contains(Modality.video) ||
         info.route == GenerationRoute.asyncJob;
     debugPrint('[PolzaVideo] create: async=true (video route: $isVideoModel)');
@@ -398,7 +390,6 @@ class AsyncJobExecutor extends GenerationExecutor {
       } catch (e) {
         throw NetworkError(details: 'Ошибка соединения: $e');
       }
-      // Raw-тело ответа до jsonDecode — сохраняется в JSONL-лог.
       final String rawCreate = resp.body;
       rawCreateBody = rawCreate;
       debugPrint(
@@ -407,19 +398,34 @@ class AsyncJobExecutor extends GenerationExecutor {
       );
       await _logCreate('$base$path', resp.statusCode, rawCreate);
       final code = resp.statusCode;
-      if (code == 404 || code == 405) continue; // фоллбэк на следующий путь
+      if (code == 404 || code == 405) continue;
       if (code < 200 || code >= 300) throw _mapStatus(code, resp.body);
       Object? json;
       try {
         json = jsonDecode(rawCreate);
       } catch (_) {}
-      final direct = _findVideoUrl(json, 0) ?? _urlFromMessage(json);
-      if (direct != null) {
+      final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
+      if (_failedStatuses.contains(status)) {
+        throw UnknownGenError(details: _pollErrorText(json));
+      }
+      final direct = _extractCompletedUrl(json) ??
+          (_doneStatuses.contains(status) ? _findAnyMediaUrl(json, 0) : null) ??
+          _urlFromMessage(json);
+      final id = _findJobId(json, 0);
+      if (direct != null &&
+          direct.isNotEmpty &&
+          (id == null || id.isEmpty || _doneStatuses.contains(status))) {
         _addSnippet('create: ${_excerpt(rawCreateBody)}');
         return _CreateResult(directUrl: direct);
       }
-      final id = _findJobId(json, 0);
-      if (id == null || id.isEmpty) continue;
+      if (id == null || id.isEmpty) {
+        final fallbackDirect = _findVideoUrl(json, 0);
+        if (fallbackDirect != null && fallbackDirect.isNotEmpty) {
+          _addSnippet('create: ${_excerpt(rawCreateBody)}');
+          return _CreateResult(directUrl: fallbackDirect);
+        }
+        continue;
+      }
       _addSnippet('create: ${_excerpt(rawCreateBody)}');
       return _CreateResult(
         record: AsyncJobRecord(
@@ -458,14 +464,12 @@ class AsyncJobExecutor extends GenerationExecutor {
       } on TimeoutException catch (e) {
         await _logPollError(attempt, queryUrl, 'timeout: $e');
         _addSnippet('poll $attempt (ошибка): timeout');
-        return const _PollResult();
+        return _PollResult(percent: _defaultPercent(attempt));
       } catch (e) {
-        // Сетевая трудность — следующая попытка опроса.
         await _logPollError(attempt, queryUrl, '$e');
         _addSnippet('poll $attempt (ошибка): $e');
-        return const _PollResult();
+        return _PollResult(percent: _defaultPercent(attempt));
       }
-      // Raw-тело ответа до jsonDecode — сохраняется в JSONL-лог.
       final String rawPollBody = resp.body;
       debugPrint(
         'AsyncJobExecutor POLL $queryUrl -> ${resp.statusCode}: '
@@ -496,10 +500,9 @@ class AsyncJobExecutor extends GenerationExecutor {
         continue;
       }
       if (code >= 200 && code < 300) {
-        return _parsePollBody(resp.body, createdAt);
+        return _parsePollBody(resp.body, createdAt, attempt);
       }
-      // Прочие коды (5xx и т.п.): временная трудность, пробуем позже.
-      return const _PollResult();
+      return _PollResult(percent: _defaultPercent(attempt));
     }
     if (notFound >= _pollPrefixes.length) {
       return const _PollResult(
@@ -508,59 +511,165 @@ class AsyncJobExecutor extends GenerationExecutor {
         ),
       );
     }
-    return const _PollResult();
+    return _PollResult(percent: _defaultPercent(attempt));
   }
 
-  /// Разбор тела ответа опроса статуса.
-  ///
-  /// Статус ищется в json['status'], json['state'], json['data']['status'],
-  /// json['task']['status'] (рекурсивный поиск) и приводится к lowerCase.
-  /// Прогресс — json['progress'] / json['data']['progress']: int, double
-  /// (0.5 -> 50) либо строка ('50%'). Если прогресс не сообщён (0/null),
-  /// а статус 'processing'/'running'/'in_progress', используется
-  /// «оптимистичный» прогресс: 5% + 1.5% за каждую секунду ожидания,
-  /// максимум 90% — чтобы карточка в чате не застывала на «0%».
-  _PollResult _parsePollBody(String body, DateTime createdAt) {
+  /// Разбор тела ответа опроса статуса согласно документации Polza Media API:
+  ///  - проверяет статусы `pending`, `processing`, `completed`, `failed`;
+  ///  - извлекает URL из `data.url`, `output` или вложенных полей `url`/`video_url`.
+  _PollResult _parsePollBody(
+    String body,
+    DateTime createdAt,
+    int attempt,
+  ) {
     Object? json;
     try {
       json = jsonDecode(body);
     } catch (_) {
-      return const _PollResult();
+      return _PollResult(percent: _defaultPercent(attempt));
     }
-    final url = _findVideoUrl(json, 0) ?? _urlFromMessage(json) ?? '';
-    final pct = _findPercent(json, 0);
     final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
-    // Видно в логах, что опрос идёт и статус задачи меняется.
+    final pct = _findPercent(json, 0);
     debugPrint('[Polling] status: $status, progress: ${pct ?? '-'}');
-    if (url.isNotEmpty) {
-      return _PollResult(videoUrl: url, percent: pct ?? 100);
-    }
+
     if (_failedStatuses.contains(status)) {
       return _PollResult(
         fatal: UnknownGenError(details: _pollErrorText(json)),
       );
     }
+
+    final url = _extractCompletedUrl(json) ??
+        (_doneStatuses.contains(status) ? _findAnyMediaUrl(json, 0) : null) ??
+        _findVideoUrl(json, 0) ??
+        _urlFromMessage(json) ??
+        '';
+
+    if (url.isNotEmpty &&
+        (_doneStatuses.contains(status) ||
+            (!_runningStatuses.contains(status)))) {
+      return _PollResult(videoUrl: url, percent: 100);
+    }
+
     if (_doneStatuses.contains(status)) {
+      if (url.isNotEmpty) {
+        return _PollResult(videoUrl: url, percent: 100);
+      }
       return const _PollResult(
         fatal: UnknownGenError(
-          details: 'Провайдер завершил задачу, но не вернул видео.',
+          details: 'Провайдер завершил задачу, но не вернул ссылку на медиа.',
         ),
       );
     }
-    // Числовой прогресс сервера приоритетен; без числа — «в процессе»
-    // (indeterminate: true), оптимистичный процент сохранён для плавности.
+
     var percent = pct;
-    final indeterminate = percent == null || percent <= 0;
-    if (indeterminate && _runningStatuses.contains(status)) {
+    if (percent == null || percent <= 0) {
       final elapsed = DateTime.now().difference(createdAt).inSeconds;
-      percent = (5 + elapsed * 1.5).clamp(5.0, 90.0);
+      final byTime = (5.0 + elapsed * 1.5).clamp(5.0, 92.0);
+      final byAttempt = _defaultPercent(attempt);
+      percent = byTime > byAttempt ? byTime : byAttempt;
     }
-    return _PollResult(percent: percent, indeterminate: indeterminate);
+    return _PollResult(percent: percent, indeterminate: false);
   }
 
-  /// Текст ошибки задачи из JSON: первый непустой текст из полей
-  /// error / message / details / reason; если поле — объект, берём
-  /// его .message.
+  /// Извлекает URL из полей Polza Media API (`data.url`, `data[0].url`,
+  /// `output`, `output.url`, `result.url`, `url`).
+  static String? _extractCompletedUrl(Object? node) {
+    if (node is! Map) return null;
+    // 1. Прямое поле data.url или data[0].url (основной формат Polza /v1/media/{id})
+    final data = node['data'];
+    if (data is Map) {
+      final u = data['url'] ?? data['video_url'] ?? data['file_url'];
+      if (u is String && _isHttpOrDataUrl(u)) return u.trim();
+      final nestedOut = data['output'];
+      final fromNested = _extractFromOutput(nestedOut);
+      if (fromNested != null) return fromNested;
+    } else if (data is List) {
+      for (final item in data) {
+        if (item is Map) {
+          final u = item['url'] ?? item['video_url'] ?? item['file_url'];
+          if (u is String && _isHttpOrDataUrl(u)) return u.trim();
+        } else if (item is String && _isHttpOrDataUrl(item)) {
+          return item.trim();
+        }
+      }
+    }
+    // 2. Поле output (строка, список строк/объектов или карта с url)
+    final fromOutput = _extractFromOutput(node['output']);
+    if (fromOutput != null) return fromOutput;
+
+    // 3. Поле result
+    final fromResult = _extractFromOutput(node['result']);
+    if (fromResult != null) return fromResult;
+
+    // 4. Верхнеуровневый url / video_url
+    final topUrl = node['video_url'] ?? node['url'];
+    if (topUrl is String && _isHttpOrDataUrl(topUrl)) return topUrl.trim();
+
+    return null;
+  }
+
+  static String? _extractFromOutput(Object? output) {
+    if (output == null) return null;
+    if (output is String && _isHttpOrDataUrl(output)) return output.trim();
+    if (output is Map) {
+      final u = output['url'] ?? output['video_url'] ?? output['audio_url'];
+      if (u is String && _isHttpOrDataUrl(u)) return u.trim();
+      final list = output['urls'] ?? output['files'] ?? output['data'];
+      if (list is List) return _extractFromOutput(list);
+    }
+    if (output is List) {
+      for (final item in output) {
+        if (item is String && _isHttpOrDataUrl(item)) return item.trim();
+        if (item is Map) {
+          final u = item['url'] ?? item['video_url'] ?? item['file_url'];
+          if (u is String && _isHttpOrDataUrl(u)) return u.trim();
+        }
+      }
+    }
+    return null;
+  }
+
+  static bool _isHttpOrDataUrl(String s) {
+    final t = s.trim();
+    return t.startsWith('http://') ||
+        t.startsWith('https://') ||
+        t.startsWith('data:');
+  }
+
+  /// Любой валидный URL в дереве ответа, когда статус задачи уже `completed`.
+  static String? _findAnyMediaUrl(Object? node, int depth) {
+    if (node == null || depth > 8) return null;
+    if (node is String) {
+      return _isHttpOrDataUrl(node) ? node.trim() : null;
+    }
+    if (node is Map) {
+      for (final k in const <String>[
+        'url',
+        'video_url',
+        'output',
+        'file_url',
+        'download_url',
+      ]) {
+        final v = node[k];
+        if (v is String && _isHttpOrDataUrl(v)) return v.trim();
+      }
+      for (final entry in node.entries) {
+        final k = entry.key.toString().toLowerCase();
+        if (k == 'id' || k == 'model' || k == 'status') continue;
+        final r = _findAnyMediaUrl(entry.value, depth + 1);
+        if (r != null) return r;
+      }
+    }
+    if (node is List) {
+      for (final item in node) {
+        final r = _findAnyMediaUrl(item, depth + 1);
+        if (r != null) return r;
+      }
+    }
+    return null;
+  }
+
+  /// Текст ошибки задачи из JSON.
   static String _pollErrorText(Object? json) {
     if (json is Map) {
       for (final key in const <String>[
@@ -569,14 +678,22 @@ class AsyncJobExecutor extends GenerationExecutor {
         final t = _errorFieldText(json[key]);
         if (t != null) return _clip(t);
       }
+      final data = json['data'];
+      if (data is Map) {
+        for (final key in const <String>[
+          'error', 'message', 'details', 'reason',
+        ]) {
+          final t = _errorFieldText(data[key]);
+          if (t != null) return _clip(t);
+        }
+      }
     }
     return 'Провайдер сообщил об ошибке задачи.';
   }
 
-  /// Текст одного поля ошибки: строка как есть, объект — его .message.
   static String? _errorFieldText(Object? v) {
     if (v is Map) {
-      final m = v['message'];
+      final m = v['message'] ?? v['detail'] ?? v['error'];
       if (m is String && m.trim().isNotEmpty) return m;
       return null;
     }
@@ -584,8 +701,6 @@ class AsyncJobExecutor extends GenerationExecutor {
     return null;
   }
 
-  /// Ссылка на видео внутри choices[0].message (строка либо content):
-  /// первый http(s)-адрес видеофайла в тексте сообщения.
   static String? _urlFromMessage(Object? json) {
     if (json is! Map) return null;
     final choices = json['choices'];
@@ -608,26 +723,19 @@ class AsyncJobExecutor extends GenerationExecutor {
     return m?.group(0);
   }
 
-  /// Публичный статический помощник: извлекает идентификатор задачи
-  /// из ответа провайдера (ключи id/job_id/request_id/task_id,
-  /// включая вложенные объекты).
   static String? extractJobId(Map<String, dynamic> json) =>
       _findJobId(json, 0);
 
-  /// Публичный статический помощник: извлекает ссылку на медиа из ответа
-  /// провайдера. Рекурсивно ищет URL в полях url/video_url/output/data/
-  /// result/choices; строковые элементы списков тоже распознаются.
   static String? extractMediaUrl(Map<String, dynamic> json) {
+    final byCompleted = _extractCompletedUrl(json);
+    if (byCompleted != null) return byCompleted;
     final byField = _findVideoUrl(json, 0);
     if (byField != null) return byField;
     return _urlFromMessage(json);
   }
 
   /// Публичный опрос медиа-задачи: GET {baseUrl}/media/{jobId} каждые
-  /// 4 секунды, максимум 120 попыток.
-  ///  - completed/succeeded/success/done/finished -> возвращает URL видео;
-  ///  - failed/error/cancelled -> исключение с текстом провайдера;
-  ///  - pending/processing -> синтетический прогресс (+3% до 92%).
+  /// 4 секунды, максимум 150 попыток.
   Future<String> pollMediaJob({
     required http.Client client,
     required String baseUrl,
@@ -637,8 +745,10 @@ class AsyncJobExecutor extends GenerationExecutor {
     bool Function()? isCancelled,
   }) async {
     final base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    var percent = 0.0;
-    for (int attempt = 1; attempt <= 120; attempt++) {
+    var percent = 5.0;
+    onProgress(percent, 'pending');
+    for (int attempt = 1; attempt <= _maxAttempts; attempt++) {
+      await Future<void>.delayed(_pollInterval);
       if (isCancelled?.call() ?? false) {
         throw Exception('Задача отменена.');
       }
@@ -652,18 +762,14 @@ class AsyncJobExecutor extends GenerationExecutor {
             .get(uri, headers: _authHeaders(apiKey))
             .timeout(_requestTimeout);
       } catch (_) {
-        // Сетевая трудность: ждём интервал и пробуем снова.
         onProgress(percent, 'сеть недоступна, попытка $attempt');
-        await Future<void>.delayed(const Duration(seconds: 4));
         continue;
       }
       if (resp.statusCode == 401 || resp.statusCode == 403) {
         throw Exception('Неверный API-ключ (401).');
       }
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        // Временная трудность (404/5xx): пробуем позже.
         onProgress(percent, 'HTTP ${resp.statusCode}, попытка $attempt');
-        await Future<void>.delayed(const Duration(seconds: 4));
         continue;
       }
       Map<String, dynamic> json = <String, dynamic>{};
@@ -671,45 +777,35 @@ class AsyncJobExecutor extends GenerationExecutor {
         final decoded = jsonDecode(resp.body);
         if (decoded is Map) json = Map<String, dynamic>.from(decoded);
       } catch (_) {}
-      final url = extractMediaUrl(json) ?? '';
-      if (url.isNotEmpty) {
-        onProgress(100, 'готово');
-        return url;
-      }
       final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
-      if (const <String>{
-        'failed',
-        'error',
-        'cancelled',
-        'canceled',
-      }.contains(status)) {
+      if (_failedStatuses.contains(status)) {
         throw Exception(_pollErrorText(json));
       }
-      if (const <String>{
-        'completed',
-        'succeeded',
-        'success',
-        'succeed',
-        'complete',
-        'done',
-        'finished',
-        'ok',
-      }.contains(status)) {
-        throw Exception('Провайдер завершил задачу, но не вернул видео.');
+      final url = extractMediaUrl(json) ??
+          (_doneStatuses.contains(status) ? _findAnyMediaUrl(json, 0) : null) ??
+          '';
+      if (url.isNotEmpty &&
+          (_doneStatuses.contains(status) ||
+              !_runningStatuses.contains(status))) {
+        onProgress(100, 'completed');
+        return url;
       }
-      // pending/processing и прочие «в процессе»: синтетический прогресс.
-      percent = (percent + 3).clamp(0.0, 92.0);
+      if (_doneStatuses.contains(status)) {
+        throw Exception('Провайдер завершил задачу, но не вернул медиа.');
+      }
+      final serverPct = _findPercent(json, 0);
+      if (serverPct != null && serverPct > percent) {
+        percent = serverPct.clamp(5.0, 95.0);
+      } else {
+        percent = (percent + 3).clamp(5.0, 92.0);
+      }
       onProgress(percent, status.isEmpty ? 'processing' : status);
-      await Future<void>.delayed(const Duration(seconds: 4));
     }
     throw Exception('Задача не завершилась за отведённое время.');
   }
 
   // ---------- диагностика зависания (JSONL-лог) ----------
 
-  /// Готовит путь JSONL-файла диагностики
-  /// Documents/GenTech/debug/video_<timestamp>.log. Best-effort:
-  /// любая ошибка не влияет на генерацию.
   Future<void> _initDebugLog() async {
     if (debugLogPath != null) return;
     try {
@@ -724,7 +820,6 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
   }
 
-  /// Дописывает одну JSONL-строку в debug-файл. Всё IO в try/catch.
   Future<void> _logJson(Map<String, dynamic> entry) async {
     final path = debugLogPath;
     if (path == null || path.isEmpty) return;
@@ -762,8 +857,6 @@ class AsyncJobExecutor extends GenerationExecutor {
         'error': error,
       });
 
-  /// Добавляет событие в сниппеты; хвост отсекается, чтобы список
-  /// не рос бесконечно за 120 попыток опроса.
   void _addSnippet(String s) {
     _snippets.add(s);
     if (_snippets.length > 6) {
@@ -771,8 +864,6 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
   }
 
-  /// Сниппеты для PendingPart: 'file: <путь>' (один раз) плюс последние
-  /// 3 события задачи ('create: ...' / 'poll N (http=X): ...').
   List<String> _debugPayload() {
     final out = <String>[];
     final path = debugLogPath;
@@ -786,14 +877,11 @@ class AsyncJobExecutor extends GenerationExecutor {
     return <String>[...out, ...events];
   }
 
-  /// Фрагмент сырого тела для сниппета (до 500 символов, без переводов строк).
   static String _excerpt(String raw) {
     final t = raw.replaceAll('\n', ' ').trim();
     return t.length > 500 ? '${t.substring(0, 500)}…' : t;
   }
 
-  /// Тело ответа для debugPrint: JSON перекодируется, длинные ответы
-  /// обрезаются, битый JSON печатается как есть.
   static String _debugBody(String body) {
     try {
       final s = jsonEncode(jsonDecode(body));
@@ -803,13 +891,16 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
   }
 
-  static Map<String, String> _authHeaders(String apiKey) =>
-      <String, String>{
-        'Authorization': 'Bearer $apiKey',
-        'Accept': 'application/json',
-      };
+  static Map<String, String> _authHeaders(String apiKey) {
+    final cleanKey = apiKey
+        .trim()
+        .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
+    return <String, String>{
+      'Authorization': 'Bearer $cleanKey',
+      'Accept': 'application/json',
+    };
+  }
 
-  /// Промпт — текст последнего пользовательского сообщения.
   static String _promptFrom(GenerationRequest request) {
     for (final m in request.messages.reversed) {
       if (m['role'] != 'user') continue;
@@ -834,9 +925,6 @@ class AsyncJobExecutor extends GenerationExecutor {
   }
 
   /// Рекурсивный поиск ссылки на видео в JSON-ответе провайдера.
-  /// Строковые элементы списков (например, output: ["https://...mp4"])
-  /// тоже распознаются: URL, похожий на видеофайл, принимается как ответ —
-  /// задача не завершается «пустой» ссылкой и не теряет mp4-файл.
   static String? _findVideoUrl(Object? node, int depth) {
     if (node is String) {
       final s = node.trim();
@@ -848,7 +936,8 @@ class AsyncJobExecutor extends GenerationExecutor {
       final looksLikeVideo = lower.contains('.mp4') ||
           lower.contains('.webm') ||
           lower.contains('.mov') ||
-          lower.contains('video');
+          lower.contains('video') ||
+          lower.contains('media');
       return isUrl && looksLikeVideo ? s : null;
     }
     if (node == null || depth > 8) return null;
@@ -922,14 +1011,12 @@ class AsyncJobExecutor extends GenerationExecutor {
           if (v is num) {
             d = v.toDouble();
           } else if (v is String) {
-            // '50%', '50', '0.5' — извлекаем число из строки.
-            final m =
-                RegExp(r'-?\d+(?:[.,]\d+)?').firstMatch(v);
+            final m = RegExp(r'-?\d+(?:[.,]\d+)?').firstMatch(v);
             if (m != null) {
               d = double.tryParse(m.group(0)!.replaceAll(',', '.'));
             }
           }
-          if (d != null && d >= 0 && d <= 1) d *= 100;
+          if (d != null && d > 0 && d <= 1) d *= 100;
           if (d != null && d >= 0 && d <= 100) return d;
         }
       }
@@ -948,30 +1035,19 @@ class AsyncJobExecutor extends GenerationExecutor {
     return null;
   }
 
-  /// Рекурсивный поиск идентификатора задачи в ответе создания:
-  /// сначала специфичные ключи, затем 'id'/'uuid', затем вглубь.
+  /// Рекурсивный поиск идентификатора задачи в ответе создания.
   static String? _findJobId(Object? node, int depth) {
     if (node is Map && depth <= 8) {
       const specific = <String>[
-        'job_id', 'jobid', 'task_id', 'taskid', 'request_id', 'requestid',
-        'operation_id',
+        'id', 'job_id', 'jobid', 'task_id', 'taskid', 'request_id',
+        'requestid', 'operation_id', 'uuid',
       ];
       for (final k in specific) {
         final v = node[k];
-        if (v is String && v.trim().isNotEmpty) return v.trim();
-      }
-      for (final entry in node.entries) {
-        final k = entry.key.toString().toLowerCase();
-        if (k == 'id' || k == 'uuid') {
-          final v = entry.value;
-          if (v is String) {
-            final s = v.trim();
-            if (s.isNotEmpty && s.length <= 128) return s;
-          } else if (v is num) {
-            // Числовой идентификатор задачи тоже принимаем.
-            return v.toString();
-          }
+        if (v is String && v.trim().isNotEmpty && v.trim().length <= 128) {
+          return v.trim();
         }
+        if (v is num) return v.toString();
       }
       for (final entry in node.entries) {
         final r = _findJobId(entry.value, depth + 1);
@@ -988,7 +1064,6 @@ class AsyncJobExecutor extends GenerationExecutor {
     return null;
   }
 
-  /// Текст ошибки провайдера из JSON-ответа (error.message / message).
   static String _details(String body) {
     try {
       final j = jsonDecode(body);
@@ -1010,7 +1085,6 @@ class AsyncJobExecutor extends GenerationExecutor {
     return t.length > 300 ? t.substring(0, 300) : t;
   }
 
-  /// Перевод кода ответа в типизированную [GenError].
   static GenError _mapStatus(int code, String body) {
     final details = _details(body);
     switch (code) {

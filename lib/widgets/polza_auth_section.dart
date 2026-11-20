@@ -27,7 +27,6 @@ class PolzaAuthSection extends StatefulWidget {
 }
 
 class _PolzaAuthSectionState extends State<PolzaAuthSection> {
-
   Future<void> _manualCodeDialog(BuildContext context) async {
     final controller = TextEditingController();
     final submitted = await showDialog<String>(
@@ -126,8 +125,6 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                   ],
                 ),
               ),
-              // Панель «Загрузить модели» рендерится СНАРУЖИ карточки,
-              // сразу под ней, и только после успешного OAuth-входа.
               if (authed) ...[
                 const SizedBox(height: 8),
                 ConnectionModelsPanel(
@@ -181,6 +178,7 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _iconBox(p, Icons.bolt_rounded, p.accent),
             const SizedBox(width: 12),
@@ -188,26 +186,31 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          'Polza AI',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            color: p.text,
-                          ),
+                      Text(
+                        'Polza AI',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: p.text,
                         ),
                       ),
-                      const SizedBox(width: 8),
                       _badge('OAuth 2.0 PKCE', p.accent, p),
                     ],
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 3),
                   Text(
                     'Вход в один клик без ручного копирования ключей',
-                    style: TextStyle(fontSize: 12.5, color: p.muted),
+                    softWrap: true,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: p.muted,
+                      height: 1.3,
+                    ),
                   ),
                 ],
               ),
@@ -236,6 +239,7 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                 Expanded(
                   child: Text(
                     err,
+                    softWrap: true,
                     style: TextStyle(fontSize: 12.5, color: p.text),
                   ),
                 ),
@@ -279,6 +283,7 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
               Expanded(
                 child: Text(
                   'Ожидание подтверждения входа в браузере…',
+                  softWrap: true,
                   style: TextStyle(fontSize: 13, color: p.text),
                 ),
               ),
@@ -313,7 +318,8 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
     final used = acc?.usedCredits;
     final rpm = acc?.rateLimitRpm;
     final isPolzaActive =
-        settings.baseUrl.trim() == PolzaAuthService.polzaBaseUrl;
+        settings.baseUrl.trim() == PolzaAuthService.polzaBaseUrl &&
+            settings.apiKey.trim() == polzaAuth.accessToken.trim();
 
     final String balanceText;
     if (balance != null) {
@@ -341,6 +347,7 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _iconBox(p, Icons.verified_user_rounded, PolzaAuthSection._ok),
             const SizedBox(width: 12),
@@ -349,6 +356,8 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
                     crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
                       Text(
@@ -359,18 +368,20 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                           color: p.text,
                         ),
                       ),
-                      const SizedBox(width: 8),
                       _badge('Подключено', PolzaAuthSection._ok, p),
                     ],
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 3),
                   Text(
                     (acc?.email.isNotEmpty == true)
                         ? '${acc!.email} • ${polzaAuth.maskedToken}'
                         : 'Токен: ${polzaAuth.maskedToken}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: p.muted),
+                    softWrap: true,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: p.muted,
+                      height: 1.3,
+                    ),
                   ),
                 ],
               ),
@@ -395,6 +406,7 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
         ),
         const SizedBox(height: 14),
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: _infoBox(p, 'Баланс', balanceText)),
             const SizedBox(width: 10),
@@ -457,19 +469,20 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label, style: TextStyle(fontSize: 11.5, color: p.muted)),
+          Text(
+            label,
+            softWrap: true,
+            style: TextStyle(fontSize: 11.5, color: p.muted),
+          ),
           const SizedBox(height: 4),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(
-              value,
-              maxLines: 1,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w700,
-                color: p.text,
-                height: 1.25,
-              ),
+          Text(
+            value,
+            softWrap: true,
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              color: p.text,
+              height: 1.25,
             ),
           ),
           if (progress != null) ...[

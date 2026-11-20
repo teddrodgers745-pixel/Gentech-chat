@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_state.dart';
+import '../../core/generation/active_model_controller.dart';
 import '../../core/generation/model_type_override_store.dart' show ModelTypes;
 import '../../core/generation/user_param_override_store.dart';
 import 'widgets/manual_params_sheet.dart';
@@ -175,19 +176,12 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
     final ratios = _availableAspectRatios();
     if (ratios.isNotEmpty && !ratios.contains(_selectedRatio)) {
       _selectedRatio = ratios.first;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) widget.onAspectRatioChanged?.call(_selectedRatio);
-      });
     }
     final durations = _availableDurations();
     if (durations.isNotEmpty) {
       if (_selectedDuration == null ||
           !durations.contains(_selectedDuration)) {
         _selectedDuration = durations.first;
-        final d = _selectedDuration!;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) widget.onDurationChanged?.call(d);
-        });
       }
     } else {
       _selectedDuration = null;
@@ -197,10 +191,6 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
       if (_selectedResolution == null ||
           !resolutions.contains(_selectedResolution)) {
         _selectedResolution = resolutions.first;
-        final r = _selectedResolution!;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) widget.onResolutionChanged?.call(r);
-        });
       }
     } else {
       _selectedResolution = null;
@@ -209,14 +199,32 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
     if (qualities.isNotEmpty) {
       if (_selectedQuality == null || !qualities.contains(_selectedQuality)) {
         _selectedQuality = qualities.first;
-        final q = _selectedQuality!;
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) widget.onQualityChanged?.call(q);
-        });
       }
     } else {
       _selectedQuality = null;
     }
+
+    ActiveModelController.updateSelectedMediaParams(
+      aspectRatio: _selectedRatio,
+      duration: _selectedDuration,
+      resolution: _selectedResolution,
+      quality: _selectedQuality,
+      clearNulls: true,
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      widget.onAspectRatioChanged?.call(_selectedRatio);
+      if (_selectedDuration != null) {
+        widget.onDurationChanged?.call(_selectedDuration!);
+      }
+      if (_selectedResolution != null) {
+        widget.onResolutionChanged?.call(_selectedResolution!);
+      }
+      if (_selectedQuality != null) {
+        widget.onQualityChanged?.call(_selectedQuality!);
+      }
+    });
   }
 
   bool get _isLiveMode =>
@@ -255,8 +263,6 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
       allowedQualities: _availableQualities(),
     );
     if (res == null || !res.hasAny) return;
-    // Тип модели фиксируем в override: спецификация только по разрешению
-    // иначе сбивала бы определение вида модели (видео -> изображение).
     if (_isVideoMode) {
       res.type = 'video';
     } else if (_isImageMode) {
@@ -285,6 +291,13 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
         _selectedQuality = qList.first;
         widget.onQualityChanged?.call(_selectedQuality!);
       }
+      ActiveModelController.updateSelectedMediaParams(
+        aspectRatio: _selectedRatio,
+        duration: _selectedDuration,
+        resolution: _selectedResolution,
+        quality: _selectedQuality,
+        clearNulls: true,
+      );
     });
   }
 
@@ -413,6 +426,10 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                               : () {
                                   HapticFeedback.selectionClick();
                                   setState(() => _selectedRatio = ratio);
+                                  ActiveModelController
+                                      .updateSelectedMediaParams(
+                                    aspectRatio: ratio,
+                                  );
                                   widget.onAspectRatioChanged?.call(ratio);
                                 },
                         ),
@@ -428,6 +445,10 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                                 : () {
                                     HapticFeedback.selectionClick();
                                     setState(() => _selectedDuration = sec);
+                                    ActiveModelController
+                                        .updateSelectedMediaParams(
+                                      duration: sec,
+                                    );
                                     widget.onDurationChanged?.call(sec);
                                   },
                           ),
@@ -443,6 +464,10 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                                 : () {
                                     HapticFeedback.selectionClick();
                                     setState(() => _selectedResolution = res);
+                                    ActiveModelController
+                                        .updateSelectedMediaParams(
+                                      resolution: res,
+                                    );
                                     widget.onResolutionChanged?.call(res);
                                   },
                           ),
@@ -458,6 +483,10 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                                 : () {
                                     HapticFeedback.selectionClick();
                                     setState(() => _selectedQuality = q);
+                                    ActiveModelController
+                                        .updateSelectedMediaParams(
+                                      quality: q,
+                                    );
                                     widget.onQualityChanged?.call(q);
                                   },
                           ),
@@ -566,7 +595,16 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                         onPressed: widget.streaming
                             ? widget.onStop
                             : (!widget.attachmentsBusy
-                                ? widget.onSend
+                                ? () {
+                                    ActiveModelController
+                                        .updateSelectedMediaParams(
+                                      aspectRatio: _selectedRatio,
+                                      duration: _selectedDuration,
+                                      resolution: _selectedResolution,
+                                      quality: _selectedQuality,
+                                    );
+                                    widget.onSend?.call();
+                                  }
                                 : null),
                         style: IconButton.styleFrom(
                           backgroundColor: p.accent,

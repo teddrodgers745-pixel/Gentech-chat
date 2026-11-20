@@ -46,7 +46,7 @@ abstract final class PolzaParser {
 
   /// Базовые уровни, когда reasoning заявлен только в supported_parameters.
   static const List<String> supportedParamsReasoningLevels = <String>[
-    'off', 'high',
+    'off', 'low', 'medium', 'high',
   ];
 
   /// Разбирает полный ответ каталога. Записи без идентификатора
@@ -96,8 +96,12 @@ abstract final class PolzaParser {
 
     final contextLength = asInt(pick(m, const <String>[
       'context_length', 'contextLength', 'context_window',
+    ])) ?? asInt(pick(topProvider ?? const <String, dynamic>{}, const <String>[
+      'context_length', 'contextLength', 'context_window',
     ]));
     final maxOut = asInt(pick(m, const <String>[
+      'max_completion_tokens', 'maxCompletionTokens', 'max_output_tokens',
+    ])) ?? asInt(pick(topProvider ?? const <String, dynamic>{}, const <String>[
       'max_completion_tokens', 'maxCompletionTokens', 'max_output_tokens',
     ]));
     final supportedParams = asStrList(
@@ -107,7 +111,7 @@ abstract final class PolzaParser {
     final (reasoning, reasoningUnknown) =
         parseReasoning(m, topProvider, supportedParams);
 
-    final media = parseMediaParams(m);
+    final media = parseMediaParams(m, topProvider);
 
     bool? supportsTools;
     if (supportedParams.isNotEmpty) {
@@ -165,7 +169,8 @@ abstract final class PolzaParser {
     );
   }
 
-  /// Reasoning: m['reasoning'] и/или m['top_provider']['reasoning'].
+  /// Reasoning: m['reasoning'] и/или m['top_provider']['reasoning'],
+  /// а также m['parameters']['reasoning'].
   /// Возвращает (reasoning, unknown); unknown=true — провайдер не отдал
   /// ни reasoning, ни supported_parameters (данные неизвестны).
   static (CatalogReasoning?, bool) parseReasoning(
@@ -173,23 +178,36 @@ abstract final class PolzaParser {
     Map<String, dynamic>? topProvider,
     List<String> supportedParams,
   ) {
-    var candidate = asMap(m['reasoning']);
-    var marker = identical(m['reasoning'], true);
     final tpRaw = topProvider?['reasoning'];
-    if (candidate == null && !marker) {
-      candidate = asMap(tpRaw);
-      marker = identical(tpRaw, true);
-    }
+    final paramsMap =
+        asMap(topProvider?['parameters']) ?? asMap(m['parameters']);
+    final paramReasoning =
+        paramsMap == null ? null : asMap(paramsMap['reasoning']);
+
+    // Проверяем сначала top_provider.reasoning, затем m.reasoning,
+    // затем parameters.reasoning (в соответствии со структурой Polza API).
+    Map<String, dynamic>? candidate =
+        asMap(tpRaw) ?? asMap(m['reasoning']) ?? paramReasoning;
+    final marker =
+        identical(tpRaw, true) || identical(m['reasoning'], true);
+
     if (candidate != null) {
       final efforts = asStrList(
-        candidate['supported_efforts'] ?? candidate['supportedEfforts'],
+        candidate['supported_efforts'] ??
+            candidate['supportedEfforts'] ??
+            candidate['values'] ??
+            candidate['efforts'] ??
+            candidate['levels'],
       );
       final def = asStr(
-            candidate['default_effort'] ?? candidate['defaultEffort'],
+            candidate['default_effort'] ??
+                candidate['defaultEffort'] ??
+                candidate['default'],
           ) ??
           '';
+      final mandatory = candidate['mandatory'] == true ||
+          candidate['required'] == true;
       if (efforts.isNotEmpty) {
-        final mandatory = candidate['mandatory'] == true;
         return (
           CatalogReasoning(
             levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
@@ -204,10 +222,10 @@ abstract final class PolzaParser {
         CatalogReasoning(
           levels: normalizeReasoningLevels(
             List<String>.of(defaultReasoningLevels),
-            mandatory: candidate['mandatory'] == true,
+            mandatory: mandatory,
           ),
           defaultEffort: normalizeReasoningEffort(def),
-          mandatory: candidate['mandatory'] == true,
+          mandatory: mandatory,
         ),
         false,
       );
@@ -227,7 +245,9 @@ abstract final class PolzaParser {
         supportedParams.contains('reasoning_effort')) {
       return (
         CatalogReasoning(
-          levels: List<String>.of(supportedParamsReasoningLevels),
+          levels: normalizeReasoningLevels(
+            List<String>.of(defaultReasoningLevels),
+          ),
         ),
         false,
       );
@@ -323,40 +343,88 @@ abstract final class PolzaParser {
 
   /// Медиа-параметры записи: пропорции, разрешения, длительности
   /// (строки Polza вида '4' приводятся к int), качества и лимит
-  /// референсных изображений.
+  /// референсных изображений. Ищет как в top_provider.parameters,
+  /// так и в m.parameters.
   static ({
     List<String> aspectRatios,
     List<String> resolutions,
     List<int> durations,
     List<String> qualities,
     int? maxImages,
-  }) parseMediaParams(Map<String, dynamic> m) {
+  }) parseMediaParams(
+    Map<String, dynamic> m, [
+    Map<String, dynamic>? topProvider,
+  ]) {
     var aspectRatios = const <String>[];
     var resolutions = const <String>[];
     var durations = const <int>[];
     var qualities = const <String>[];
     int? maxImages;
     try {
-      final params = asMap(m['parameters']);
-      if (params != null) {
-        aspectRatios = asStrList(asMap(params['aspect_ratio'])?['values']);
-        resolutions = asStrList(
-          asMap(params['image_resolution'])?['values'] ??
-              asMap(params['resolution'])?['values']);
-        durations = asIntList(asMap(params['duration'])?['values']);
-        qualities = asStrList(asMap(params['quality'])?['values']);
-        maxImages = asInt(asMap(params['images'])?['max']);
+      final tpParams = asMap(topProvider?['parameters']);
+      final mParams = asMap(m['parameters']);
+      final paramsList = <Map<String, dynamic>>[
+        if (tpParams != null) tpParams,
+        if (mParams != null) mParams,
+      ];
+      for (final params in paramsList) {
+        if (aspectRatios.isEmpty) {
+          aspectRatios = asStrList(
+            asMap(params['aspect_ratio'])?['values'] ??
+                asMap(params['aspect_ratio'])?['enum'] ??
+                params['aspect_ratio'],
+          );
+        }
+        if (resolutions.isEmpty) {
+          resolutions = asStrList(
+            asMap(params['image_resolution'])?['values'] ??
+                asMap(params['image_resolution'])?['enum'] ??
+                asMap(params['resolution'])?['values'] ??
+                asMap(params['resolution'])?['enum'] ??
+                params['image_resolution'] ??
+                params['resolution'],
+          );
+        }
+        if (durations.isEmpty) {
+          durations = asIntList(
+            asMap(params['duration'])?['values'] ??
+                asMap(params['duration'])?['enum'] ??
+                params['duration'],
+          );
+        }
+        if (qualities.isEmpty) {
+          qualities = asStrList(
+            asMap(params['quality'])?['values'] ??
+                asMap(params['quality'])?['enum'] ??
+                params['quality'],
+          );
+        }
+        maxImages ??= asInt(asMap(params['images'])?['max']);
       }
       // Формат RouterAI: плоские списки на верхнем уровне записи,
       // если блок parameters не дал данных.
       if (aspectRatios.isEmpty) {
-        aspectRatios = asStrList(m['supported_aspect_ratios']);
+        aspectRatios = asStrList(
+          m['supported_aspect_ratios'] ??
+              topProvider?['supported_aspect_ratios'],
+        );
       }
       if (resolutions.isEmpty) {
-        resolutions = asStrList(m['supported_resolutions']);
+        resolutions = asStrList(
+          m['supported_resolutions'] ??
+              topProvider?['supported_resolutions'] ??
+              m['supported_image_sizes'],
+        );
       }
       if (durations.isEmpty) {
-        durations = asIntList(m['supported_durations']);
+        durations = asIntList(
+          m['supported_durations'] ?? topProvider?['supported_durations'],
+        );
+      }
+      if (qualities.isEmpty) {
+        qualities = asStrList(
+          m['supported_qualities'] ?? topProvider?['supported_qualities'],
+        );
       }
     } catch (_) {
       // Битые медиа-поля не роняют разбор записи.
@@ -386,7 +454,13 @@ abstract final class PolzaParser {
   static int? asInt(Object? v) {
     if (v is int) return v;
     if (v is num) return v.round();
-    if (v is String) return int.tryParse(v.trim());
+    if (v is String) {
+      final clean = v.trim();
+      final direct = int.tryParse(clean);
+      if (direct != null) return direct;
+      final m = RegExp(r'(\d+)').firstMatch(clean);
+      if (m != null) return int.tryParse(m.group(1)!);
+    }
     return null;
   }
 

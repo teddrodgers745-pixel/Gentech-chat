@@ -52,7 +52,7 @@ abstract final class RouterAiParser {
 
   /// Базовые уровни, когда reasoning заявлен только в supported_parameters.
   static const List<String> supportedParamsReasoningLevels = <String>[
-    'off', 'high',
+    'off', 'low', 'medium', 'high',
   ];
 
   /// Разбирает полный ответ каталога. Записи без идентификатора
@@ -95,6 +95,7 @@ abstract final class RouterAiParser {
         .trim();
     if (id.isEmpty) return null;
     final name = (asStr(m['name']) ?? '').trim();
+    final topProvider = asMap(m['top_provider']);
 
     final typeRaw = (asStr(m['type']) ?? '').toLowerCase();
     final type = knownTypes.contains(typeRaw) ? typeRaw : '';
@@ -105,7 +106,9 @@ abstract final class RouterAiParser {
     final maxOut = asInt(pick(m, const <String>[
       'max_completion_tokens', 'maxCompletionTokens', 'max_output_tokens',
     ]));
-    final supportedParams = asStrList(m['supported_parameters']);
+    final supportedParams = asStrList(
+      m['supported_parameters'] ?? topProvider?['supported_parameters'],
+    );
 
     final (reasoning, reasoningUnknown) =
         parseReasoning(m, supportedParams);
@@ -169,56 +172,87 @@ abstract final class RouterAiParser {
     );
   }
 
-  /// Reasoning: m['reasoning'] (словарь либо true) либо
-  /// supported_parameters ('reasoning' / 'reasoning_effort').
+  /// Reasoning: m['reasoning'] / top_provider['reasoning'] (словарь либо true)
+  /// либо supported_parameters ('reasoning' / 'reasoning_effort').
   /// Возвращает (reasoning, unknown); unknown=true — провайдер не отдал
   /// ни reasoning, ни supported_parameters (данные неизвестны).
   static (CatalogReasoning?, bool) parseReasoning(
     Map<String, dynamic> m,
     List<String> supportedParams,
   ) {
-    final candidate = asMap(m['reasoning']);
-    final marker = identical(m['reasoning'], true);
+    final topProvider = asMap(m['top_provider']);
+    final tpRaw = topProvider?['reasoning'];
+    final paramsMap =
+        asMap(m['parameters']) ?? asMap(topProvider?['parameters']);
+    final paramReasoning =
+        paramsMap == null ? null : asMap(paramsMap['reasoning']);
+
+    final candidate =
+        asMap(m['reasoning']) ?? asMap(tpRaw) ?? paramReasoning;
+    final marker =
+        identical(m['reasoning'], true) || identical(tpRaw, true);
+
+    final topEfforts = asStrList(
+      m['supported_reasoning_efforts'] ??
+          m['supported_efforts'] ??
+          m['reasoning_efforts'],
+    );
+
     if (candidate != null) {
       final efforts = asStrList(
-        candidate['supported_efforts'] ?? candidate['supportedEfforts'],
+        candidate['supported_efforts'] ??
+            candidate['supportedEfforts'] ??
+            candidate['values'] ??
+            candidate['efforts'] ??
+            candidate['levels'],
       );
+      final effectiveEfforts = efforts.isNotEmpty ? efforts : topEfforts;
       final def = asStr(
-            candidate['default_effort'] ?? candidate['defaultEffort'],
+            candidate['default_effort'] ??
+                candidate['defaultEffort'] ??
+                candidate['default'],
           ) ??
           '';
-      if (efforts.isNotEmpty) {
-        final mandatory = candidate['mandatory'] == true;
+      final mandatory = candidate['mandatory'] == true ||
+          candidate['required'] == true;
+      if (effectiveEfforts.isNotEmpty) {
         return (
           CatalogReasoning(
-            levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
+            levels: normalizeReasoningLevels(
+              effectiveEfforts,
+              mandatory: mandatory,
+            ),
             defaultEffort: normalizeReasoningEffort(def),
             mandatory: mandatory,
           ),
           false,
         );
       }
-      // Словарь без списка усилий: RouterAI не передал градации —
-      // не выдумываем их, используем минимальный набор off/high.
       return (
         CatalogReasoning(
           levels: normalizeReasoningLevels(
-            List<String>.of(supportedParamsReasoningLevels),
-            mandatory: candidate['mandatory'] == true,
+            List<String>.of(defaultReasoningLevels),
+            mandatory: mandatory,
           ),
           defaultEffort: normalizeReasoningEffort(def),
-          mandatory: candidate['mandatory'] == true,
+          mandatory: mandatory,
+        ),
+        false,
+      );
+    }
+    if (topEfforts.isNotEmpty) {
+      return (
+        CatalogReasoning(
+          levels: normalizeReasoningLevels(topEfforts),
         ),
         false,
       );
     }
     if (marker) {
-      // reasoning: true — уровни не перечислены API: минимальный набор
-      // off/high вместо выдуманных градаций.
       return (
         CatalogReasoning(
           levels: normalizeReasoningLevels(
-            List<String>.of(supportedParamsReasoningLevels),
+            List<String>.of(defaultReasoningLevels),
           ),
         ),
         false,
@@ -228,7 +262,9 @@ abstract final class RouterAiParser {
         supportedParams.contains('reasoning_effort')) {
       return (
         CatalogReasoning(
-          levels: List<String>.of(supportedParamsReasoningLevels),
+          levels: normalizeReasoningLevels(
+            List<String>.of(defaultReasoningLevels),
+          ),
         ),
         false,
       );
@@ -329,19 +365,34 @@ abstract final class RouterAiParser {
           resolutions.isEmpty ||
           durations.isEmpty ||
           qualities.isEmpty) {
-        final params = asMap(m['parameters']);
+        final topProvider = asMap(m['top_provider']);
+        final params =
+            asMap(m['parameters']) ?? asMap(topProvider?['parameters']);
         if (params != null) {
           if (aspectRatios.isEmpty) {
-            aspectRatios = asStrList(asMap(params['aspect_ratio'])?['values']);
+            aspectRatios = asStrList(
+              asMap(params['aspect_ratio'])?['values'] ??
+                  asMap(params['aspect_ratio'])?['enum'],
+            );
           }
           if (resolutions.isEmpty) {
-            resolutions = asStrList(asMap(params['resolution'])?['values']);
+            resolutions = asStrList(
+              asMap(params['image_resolution'])?['values'] ??
+                  asMap(params['resolution'])?['values'] ??
+                  asMap(params['resolution'])?['enum'],
+            );
           }
           if (durations.isEmpty) {
-            durations = asIntList(asMap(params['duration'])?['values']);
+            durations = asIntList(
+              asMap(params['duration'])?['values'] ??
+                  asMap(params['duration'])?['enum'],
+            );
           }
           if (qualities.isEmpty) {
-            qualities = asStrList(asMap(params['quality'])?['values']);
+            qualities = asStrList(
+              asMap(params['quality'])?['values'] ??
+                  asMap(params['quality'])?['enum'],
+            );
           }
         }
       }
@@ -372,7 +423,13 @@ abstract final class RouterAiParser {
   static int? asInt(Object? v) {
     if (v is int) return v;
     if (v is num) return v.round();
-    if (v is String) return int.tryParse(v.trim());
+    if (v is String) {
+      final clean = v.trim();
+      final direct = int.tryParse(clean);
+      if (direct != null) return direct;
+      final m = RegExp(r'(\d+)').firstMatch(clean);
+      if (m != null) return int.tryParse(m.group(1)!);
+    }
     return null;
   }
 
