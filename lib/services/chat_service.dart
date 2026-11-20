@@ -540,8 +540,6 @@ class ChatService {
 
   /// Формирует payload параметра размышлений (reasoning) согласно документации
   /// провайдера:
-  ///  - если effort пустой, но в настройках выбран не 'off'/'none', берём
-  ///    значение из settings.reasoningEffort;
   ///  - 'off'/'none' — параметр не отправляется;
   ///  - Polza AI (https://polza.ai/docs/osobennosti/reasoning-tokens.md):
   ///    `reasoning: {"effort": "<level>"}`;
@@ -552,12 +550,7 @@ class ChatService {
     required String model,
     required String? reasoningEffort,
   }) {
-    var effort = (reasoningEffort ?? '').trim().toLowerCase();
-    if (effort.isEmpty) {
-      try {
-        effort = settings.reasoningEffort.trim().toLowerCase();
-      } catch (_) {}
-    }
+    final effort = (reasoningEffort ?? '').trim().toLowerCase();
     if (effort.isEmpty || effort == 'off' || effort == 'none') {
       return const <String, dynamic>{};
     }

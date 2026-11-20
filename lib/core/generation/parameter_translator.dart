@@ -98,13 +98,18 @@ class UniversalParams {
 
 /// Нормализация параметров генерации под конкретную модель.
 abstract final class ParameterTranslator {
+  static bool _isVideoGenerator(ModelInfo model) =>
+      model.outputModalities.contains(Modality.video) ||
+      model.route == GenerationRoute.asyncJob;
+
   /// Приводит [rawParams] к формату payload модели [model].
   /// Возвращает новую карту; исходная не меняется.
   static Map<String, dynamic> translate(
     Map<String, dynamic> rawParams,
     ModelInfo model,
   ) {
-    final enriched = _enrichRawWithSelected(rawParams, isVideo: model.isVideoGenerator);
+    final isVideo = _isVideoGenerator(model);
+    final enriched = _enrichRawWithSelected(rawParams, isVideo: isVideo);
     final schema = model.generationSchema;
     if (schema == null) return _normalizeRawTypes(enriched, isImage: model.isImageGenerator);
     final clean = schema.sanitize(enriched);
@@ -122,7 +127,7 @@ abstract final class ParameterTranslator {
         result[ParamKeys.aspectRatio] = p.aspectRatio!;
       }
       if (p.duration != null &&
-          model.isVideoGenerator &&
+          isVideo &&
           !result.containsKey(ParamKeys.duration)) {
         result[ParamKeys.duration] = p.duration!;
       }
