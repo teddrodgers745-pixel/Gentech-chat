@@ -639,6 +639,26 @@ class ChatService {
       // Stage 4.1 (b): запрос создаётся непосредственно перед отправкой
       // (см. блок ретрая ниже — один повтор при 400 с удалением поля).
       final builtin = _builtinToolsPayload();
+      // Единый селектор Reasoning Effort: off/none — поле в запрос не
+      // уходит; известные уровни форматирует ReasoningMapper.mapToApi
+      // ('reasoning_effort' для прямых провайдеров,
+      // 'reasoning: {effort: ...}' для идентификаторов с префиксом
+      // владельца); неизвестные уровни уходят как есть в reasoning_effort.
+      final cleanEffort = (reasoningEffort ?? '').trim().toLowerCase();
+      final Map<String, dynamic> reasoningPayload;
+      if (cleanEffort.isEmpty ||
+          cleanEffort == 'off' ||
+          cleanEffort == 'none') {
+        reasoningPayload = const <String, dynamic>{};
+      } else {
+        final mapped = ReasoningMapper.mapToApi(
+          ReasoningMapper.fromId(cleanEffort),
+          model,
+        );
+        reasoningPayload = mapped.isNotEmpty
+            ? mapped
+            : <String, dynamic>{'reasoning_effort': cleanEffort};
+      }
       Map<String, dynamic> bodyMap = {
         'model': model,
         'messages': history,
@@ -648,14 +668,7 @@ class ChatService {
         if (stream)
           'stream_options': <String, dynamic>{'include_usage': true},
         if (temperature != null) 'temperature': temperature,
-        // Единый селектор Reasoning Effort: формат поля выбирает
-        // ReasoningMapper.mapToApi — 'reasoning_effort' для прямых
-        // провайдеров, 'reasoning: {effort: ...}' для идентификаторов
-        // с префиксом владельца ('vendor/model'); off — поле не уходит.
-        ...ReasoningMapper.mapToApi(
-          ReasoningMapper.fromId(reasoningEffort ?? ''),
-          model,
-        ),
+        ...reasoningPayload,
         if (tools.isNotEmpty || builtin.isNotEmpty)
           'tools': <Map<String, dynamic>>[
             ...builtin,
@@ -818,7 +831,19 @@ class ChatService {
           if (delta == null) continue;
 
           final c = (delta['content'] as String?) ?? '';
-          final r = (delta['reasoning_content'] as String?) ?? '';
+          final rc = (delta['reasoning_content'] as String?) ?? '';
+          // delta['reasoning'] читается наравне с delta['reasoning_content']:
+          // часть провайдеров отдаёт размышления под этим ключом (строкой
+          // либо объектом с полем content/text).
+          var rs = '';
+          final rawReasoning = delta['reasoning'];
+          if (rawReasoning is String) {
+            rs = rawReasoning;
+          } else if (rawReasoning is Map) {
+            final t = rawReasoning['content'] ?? rawReasoning['text'];
+            if (t is String) rs = t;
+          }
+          final r = rc.isNotEmpty ? rc : rs;
           if (c.isNotEmpty || r.isNotEmpty) {
             content += c;
             reasoning += r;

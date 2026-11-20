@@ -608,6 +608,103 @@ class AsyncJobExecutor extends GenerationExecutor {
     return m?.group(0);
   }
 
+  /// Публичный статический помощник: извлекает идентификатор задачи
+  /// из ответа провайдера (ключи id/job_id/request_id/task_id,
+  /// включая вложенные объекты).
+  static String? extractJobId(Map<String, dynamic> json) =>
+      _findJobId(json, 0);
+
+  /// Публичный статический помощник: извлекает ссылку на медиа из ответа
+  /// провайдера. Рекурсивно ищет URL в полях url/video_url/output/data/
+  /// result/choices; строковые элементы списков тоже распознаются.
+  static String? extractMediaUrl(Map<String, dynamic> json) {
+    final byField = _findVideoUrl(json, 0);
+    if (byField != null) return byField;
+    return _urlFromMessage(json);
+  }
+
+  /// Публичный опрос медиа-задачи: GET {baseUrl}/media/{jobId} каждые
+  /// 4 секунды, максимум 120 попыток.
+  ///  - completed/succeeded/success/done/finished -> возвращает URL видео;
+  ///  - failed/error/cancelled -> исключение с текстом провайдера;
+  ///  - pending/processing -> синтетический прогресс (+3% до 92%).
+  Future<String> pollMediaJob({
+    required http.Client client,
+    required String baseUrl,
+    required String apiKey,
+    required String jobId,
+    required void Function(double progress, String statusText) onProgress,
+    bool Function()? isCancelled,
+  }) async {
+    final base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    var percent = 0.0;
+    for (int attempt = 1; attempt <= 120; attempt++) {
+      if (isCancelled?.call() ?? false) {
+        throw Exception('Задача отменена.');
+      }
+      final uri = Uri.tryParse('$base/media/$jobId');
+      if (uri == null) {
+        throw Exception('Некорректный адрес опроса задачи.');
+      }
+      http.Response resp;
+      try {
+        resp = await client
+            .get(uri, headers: _authHeaders(apiKey))
+            .timeout(_requestTimeout);
+      } catch (_) {
+        // Сетевая трудность: ждём интервал и пробуем снова.
+        onProgress(percent, 'сеть недоступна, попытка $attempt');
+        await Future<void>.delayed(const Duration(seconds: 4));
+        continue;
+      }
+      if (resp.statusCode == 401 || resp.statusCode == 403) {
+        throw Exception('Неверный API-ключ (401).');
+      }
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        // Временная трудность (404/5xx): пробуем позже.
+        onProgress(percent, 'HTTP ${resp.statusCode}, попытка $attempt');
+        await Future<void>.delayed(const Duration(seconds: 4));
+        continue;
+      }
+      Map<String, dynamic> json = <String, dynamic>{};
+      try {
+        final decoded = jsonDecode(resp.body);
+        if (decoded is Map) json = Map<String, dynamic>.from(decoded);
+      } catch (_) {}
+      final url = extractMediaUrl(json) ?? '';
+      if (url.isNotEmpty) {
+        onProgress(100, 'готово');
+        return url;
+      }
+      final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
+      if (const <String>{
+        'failed',
+        'error',
+        'cancelled',
+        'canceled',
+      }.contains(status)) {
+        throw Exception(_pollErrorText(json));
+      }
+      if (const <String>{
+        'completed',
+        'succeeded',
+        'success',
+        'succeed',
+        'complete',
+        'done',
+        'finished',
+        'ok',
+      }.contains(status)) {
+        throw Exception('Провайдер завершил задачу, но не вернул видео.');
+      }
+      // pending/processing и прочие «в процессе»: синтетический прогресс.
+      percent = (percent + 3).clamp(0.0, 92.0);
+      onProgress(percent, status.isEmpty ? 'processing' : status);
+      await Future<void>.delayed(const Duration(seconds: 4));
+    }
+    throw Exception('Задача не завершилась за отведённое время.');
+  }
+
   // ---------- диагностика зависания (JSONL-лог) ----------
 
   /// Готовит путь JSONL-файла диагностики

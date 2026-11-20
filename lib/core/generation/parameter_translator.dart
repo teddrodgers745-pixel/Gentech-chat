@@ -49,7 +49,13 @@ class UniversalParams {
   static int? _int(Object? v) {
     if (v is int) return v;
     if (v is num) return v.round();
-    if (v is String) return int.tryParse(v.trim());
+    if (v is String) {
+      final clean = v.trim();
+      final direct = int.tryParse(clean);
+      if (direct != null) return direct;
+      final match = RegExp(r'(\d+)').firstMatch(clean);
+      if (match != null) return int.tryParse(match.group(1)!);
+    }
     return null;
   }
 }
@@ -141,9 +147,10 @@ abstract final class ParameterTranslator {
       if (size != null) out[ParamKeys.size] = size;
     } else if (_hasConstraint(spec, 'width/height rejected')) {
       // Только aspect_ratio: размерные поля не отправляются вовсе.
+      // Ранний return убран: duration/resolution/quality добавляются
+      // ниже в общем пути.
       final r = p.aspectRatio;
       if (r != null) out[ParamKeys.aspectRatio] = r;
-      return out;
     } else {
       if (p.aspectRatio != null) out[ParamKeys.aspectRatio] = p.aspectRatio!;
       if (p.size != null) out[ParamKeys.size] = p.size!;
@@ -190,7 +197,10 @@ abstract final class ParameterTranslator {
     if (spec == null || !spec.hasAny) return fallback();
     final p = UniversalParams.fromRaw(rawParams);
     final durations = spec.durations;
-    final isVideo = durations != null && !durations.isEmpty;
+    final isVideo = spec.type == 'video' ||
+        (durations != null && !durations.isEmpty) ||
+        p.duration != null ||
+        ActiveModelController.isHeuristicVideo(modelId);
     final body = isVideo ? toVideoBody(p, spec) : toImageBody(p, spec);
     if (body.isEmpty) return fallback();
     return body;

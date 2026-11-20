@@ -348,18 +348,15 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          'Polza AI',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            color: p.text,
-                          ),
+                      Text(
+                        'Polza AI',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: p.text,
                         ),
                       ),
                       const SizedBox(width: 8),
@@ -462,15 +459,17 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
         children: [
           Text(label, style: TextStyle(fontSize: 11.5, color: p.muted)),
           const SizedBox(height: 4),
-          Text(
-            value,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              fontSize: 12.5,
-              fontWeight: FontWeight.w700,
-              color: p.text,
-              height: 1.25,
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              value,
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
+                color: p.text,
+                height: 1.25,
+              ),
             ),
           ),
           if (progress != null) ...[

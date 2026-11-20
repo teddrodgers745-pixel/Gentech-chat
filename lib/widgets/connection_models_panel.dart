@@ -148,10 +148,15 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     return list;
   }
 
-  /// Выбор модели: сохраняется в настройки (PresetStore синхронизируется
-  /// внутри setConnection); подключение (адрес/ключ) не меняется.
+  /// Выбор модели: сохраняем одновременно И модель, И url, И key этого
+  /// провайдера — иначе подключение могло остаться от другого источника
+  /// (модель Polza при ключе из общих настроек и т.п.).
   void _pickModel(String v) {
-    settings.setConnection(mdl: v);
+    settings.setConnection(
+      url: widget.baseUrl,
+      key: widget.apiKey,
+      mdl: v,
+    );
     if (mounted) setState(() {});
   }
 

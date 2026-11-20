@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 
 import '../../app_state.dart';
 import '../auth/polza_auth_service.dart';
+// ignore: unused_import
+import '../auth/routerai_auth_service.dart';
 import '../catalog/provider_catalog_service.dart';
 import '../models/active_model_capabilities.dart';
 import '../models/model_id_normalizer.dart';
@@ -288,6 +290,10 @@ class ActiveModelController extends ChangeNotifier {
       if (polzaKey.isNotEmpty) return 'polza';
       return null;
     }
+    // Определение подключения по адресу провайдера: polza.ai -> 'polza',
+    // routerai -> 'routerai' — каталог того же провайдера, что и запрос.
+    if (url.contains('polza.ai')) return 'polza';
+    if (url.contains('routerai')) return 'routerai';
     if (polzaKey.isNotEmpty &&
         key == polzaKey &&
         url == PolzaAuthService.polzaBaseUrl) {
@@ -756,12 +762,7 @@ class ActiveModelController extends ChangeNotifier {
           reasoningSource =
               'каталог (${entry.capabilitiesSource}), уровни не перечислены';
         }
-      } else if (entry.reasoningUnknown) {
-        // Данных нет (формат В): базовый список, капсула остаётся видимой.
-        supportsReasoning = true;
-        reasoningLevels = List<String>.of(_baseReasoningLevels);
-        reasoningSource = 'unknown -> базовый список';
-      } else {
+      } else if (!entry.reasoningUnknown) {
         // Источник ЯВНО сообщает, что reasoning у модели нет:
         // капсула скрывается (пустой список уровней).
         supportsReasoning = false;
@@ -769,6 +770,9 @@ class ActiveModelController extends ChangeNotifier {
         reasoningSource =
             'каталог (${entry.capabilitiesSource}): reasoning отсутствует';
       }
+      // reasoningUnknown == true (данных нет, формат В): принудительное
+      // supportsReasoning = true убрано — работают прежние резолверы
+      // (эвристика по идентификатору / кэш OpenRouter), заданные выше.
     }
     // Защита от гонки: за время await модель могла смениться again.
     if (token != _resolveToken) return;
@@ -815,12 +819,24 @@ class ActiveModelController extends ChangeNotifier {
       durations:
           durs.isEmpty ? null : DurationRange(discrete: List<int>.of(durs)),
       resolutions: List<String>.of(en.resolutions),
-      sizes: const <String>[],
+      sizes: _entrySizes(en),
       qualities: List<String>.of(en.qualities),
       constraints: const <String>[],
       confidence: en.capabilitiesSource,
       isUserDefined: false,
     );
+  }
+
+  /// Размеры холста из записи каталога, если провайдер их сообщил
+  /// (mediaParams['sizes']); пустой список — данных нет. Отдельного
+  /// поля sizes у CatalogEntry нет, поэтому читаем терпимо из mediaParams.
+  static List<String> _entrySizes(CatalogEntry e) {
+    final raw = e.mediaParams['sizes'];
+    if (raw is! List) return const <String>[];
+    return <String>[
+      for (final v in raw)
+        if (v != null && v.toString().trim().isNotEmpty) v.toString().trim(),
+    ];
   }
 
   /// Вид модели: по типу из каталога подключения (приоритет после
