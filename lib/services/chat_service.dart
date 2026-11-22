@@ -23,19 +23,11 @@ import 'search_enhancer.dart';
 class StreamChunk {
   final String content;
   final String reasoning;
-
-  /// Поля события вызова инструмента (заполняются только для таких событий).
   final String? toolName;
   final String? toolArgs;
   final String? toolStatus;
   final String? toolResult;
-
-  /// Статистика токенов раунда (usage), когда провайдер её отдал
-  /// (запрос со stream_options.include_usage). null — статистики нет.
   final Map<String, dynamic>? usage;
-
-  /// Ссылки-источники из полей citations/annotations ответа провайдера.
-  /// Пустой список — источников нет.
   final List<String> sources;
 
   const StreamChunk(
@@ -50,9 +42,6 @@ class StreamChunk {
   });
 }
 
-/// Итог непотокового запроса: текст ответа и статистика токенов (usage)
-/// раунда, когда провайдер её вернул. Возвращается методом
-/// [ChatService.sendMessageResult].
 class ChatResult {
   final String text;
   final Map<String, dynamic>? usage;
@@ -60,24 +49,19 @@ class ChatResult {
   const ChatResult({this.text = '', this.usage});
 }
 
-/// Выбранный пользователем файл: понятное имя и путь на устройстве.
 class PickedFileRef {
   final String name;
   final String path;
   const PickedFileRef(this.name, this.path);
 }
 
-/// Максимальный размер вложения, которое читаем целиком.
 const int kMaxAttachmentBytes = 8 * 1024 * 1024;
 
-/// Инструкция модели о выдаче файлов: добавляется к системному промпту,
-/// чтобы файлы приходили блоками кода с именем файла.
 const String kFileBlockInstruction =
     'Если пользователь просит создать файл (HTML, Python, Markdown и т.д.), '
     'ты ДОЛЖЕН выдавать его в блоке кода с указанием имени файла, '
     'например: ```html name=index.html или ```python name=script.py.';
 
-/// Итог выполнения инструмента: признак успеха и текст для модели и интерфейса.
 class ToolOutcome {
   final bool ok;
   final String text;
@@ -86,14 +70,7 @@ class ToolOutcome {
 
 class ChatServiceException implements Exception {
   final String message;
-
-  /// HTTP-статус ответа провайдера, если ошибка пришла от HTTP
-  /// (400, 401 ...); null — ошибка без статуса (сеть, таймаут).
   final int? statusCode;
-
-  /// Отладка 401: полный URL запроса и маскированный префикс токена
-  /// (первые 8 + последние 8 символов) — помогают найти причину ошибки
-  /// авторизации, не раскрывая весь ключ в интерфейсе.
   final String url;
   final String tokenPrefix;
 
@@ -108,7 +85,6 @@ class ChatServiceException implements Exception {
   String toString() => message;
 }
 
-/// Один вызов инструмента, распознанный из ответа модели.
 class _ToolCall {
   final String id;
   final String name;
@@ -116,7 +92,6 @@ class _ToolCall {
   const _ToolCall({required this.id, required this.name, required this.arguments});
 }
 
-/// Накопитель частей tool_call из стрима (приходят по индексу кусками).
 class _ToolCallBuilder {
   String id = '';
   String name = '';
@@ -131,16 +106,11 @@ class _ToolCallBuilder {
       );
 }
 
-/// Итог одного раунда обращения к модели.
 class _RoundResult {
   final String content;
   final String reasoning;
   final List<_ToolCall> toolCalls;
-
-  /// Статистика токенов раунда (usage), если провайдер её вернул.
   final Map<String, dynamic>? usage;
-
-  /// Ссылки-источники из citations/annotations ответа провайдера.
   final List<String> sources;
 
   const _RoundResult(
@@ -157,15 +127,8 @@ class _RoundHolder {
 }
 
 class ChatService {
-  /// Максимум итераций вызова инструментов, чтобы не зациклиться.
   static const int _maxToolIterations = 4;
 
-  /// Готовит content пользовательского сообщения с вложениями.
-  /// Картинки (jpg/jpeg/png/webp/gif) читаются в байты, кодируются в base64
-  /// и превращаются в data URL внутри массива content (Vision-формат);
-  /// текстовые файлы (txt/md/json/dart/csv/log) добавляются к тексту промпта.
-  /// Возвращает String либо List<Map<String, dynamic>>.
-  /// Ошибки чтения не роняют отправку: файл пропускается с пометкой.
   static Future<dynamic> buildUserContent(
     String text,
     List<PickedFileRef> files,
@@ -194,7 +157,7 @@ class ChatService {
             continue;
           }
           final bytes = await file.readAsBytes();
-          images.add(<Map<String, dynamic>>{
+          images.add(<String, dynamic>{
             'type': 'image_url',
             'image_url': <String, dynamic>{
               'url': 'data:${mime[ext]};base64,${base64Encode(bytes)}',
@@ -216,7 +179,7 @@ class ChatService {
     final full = parts.join('\n\n');
     if (images.isEmpty) return full;
     return <Map<String, dynamic>>[
-      <Map<String, dynamic>>{'type': 'text', 'text': full},
+      <String, dynamic>{'type': 'text', 'text': full},
       ...images,
     ];
   }
@@ -226,14 +189,7 @@ class ChatService {
 
   http.Client? _client;
   bool _wasCancelled = false;
-
-  /// Поиск (searchMode) применяется к первому раунду текущего вызова
-  /// sendMessage/sendMessageResult; сбрасывается после применения.
   bool _searchPending = false;
-
-  /// Пейсер плавного вывода текста активной генерации; null — пейсинга нет.
-  /// UI подписывается на [StreamPacer.displayed] (ValueNotifier<String>),
-  /// чтобы получать полный показанный текст по мере «печатания».
   StreamPacer? _activePacer;
   StreamPacer? get activePacer => _activePacer;
 
@@ -247,9 +203,6 @@ class ChatService {
     }
   }
 
-  /// Полный цикл чата с поддержкой Function Calling.
-  /// Стримит контент наружу; если модель просит инструменты — выполняет их
-  /// и продолжает генерацию (не более [_maxToolIterations] итераций).
   Stream<StreamChunk> sendMessage({
     required String baseUrl,
     required String apiKey,
@@ -262,20 +215,11 @@ class ChatService {
   }) async* {
     _wasCancelled = false;
     _searchPending = true;
-    // Принудительное отключение стриминга: флаг пресета
-    // (presets.active.stream) уже учтён вызывающим кодом через
-    // effectiveConfig; здесь дополнительно защищаем модели, которые
-    // по эвристике не поддерживают SSE-стриминг (изображения,
-    // видео-задачи и т.п.) — тело запроса всегда получает stream: false.
     final effectiveStream = stream &&
         HeuristicRules.inferRoute(HeuristicRules.normalize(model)).isChat;
     final history = <Map<String, dynamic>>[
       for (final m in messages) Map<String, dynamic>.of(m),
     ];
-    // Пейсер плавного вывода (StreamPacer): создаётся один раз на вызов
-    // и переиспользуется во всех раундах, чтобы [StreamPacer.displayed]
-    // содержал полный показанный текст. Для непотокового запроса пейсинг
-    // не нужен — ответ приходит одним куском.
     final StreamPacer? pacer =
         effectiveStream ? (_activePacer = StreamPacer()) : null;
 
@@ -298,8 +242,6 @@ class ChatService {
       if (res == null) return;
 
       if (res.toolCalls.isEmpty) {
-        // Обычное завершение: без стрима отдаём ответ одним куском
-        // (вместе со статистикой токенов, если она пришла).
         if (!effectiveStream) {
           yield StreamChunk(
             res.content,
@@ -311,7 +253,6 @@ class ChatService {
         return;
       }
 
-      // --- Раунд с вызовами инструментов ---
       final callsPayload = <Map<String, dynamic>>[];
       final resolved = <_ToolCall>[];
       for (int i = 0; i < res.toolCalls.length; i++) {
@@ -337,7 +278,6 @@ class ChatService {
         if (_wasCancelled) return;
         final args =
             call.arguments.trim().isEmpty ? '{}' : call.arguments.trim();
-        // Сообщаем интерфейсу о начале вызова: появится карточка «выполняется».
         yield StreamChunk(
           '',
           '',
@@ -357,7 +297,6 @@ class ChatService {
         } else {
           outcome = await _executeTool(tool, call.arguments);
         }
-        // Сообщаем интерфейсу итог: карточка переключается на готово/ошибка.
         yield StreamChunk(
           '',
           '',
@@ -373,8 +312,6 @@ class ChatService {
       }
     }
 
-    // Лимит итераций исчерпан: последний раунд без инструментов,
-    // чтобы модель могла дать финальный ответ и не зациклиться.
     if (_wasCancelled) return;
     final holder = _RoundHolder();
     yield* _pacedRound(
@@ -400,10 +337,6 @@ class ChatService {
     }
   }
 
-  /// Оборачивает раунд [_round] пейсером плавного вывода: куски контента
-  /// буферизуются в [StreamPacer] и выдаются порциями по тикам (60 fps);
-  /// события вызова инструментов и usage проходят без изменений.
-  /// Для непотокового запроса (pacer == null) раунд отдаётся как есть.
   Stream<StreamChunk> _pacedRound({
     required StreamPacer? pacer,
     required String baseUrl,
@@ -432,10 +365,6 @@ class ChatService {
     return _pacedStream(p, src);
   }
 
-  /// Поток с пейсингом: контент уходит в буфер пейсера, Ticker (60 fps)
-  /// выдаёт порции; reasoning, события инструментов и usage проходят
-  /// напрямую. При завершении источника остаток буфера выдаётся целиком
-  /// через [StreamPacer.flush], чтобы финальный текст был полным.
   Stream<StreamChunk> _pacedStream(StreamPacer pacer, Stream<StreamChunk> src) {
     final out = StreamController<StreamChunk>();
     StreamSubscription<StreamChunk>? sub;
@@ -457,7 +386,6 @@ class ChatService {
     sub = src.listen(
       (chunk) {
         if (out.isClosed) return;
-        // События инструментов, usage и источники идут без пейсинга.
         if (chunk.toolName != null ||
             chunk.usage != null ||
             chunk.sources.isNotEmpty) {
@@ -490,9 +418,6 @@ class ChatService {
     return out.stream;
   }
 
-  /// Непотоковый запрос одним вызовом: возвращает [ChatResult] —
-  /// текст ответа и статистика токенов (usage) раунда, если провайдер
-  /// её отдал. Удобно, когда стриминг не нужен, но нужны токены.
   Future<ChatResult> sendMessageResult({
     required String baseUrl,
     required String apiKey,
@@ -528,26 +453,14 @@ class ChatService {
     return null;
   }
 
-  /// RouterAI: провайдер, определяемый по Base URL (host содержит routerai).
   static bool _isRouterAI(String baseUrl) =>
       ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'routerai' ||
       baseUrl.trim().toLowerCase().contains('routerai');
 
-  /// Polza AI: провайдер, определяемый по Base URL (host содержит polza.ai).
   static bool _isPolza(String baseUrl) =>
       ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'polza' ||
       baseUrl.trim().toLowerCase().contains('polza.ai');
 
-  /// Формирует payload параметра размышлений (reasoning) согласно
-  /// документации провайдера:
-  ///  - 'off'/'none' — параметр не отправляется (работает поведение модели
-  ///    по умолчанию; Polza не принимает 'none' у всех провайдеров);
-  ///  - Polza AI (https://polza.ai/docs/osobennosti/reasoning-tokens.md):
-  ///    `reasoning: {"effort": "<level>"}`. ВАЖНО: верхнеуровневое поле
-  ///    `reasoning_effort` Polza НЕ читает — запрос выполнится, но
-  ///    параметр будет молча проигнорирован;
-  ///  - RouterAI: `reasoning_effort: "<level>"`;
-  ///  - прочие провайдеры: через [ReasoningMapper.mapToApi].
   static Map<String, dynamic> _buildReasoningPayload({
     required String baseUrl,
     required String model,
@@ -558,7 +471,6 @@ class ChatService {
       return const <String, dynamic>{};
     }
     if (_isPolza(baseUrl)) {
-      // Уровни Polza: none, minimal, low, medium, high, xhigh, max.
       var polzaEffort = effort;
       if (effort == 'min') polzaEffort = 'minimal';
       if (effort == 'xlow') polzaEffort = 'low';
@@ -567,7 +479,6 @@ class ChatService {
       };
     }
     if (_isRouterAI(baseUrl)) {
-      // RouterAI (OpenRouter-совместимый контракт): reasoning_effort.
       var routerEffort = effort;
       if (effort == 'max' || effort == 'xhigh') routerEffort = 'high';
       if (effort == 'minimal' || effort == 'min') routerEffort = 'low';
@@ -584,11 +495,6 @@ class ChatService {
         : <String, dynamic>{'reasoning_effort': effort};
   }
 
-  /// Один запрос к /chat/completions с автоповтором для RouterAI:
-  /// если пользователь выбрал уровень 'high' либо 'max' и провайдер
-  /// ответил ошибкой 400 либо пустым ответом, запрос автоматически
-  /// повторяется ОДИН раз с уровнем 'high'. Ошибка повтора (либо
-  /// иной статус) пробрасывается дальше без изменений.
   Stream<StreamChunk> _round({
     required String baseUrl,
     required String apiKey,
@@ -619,7 +525,6 @@ class ChatService {
       }
     } on ChatServiceException catch (e) {
       if (canRetry && e.statusCode == 400 && !_wasCancelled) {
-        // RouterAI отклонил запрос с 400: повторяем с уровнем 'high'.
         yield* _roundOnce(
           baseUrl: baseUrl,
           apiKey: apiKey,
@@ -633,12 +538,6 @@ class ChatService {
         );
         return;
       }
-      // Фикс 401 (финал): Polza НЕ поддерживает grant_type=refresh_token
-      // (сервер принимает только authorization_code), поэтому
-      // refreshAccessToken() всегда падал и лишь тормозил обработку
-      // ошибки. Вместо refresh — сбрасываем протухшую сессию (logout),
-      // чтобы пользователь залогинился заново, и пробрасываем ошибку
-      // дальше: её текст содержит URL и префикс токена для отладки.
       if (e.statusCode == 401 &&
           !_wasCancelled &&
           baseUrl.trim().toLowerCase().contains('polza.ai')) {
@@ -656,7 +555,6 @@ class ChatService {
         res.reasoning.trim().isEmpty &&
         res.toolCalls.isEmpty;
     if (!isEmpty) return;
-    // Пустой ответ провайдера: повторяем запрос с уровнем 'high'.
     yield* _roundOnce(
       baseUrl: baseUrl,
       apiKey: apiKey,
@@ -670,8 +568,6 @@ class ChatService {
     );
   }
 
-  /// Один запрос к /chat/completions. Стримит куски контента,
-  /// итог раунда (в т.ч. tool_calls) кладёт в holder.
   Stream<StreamChunk> _roundOnce({
     required String baseUrl,
     required String apiKey,
@@ -698,13 +594,9 @@ class ChatService {
         'model': model,
         'messages': history,
         'stream': stream,
-        // Просим статистику токенов: провайдер приложит usage к финальному
-        // чанку стрима (у которого choices пуст).
         if (stream)
           'stream_options': <String, dynamic>{'include_usage': true},
         if (temperature != null) 'temperature': temperature,
-        // Уровень размышлений: Polza — reasoning.effort, RouterAI —
-        // reasoning_effort (см. _buildReasoningPayload).
         ...reasoningPayload,
         if (tools.isNotEmpty || builtin.isNotEmpty)
           'tools': <Map<String, dynamic>>[
@@ -712,9 +604,6 @@ class ChatService {
             if (tools.isNotEmpty) ..._toolsPayload(tools),
           ],
       };
-      // Поиск (searchMode 'provider'/'modelAsTool') применяется один раз
-      // за вызов sendMessage — в первом раунде обращения к модели. Сбой
-      // поиска не ломает отправку основного запроса.
       if (_searchPending) {
         _searchPending = false;
         try {
@@ -726,11 +615,6 @@ class ChatService {
           );
         } catch (_) {}
       }
-      // Серверный веб-поиск: инструмент web_search добавляется, когда
-      // probe-проверка подтвердила поддержку провайдера
-      // (web_search_supported) ИЛИ когда поиск включён в чате
-      // (chatSearch.enabled), а активная модель поддерживает нативный
-      // веб-поиск. Моделям без поддержки поиска параметр не добавляется.
       final nativeSearchActive = chatSearch.enabled &&
           SearchCapabilityResolver.supportsNativeSearch(model);
       if (settings.webSearchSupported || nativeSearchActive) {
@@ -747,15 +631,7 @@ class ChatService {
         if (!hasSearch) list.add(<String, dynamic>{'type': 'web_search'});
         bodyMap['tools'] = list;
       }
-      // Stage 4.1 (b): реактивный ретрай на 400. Тело ответа содержит
-      // error.metadata.raw вида "The parameter `duration` specified in
-      // the request is not valid" — извлекаем имя поля, убираем его из
-      // тела и отправляем ЕЩЁ РАЗ (ровно один retry, не цикл; повторный
-      // 400 возвращается пользователю как раньше).
       final droppedParams = <String>{};
-      // Очистка ключа от случайного префикса 'Bearer ', вставленного
-      // пользователем вручную при создании пресета: иначе заголовок
-      // Authorization получался 'Bearer Bearer sk-...' и ломал авторизацию.
       final cleanKey = apiKey
           .trim()
           .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
@@ -786,7 +662,6 @@ class ChatService {
       if (resp.statusCode != 200) {
         final body = resp400Body ??
             await resp.stream.bytesToString();
-        // Отладка 401: URL и маскированный токен попадают в текст ошибки.
         final cond = cleanKey.length > 8;
         final tokenPrefix = cond
             ? '${cleanKey.substring(0, 8)}'
@@ -844,7 +719,6 @@ class ChatService {
         return;
       }
 
-      // --- Стриминг ---
       final lines =
           resp.stream.transform(utf8.decoder).transform(const LineSplitter());
       var content = '';
@@ -856,12 +730,9 @@ class ChatService {
         if (!line.startsWith('data:')) continue;
         final data = line.substring(5).trim();
         if (data.isEmpty) continue;
-        if (data ==;
+        if (data == '[DONE]') break;
         try {
           final json = jsonDecode(data) as Map<String, dynamic>;
-          // Статистика токенов раунда (stream_options.include_usage):
-          // приходит в финальном чанке, у которого choices пуст. Сохраняем
-          // в usage раунда и пробрасываем наружу пустым чанком.
           final rawUsage = json['usage'];
           if (rawUsage is Map) {
             usage = _usageOf(rawUsage);
@@ -878,9 +749,6 @@ class ChatService {
 
           final c = (delta['content'] as String?) ?? '';
           final rc = (delta['reasoning_content'] as String?) ?? '';
-          // delta['reasoning'] читается наравне с delta['reasoning_content']:
-          // часть провайдеров отдаёт размышления под этим ключом (строкой
-          // либо объектом с полем content/text).
           var rs = '';
           final rawReasoning = delta['reasoning'];
           if (rawReasoning is String) {
@@ -937,9 +805,6 @@ class ChatService {
     }
   }
 
-  /// Встроенный (серверный) инструмент базового поиска: добавляется в запрос,
-  /// когда активный пресет относится к провайдеру с поддержкой поиска
-  /// и тумблер «Базовый поиск в интернете» включён в настройках.
   List<Map<String, dynamic>> _builtinToolsPayload() {
     try {
       final pr = presets.active;
@@ -982,8 +847,6 @@ class ChatService {
     return <String, dynamic>{'type': 'object', 'properties': <String, dynamic>{}};
   }
 
-  /// Приводит поле usage ответа к Map<String, dynamic>; null — это не карта
-  /// либо ключи не строки. Битые данные не роняют разбор ответа.
   static Map<String, dynamic>? _usageOf(Object? raw) {
     if (raw is! Map) return null;
     try {
@@ -1011,8 +874,6 @@ class ChatService {
     return out;
   }
 
-  /// Выполнение инструмента: GET (аргументы в query) или POST (JSON-тело).
-  /// Любая ошибка возвращается текстом — приложение не падает.
   Future<ToolOutcome> _executeTool(Tool tool, String argumentsRaw) async {
     Map<String, dynamic> args = <String, dynamic>{};
     final raw = argumentsRaw.trim();
@@ -1031,8 +892,6 @@ class ChatService {
     final client = http.Client();
     _client = client;
     try {
-      // Подстановка плейсхолдеров {query}/{ключ} в URL значениями аргументов
-      // (например, srsearch={query} у поиска по энциклопедии).
       var endpoint = tool.endpoint.trim();
       if (endpoint.contains('{') && args.isNotEmpty) {
         args.forEach((key, value) {
@@ -1086,7 +945,6 @@ class ChatService {
     }
   }
 
-  /// Текст последнего пользовательского сообщения (для поискового запроса).
   static String _lastUserText(List<Map<String, dynamic>> history) {
     for (final m in history.reversed) {
       if (m['role'] != 'user') continue;
@@ -1107,8 +965,6 @@ class ChatService {
     return '';
   }
 
-  /// Ссылки-источники из полей citations/annotations ответа провайдера:
-  /// строки-URL либо объекты с полем url/uri/link. Дубликаты убираются.
   static List<String> _sourcesFrom(Object? raw) {
     final out = <String>[];
     if (raw is! List) return out;
@@ -1130,11 +986,6 @@ class ChatService {
 
   String _scalar(Object? v) => v?.toString() ?? '';
 
-  /// Stage 4.1 (b): имя невалидного поля тела из ответа 400.
-  /// Источник текста — error.metadata.raw (формат Polza), фоллбэк —
-  /// error.message. Паттерны: "The parameter `X` specified",
-  /// "invalid ... parameter 'X'", "Unknown parameter: X".
-  /// null — имя поля определить не удалось (ретрай не выполняется).
   static String? _invalidParamFrom400(String body) {
     var raw = body;
     try {
