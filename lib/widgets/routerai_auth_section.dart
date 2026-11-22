@@ -25,7 +25,6 @@ class RouterAiAuthSection extends StatefulWidget {
 }
 
 class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
-
   Future<void> _manualCodeDialog(BuildContext context) async {
     final controller = TextEditingController();
     final submitted = await showDialog<String>(
@@ -152,6 +151,7 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
       ),
       child: Text(
         text,
+        softWrap: true,
         style: TextStyle(
           fontSize: 10.5,
           fontWeight: FontWeight.w700,
@@ -168,6 +168,7 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _iconBox(p, Icons.hub_outlined, p.accent),
             const SizedBox(width: 12),
@@ -175,26 +176,31 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          'RouterAI',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            color: p.text,
-                          ),
+                      Text(
+                        'RouterAI',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: p.text,
                         ),
                       ),
-                      const SizedBox(width: 8),
                       _badge('OAuth 2.0 PKCE', p.accent, p),
                     ],
                   ),
                   const SizedBox(height: 2),
                   Text(
                     'Вход в один клик без ручного копирования ключей',
-                    style: TextStyle(fontSize: 12.5, color: p.muted),
+                    softWrap: true,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: p.muted,
+                      height: 1.3,
+                    ),
                   ),
                 ],
               ),
@@ -213,6 +219,7 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
               ),
             ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Icon(
                   Icons.error_outline_rounded,
@@ -223,6 +230,7 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
                 Expanded(
                   child: Text(
                     err,
+                    softWrap: true,
                     style: TextStyle(fontSize: 12.5, color: p.text),
                   ),
                 ),
@@ -266,6 +274,7 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
               Expanded(
                 child: Text(
                   'Ожидание подтверждения входа в браузере…',
+                  softWrap: true,
                   style: TextStyle(fontSize: 13, color: p.text),
                 ),
               ),
@@ -299,6 +308,7 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _iconBox(
               p,
@@ -310,30 +320,32 @@ class _RouterAiAuthSectionState extends State<RouterAiAuthSection> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    crossAxisAlignment: WrapCrossAlignment.center,
                     children: [
-                      Flexible(
-                        child: Text(
-                          'RouterAI',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.w700,
-                            color: p.text,
-                          ),
+                      Text(
+                        'RouterAI',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: p.text,
                         ),
                       ),
-                      const SizedBox(width: 8),
                       _badge('Подключено', RouterAiAuthSection._ok, p),
                     ],
                   ),
                   const SizedBox(height: 2),
+                  // Маскированный ключ переносится целиком, без обрезки.
                   Text(
                     'Ключ: ${routerAiAuth.maskedToken}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 12, color: p.muted),
+                    softWrap: true,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: p.muted,
+                      height: 1.3,
+                    ),
                   ),
                 ],
               ),

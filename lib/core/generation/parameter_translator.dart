@@ -299,7 +299,9 @@ abstract final class ParameterTranslator {
           !fb.containsKey(ParamKeys.size)) {
         fb[ParamKeys.aspectRatio] = p.aspectRatio!;
       }
-      if (isHeuristicVid && p.duration != null) {
+      // Длительность: выбранное пользователем значение ВСЕГДА доходит
+      // до тела запроса и приходит int (строки '5'/'10' приводим к int).
+      if (p.duration != null) {
         fb[ParamKeys.duration] = p.duration!;
       } else if (fb[ParamKeys.duration] != null) {
         final dInt = UniversalParams._int(fb[ParamKeys.duration]);
@@ -325,6 +327,62 @@ abstract final class ParameterTranslator {
     if (body.isEmpty) return fallback();
     return body;
   }
+
+  /// Тело `input` для Polza Media API (POST /v1/media).
+  ///
+  /// Согласно документации (https://polza.ai/docs/api-reference/media/create.md)
+  /// параметры генерации лежат ВНУТРИ объекта `input`, а не на верхнем
+  /// уровне тела. Типы строго фиксированы:
+  ///  - `aspect_ratio` — строка формата "16:9";
+  ///  - `duration` — int (секунды);
+  ///  - `resolution` — строка ("720p"/"1080p" для видео);
+  ///  - `image_resolution` — строка ("0.5K"/"1K"/"2K"/"4K" для картинок);
+  ///  - `quality` — строка.
+  static Map<String, dynamic> toPolzaMediaInput(
+    String prompt,
+    Map<String, dynamic> translated, {
+    bool isVideo = false,
+  }) {
+    final out = <String, dynamic>{'prompt': prompt};
+    final ratio = UniversalParams._aspectRatio(
+      translated[ParamKeys.aspectRatio] ?? translated['aspect_ratio'],
+    );
+    if (ratio != null) out['aspect_ratio'] = ratio;
+
+    final duration = UniversalParams._int(
+      translated[ParamKeys.duration] ??
+          translated['seconds'] ??
+          translated['duration_seconds'],
+    );
+    if (duration != null) out['duration'] = duration;
+
+    final resolution = UniversalParams._string(
+      translated[ParamKeys.resolution] ?? translated['image_resolution'],
+    );
+    if (resolution != null) {
+      if (isVideo) {
+        out['resolution'] = resolution;
+      } else if (_isImageResolutionTier(resolution)) {
+        out['image_resolution'] = resolution;
+      } else {
+        out['resolution'] = resolution;
+      }
+    }
+
+    final quality = UniversalParams._string(translated[ParamKeys.quality]);
+    if (quality != null) out['quality'] = quality;
+
+    final size = UniversalParams._string(translated[ParamKeys.size]);
+    if (size != null) out['size'] = size;
+
+    return out;
+  }
+
+  /// Разрешение вида «1K»/«2K»/«4K» — это image_resolution, а не
+  /// video-разрешение вида «720p»/«1080p».
+  static bool _isImageResolutionTier(String value) =>
+      RegExp(r'^\d+(\.\d+)?K$', caseSensitive: false)
+          .hasMatch(value.trim());
 
   static ModelParameters _userOverBase(
     ModelParameters user,

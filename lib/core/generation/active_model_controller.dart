@@ -64,9 +64,10 @@ class ActiveModelController extends ChangeNotifier {
   ];
 
   /// Базовые уровни размышлений, когда провайдер не сообщил данных:
-  /// капсула «Мышление» остаётся видимой.
+  /// капсула «Мышление» остаётся видимой. Значение 'off' означает
+  /// «размышления не запрашиваются» (в тело запроса параметр не идёт).
   static const List<String> _baseReasoningLevels = <String>[
-    'none', 'low', 'medium', 'high',
+    'off', 'low', 'medium', 'high',
   ];
 
   final PresetStore _presetController;
@@ -105,6 +106,28 @@ class ActiveModelController extends ChangeNotifier {
   static int? get selectedDuration => _selectedDuration;
   static String? get selectedResolution => _selectedResolution;
   static String? get selectedQuality => _selectedQuality;
+
+  /// Выбранные медиа-параметры единой картой (aspect_ratio — String
+  /// "16:9", duration — int, resolution — String). Пустые значения не
+  /// попадают в карту — исполнитель их просто не отправит.
+  static Map<String, dynamic> get selectedMediaParams {
+    final out = <String, dynamic>{};
+    final ratio = _selectedAspectRatio;
+    if (ratio != null && ratio.trim().isNotEmpty) {
+      out['aspect_ratio'] = ratio.trim();
+    }
+    final dur = _selectedDuration;
+    if (dur != null) out['duration'] = dur;
+    final res = _selectedResolution;
+    if (res != null && res.trim().isNotEmpty) {
+      out['resolution'] = res.trim();
+    }
+    final q = _selectedQuality;
+    if (q != null && q.trim().isNotEmpty) {
+      out['quality'] = q.trim();
+    }
+    return out;
+  }
 
   /// Обновляет выбранные медиа-пресеты из панели ввода.
   static void updateSelectedMediaParams({
@@ -242,12 +265,17 @@ class ActiveModelController extends ChangeNotifier {
   /// возможности выбранной модели и уведомляем интерфейс.
   Future<void> _onCatalogChanged() async {
     if (_resolving) return;
-    final presetModel = _presetController.active?.model.trim() ?? '';
-    final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
-    if (id.isEmpty) return;
-    final vision = _inferVision(id);
-    final reasoning = await _inferReasoning(id);
-    await _resolve(id, vision: vision, reasoning: reasoning);
+    _resolving = true;
+    try {
+      final presetModel = _presetController.active?.model.trim() ?? '';
+      final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
+      if (id.isEmpty) return;
+      final vision = _inferVision(id);
+      final reasoning = await _inferReasoning(id);
+      await _resolve(id, vision: vision, reasoning: reasoning);
+    } finally {
+      _resolving = false;
+    }
   }
 
   static bool _inferVision(String modelId) {
@@ -828,6 +856,13 @@ class ActiveModelController extends ChangeNotifier {
       } else {
         _selectedQuality = null;
       }
+    } else {
+      // Текстовая модель: медиа-параметры не применяются — сбрасываем
+      // выбранные значения, чтобы они не утекли в следующий запрос.
+      _selectedAspectRatio = null;
+      _selectedDuration = null;
+      _selectedResolution = null;
+      _selectedQuality = null;
     }
 
     _publishMergedParams(modelId, params);

@@ -73,10 +73,18 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     super.dispose();
   }
 
+  /// Base URL подключения без хвостовых слэшей.
+  String get _base => widget.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+
+  /// Ключ подключения без префикса 'Bearer '.
+  String get _key => widget.apiKey
+      .trim()
+      .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
+
   Future<void> _loadModels() async {
     if (_loading) return;
-    final base = widget.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    final key = widget.apiKey.trim();
+    final base = _base;
+    final key = _key;
     if (base.isEmpty || key.isEmpty) return;
     setState(() => _loading = true);
     // Параллельно обновляем каталог возможностей/цен этого подключения.
@@ -150,11 +158,15 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
 
   /// Выбор модели: сохраняем одновременно И модель, И url, И key этого
   /// провайдера — иначе подключение могло остаться от другого источника
-  /// (модель Polza при ключе из общих настроек и т.п.).
+  /// (модель Polza при ключе из общих настроек и т.п.), и запрос ушёл бы
+  /// с чужим ключом.
   void _pickModel(String v) {
+    final base = _base;
+    final key = _key;
+    if (base.isEmpty || key.isEmpty) return;
     settings.setConnection(
-      url: widget.baseUrl,
-      key: widget.apiKey,
+      url: base,
+      key: key,
       mdl: v,
     );
     if (mounted) setState(() {});
@@ -196,6 +208,7 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
                   _error!,
+                  softWrap: true,
                   style: TextStyle(color: p.muted, fontSize: 13),
                 ),
               ),
@@ -223,6 +236,14 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
                   if (v != null) _pickModel(v);
                 },
               ),
+              const SizedBox(height: 4),
+              // Адрес подключения виден явно: запрос уходит с ключом
+              // именно этого провайдера.
+              Text(
+                'Подключение: $_base',
+                softWrap: true,
+                style: TextStyle(color: p.muted, fontSize: 12),
+              ),
             ],
           ],
         );
@@ -230,4 +251,3 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     );
   }
 }
-

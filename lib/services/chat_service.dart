@@ -194,7 +194,7 @@ class ChatService {
             continue;
           }
           final bytes = await file.readAsBytes();
-          images.add(<String, dynamic>{
+          images.add(<Map<String, dynamic>>{
             'type': 'image_url',
             'image_url': <String, dynamic>{
               'url': 'data:${mime[ext]};base64,${base64Encode(bytes)}',
@@ -216,7 +216,7 @@ class ChatService {
     final full = parts.join('\n\n');
     if (images.isEmpty) return full;
     return <Map<String, dynamic>>[
-      <String, dynamic>{'type': 'text', 'text': full},
+      <Map<String, dynamic>>{'type': 'text', 'text': full},
       ...images,
     ];
   }
@@ -491,7 +491,7 @@ class ChatService {
   }
 
   /// Непотоковый запрос одним вызовом: возвращает [ChatResult] —
-  /// текст ответа и статистику токенов (usage) раунда, если провайдер
+  /// текст ответа и статистика токенов (usage) раунда, если провайдер
   /// её отдал. Удобно, когда стриминг не нужен, но нужны токены.
   Future<ChatResult> sendMessageResult({
     required String baseUrl,
@@ -538,11 +538,14 @@ class ChatService {
       ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'polza' ||
       baseUrl.trim().toLowerCase().contains('polza.ai');
 
-  /// Формирует payload параметра размышлений (reasoning) согласно документации
-  /// провайдера:
-  ///  - 'off'/'none' — параметр не отправляется;
+  /// Формирует payload параметра размышлений (reasoning) согласно
+  /// документации провайдера:
+  ///  - 'off'/'none' — параметр не отправляется (работает поведение модели
+  ///    по умолчанию; Polza не принимает 'none' у всех провайдеров);
   ///  - Polza AI (https://polza.ai/docs/osobennosti/reasoning-tokens.md):
-  ///    `reasoning: {"effort": "<level>"}`;
+  ///    `reasoning: {"effort": "<level>"}`. ВАЖНО: верхнеуровневое поле
+  ///    `reasoning_effort` Polza НЕ читает — запрос выполнится, но
+  ///    параметр будет молча проигнорирован;
   ///  - RouterAI: `reasoning_effort: "<level>"`;
   ///  - прочие провайдеры: через [ReasoningMapper.mapToApi].
   static Map<String, dynamic> _buildReasoningPayload({
@@ -554,29 +557,31 @@ class ChatService {
     if (effort.isEmpty || effort == 'off' || effort == 'none') {
       return const <String, dynamic>{};
     }
-    // Приводим синонимы к стандартным уровням API.
-    final normalizedEffort = switch (effort) {
-      'max' => 'high',
-      'min' => 'low',
-      _ => effort,
-    };
     if (_isPolza(baseUrl)) {
+      // Уровни Polza: none, minimal, low, medium, high, xhigh, max.
+      var polzaEffort = effort;
+      if (effort == 'min') polzaEffort = 'minimal';
+      if (effort == 'xlow') polzaEffort = 'low';
       return <String, dynamic>{
-        'reasoning': <String, dynamic>{'effort': normalizedEffort},
+        'reasoning': <String, dynamic>{'effort': polzaEffort},
       };
     }
     if (_isRouterAI(baseUrl)) {
+      // RouterAI (OpenRouter-совместимый контракт): reasoning_effort.
+      var routerEffort = effort;
+      if (effort == 'max' || effort == 'xhigh') routerEffort = 'high';
+      if (effort == 'minimal' || effort == 'min') routerEffort = 'low';
       return <String, dynamic>{
-        'reasoning_effort': normalizedEffort,
+        'reasoning_effort': routerEffort,
       };
     }
     final mapped = ReasoningMapper.mapToApi(
-      ReasoningMapper.fromId(normalizedEffort),
+      ReasoningMapper.fromId(effort),
       model,
     );
     return mapped.isNotEmpty
         ? mapped
-        : <String, dynamic>{'reasoning_effort': normalizedEffort};
+        : <String, dynamic>{'reasoning_effort': effort};
   }
 
   /// Один запрос к /chat/completions с автоповтором для RouterAI:
@@ -595,8 +600,9 @@ class ChatService {
     required List<Tool> tools,
     required _RoundHolder holder,
   }) async* {
+    final normalizedEffort = (reasoningEffort ?? '').trim().toLowerCase();
     final canRetry = _isRouterAI(baseUrl) &&
-        (reasoningEffort == 'high' || reasoningEffort == 'max');
+        (normalizedEffort == 'high' || normalizedEffort == 'max');
     try {
       await for (final chunk in _roundOnce(
         baseUrl: baseUrl,
@@ -697,6 +703,8 @@ class ChatService {
         if (stream)
           'stream_options': <String, dynamic>{'include_usage': true},
         if (temperature != null) 'temperature': temperature,
+        // Уровень размышлений: Polza — reasoning.effort, RouterAI —
+        // reasoning_effort (см. _buildReasoningPayload).
         ...reasoningPayload,
         if (tools.isNotEmpty || builtin.isNotEmpty)
           'tools': <Map<String, dynamic>>[
@@ -754,7 +762,7 @@ class ChatService {
       final requestHeaders = <String, String>{
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $cleanKey',
-        'Accept': 'text/event-stream',
+        'Accept': stream ? 'text/event-stream' : 'application/json',
       };
       final firstReq = http.Request('POST', uri)
         ..headers.addAll(requestHeaders);
@@ -848,7 +856,7 @@ class ChatService {
         if (!line.startsWith('data:')) continue;
         final data = line.substring(5).trim();
         if (data.isEmpty) continue;
-        if (data == '[DONE]') break;
+        if (data ==;
         try {
           final json = jsonDecode(data) as Map<String, dynamic>;
           // Статистика токенов раунда (stream_options.include_usage):

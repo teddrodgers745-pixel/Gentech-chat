@@ -10,7 +10,10 @@ import 'reasoning_levels.dart';
 /// Разбирает известные поля формата RouterAI:
 ///  - type, context_length, max_completion_tokens;
 ///  - reasoning (словарь supported_efforts/default_effort/mandatory
-///    либо флаг true) и supported_parameters (в том числе 'reasoning');
+///    либо флаг true), плоские списки уровней (supported_efforts,
+///    supported_reasoning_efforts, reasoning_efforts) и
+///    capabilities.reasoning_effort.values провайдеров;
+///  - supported_parameters (в том числе 'reasoning');
 ///  - плоские списки на верхнем уровне записи:
 ///    supported_aspect_ratios, supported_image_sizes/supported_resolutions,
 ///    supported_durations (строки вида '4' приводятся к int),
@@ -35,6 +38,10 @@ import 'reasoning_levels.dart';
 ///    'image_seed' (bool из image_seed),
 ///    'supports_negative_prompt' (bool из supports_negative_prompt).
 ///
+/// Уровни размышлений извлекаются из всех доступных источников; если
+/// провайдер их не перечислил, парсер возвращает unknown=true, чтобы не
+/// подставлять всем моделям одинаковый набор ['off', 'high'].
+///
 /// Битые значения приводятся к null/пустым спискам, разбор одной записи
 /// никогда не роняет остальные. Запись без идентификатора отбрасывается.
 abstract final class RouterAiParser {
@@ -44,8 +51,8 @@ abstract final class RouterAiParser {
     'classification',
   };
 
-  /// Уровни размышлений по умолчанию, когда провайдер заявил reasoning,
-  /// но не перечислил уровни.
+  /// Уровни размышлений по умолчанию — применяются ТОЛЬКО когда провайдер
+  /// явно заявил поддержку reasoning, но не перечислил уровни.
   static const List<String> defaultReasoningLevels = <String>[
     'off', 'low', 'medium', 'high',
   ];
@@ -172,66 +179,84 @@ abstract final class RouterAiParser {
     );
   }
 
-  /// Reasoning: m['reasoning'] / top_provider['reasoning'] (словарь либо true)
-  /// либо supported_parameters ('reasoning' / 'reasoning_effort').
-  /// Возвращает (reasoning, unknown); unknown=true — провайдер не отдал
-  /// ни reasoning, ни supported_parameters (данные неизвестны).
+  /// Reasoning: m['reasoning'] / top_provider['reasoning'] (словарь либо
+  /// true), плоские списки уровней и capabilities провайдеров.
+  /// Возвращает (reasoning, unknown); unknown=true — уровни у провайдера
+  /// неизвестны (одинаковый набор всем моделям не подставляем).
   static (CatalogReasoning?, bool) parseReasoning(
     Map<String, dynamic> m,
     List<String> supportedParams,
   ) {
     final topProvider = asMap(m['top_provider']);
     final tpRaw = topProvider?['reasoning'];
+    final modelRaw = m['reasoning'];
     final paramsMap =
         asMap(m['parameters']) ?? asMap(topProvider?['parameters']);
     final paramReasoning =
         paramsMap == null ? null : asMap(paramsMap['reasoning']);
 
-    final candidate =
-        asMap(m['reasoning']) ?? asMap(tpRaw) ?? paramReasoning;
-    final marker =
-        identical(m['reasoning'], true) || identical(tpRaw, true);
+    final tpReasoning = asMap(tpRaw);
+    final modelReasoning = asMap(modelRaw);
+    final marker = modelRaw == true || tpRaw == true;
 
-    final topEfforts = asStrList(
+    final efforts = <String>[];
+    void addAll(List<String> values) {
+      for (final v in values) {
+        final t = v.trim();
+        if (t.isEmpty) continue;
+        if (!efforts.contains(t)) efforts.add(t);
+      }
+    }
+
+    for (final c in <Map<String, dynamic>?>[
+      modelReasoning,
+      tpReasoning,
+      paramReasoning,
+    ]) {
+      if (c == null) continue;
+      addAll(effortValues(c));
+    }
+    addAll(capabilityEfforts(topProvider));
+    addAll(providerEfforts(m));
+    addAll(asStrList(
       m['supported_reasoning_efforts'] ??
           m['supported_efforts'] ??
           m['reasoning_efforts'],
-    );
+    ));
 
-    if (candidate != null) {
-      final efforts = asStrList(
-        candidate['supported_efforts'] ??
-            candidate['supportedEfforts'] ??
-            candidate['values'] ??
-            candidate['efforts'] ??
-            candidate['levels'],
+    final def = asStr(
+          modelReasoning?['default_effort'] ??
+              modelReasoning?['defaultEffort'] ??
+              tpReasoning?['default_effort'] ??
+              tpReasoning?['defaultEffort'] ??
+              paramReasoning?['default_effort'] ??
+              paramReasoning?['defaultEffort'] ??
+              m['default_reasoning_effort'],
+        ) ??
+        '';
+    final mandatory = modelReasoning?['mandatory'] == true ||
+        modelReasoning?['required'] == true ||
+        tpReasoning?['mandatory'] == true ||
+        tpReasoning?['required'] == true ||
+        paramReasoning?['mandatory'] == true ||
+        paramReasoning?['required'] == true;
+
+    if (efforts.isNotEmpty) {
+      return (
+        CatalogReasoning(
+          levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
+          defaultEffort: normalizeReasoningEffort(def),
+          mandatory: mandatory,
+        ),
+        false,
       );
-      final effectiveEfforts = efforts.isNotEmpty ? efforts : topEfforts;
-      final def = asStr(
-            candidate['default_effort'] ??
-                candidate['defaultEffort'] ??
-                candidate['default'],
-          ) ??
-          '';
-      final mandatory = candidate['mandatory'] == true ||
-          candidate['required'] == true;
-      if (effectiveEfforts.isNotEmpty) {
-        return (
-          CatalogReasoning(
-            levels: normalizeReasoningLevels(
-              effectiveEfforts,
-              mandatory: mandatory,
-            ),
-            defaultEffort: normalizeReasoningEffort(def),
-            mandatory: mandatory,
-          ),
-          false,
-        );
-      }
+    }
+
+    if (def.isNotEmpty) {
       return (
         CatalogReasoning(
           levels: normalizeReasoningLevels(
-            List<String>.of(defaultReasoningLevels),
+            <String>[def],
             mandatory: mandatory,
           ),
           defaultEffort: normalizeReasoningEffort(def),
@@ -240,34 +265,18 @@ abstract final class RouterAiParser {
         false,
       );
     }
-    if (topEfforts.isNotEmpty) {
-      return (
-        CatalogReasoning(
-          levels: normalizeReasoningLevels(topEfforts),
-        ),
-        false,
-      );
-    }
-    if (marker) {
-      return (
-        CatalogReasoning(
-          levels: normalizeReasoningLevels(
-            List<String>.of(defaultReasoningLevels),
-          ),
-        ),
-        false,
-      );
+
+    final declared = modelReasoning != null ||
+        tpReasoning != null ||
+        paramReasoning != null ||
+        marker;
+    if (declared) {
+      // Reasoning заявлен, но уровни не перечислены: данные неизвестны.
+      return (null, true);
     }
     if (supportedParams.contains('reasoning') ||
         supportedParams.contains('reasoning_effort')) {
-      return (
-        CatalogReasoning(
-          levels: normalizeReasoningLevels(
-            List<String>.of(defaultReasoningLevels),
-          ),
-        ),
-        false,
-      );
+      return (null, true);
     }
     if (supportedParams.isNotEmpty) {
       // supported_parameters есть, reasoning не заявлен: провайдер явно
@@ -276,6 +285,39 @@ abstract final class RouterAiParser {
     }
     // Ни reasoning, ни supported_parameters — неизвестно.
     return (null, true);
+  }
+
+  /// Уровни из объекта reasoning (supported_efforts / values / levels).
+  static List<String> effortValues(Map<String, dynamic> c) => asStrList(
+        c['supported_efforts'] ??
+            c['supportedEfforts'] ??
+            c['values'] ??
+            c['efforts'] ??
+            c['levels'],
+      );
+
+  /// Уровни из capabilities.reasoning_effort.values провайдера.
+  static List<String> capabilityEfforts(Map<String, dynamic>? provider) {
+    final caps = asMap(provider?['capabilities']);
+    if (caps == null) return const <String>[];
+    final re = asMap(caps['reasoning_effort']);
+    if (re == null) return const <String>[];
+    return asStrList(re['values']);
+  }
+
+  /// Уровни из всех провайдеров записи (providers[]).
+  static List<String> providerEfforts(Map<String, dynamic> m) {
+    final out = <String>[];
+    final providers = m['providers'];
+    if (providers is! List) return out;
+    for (final p in providers) {
+      if (p is! Map) continue;
+      final pm = Map<String, dynamic>.from(p);
+      final r = asMap(pm['reasoning']);
+      if (r != null) out.addAll(effortValues(r));
+      out.addAll(capabilityEfforts(pm));
+    }
+    return out;
   }
 
   /// Цены ТОЛЬКО в известных формах. Возвращает (in, out, currency).
@@ -356,7 +398,8 @@ abstract final class RouterAiParser {
       resolutions = asStrList(
         asStrList(m['supported_image_sizes']).isNotEmpty
             ? m['supported_image_sizes']
-            : m['supported_resolutions']);
+            : m['supported_resolutions'],
+      );
       durations = asIntList(m['supported_durations']);
       qualities = asStrList(m['supported_qualities']);
       // Дополнительно принимаем блок parameters (как у Polza), если
@@ -370,29 +413,18 @@ abstract final class RouterAiParser {
             asMap(m['parameters']) ?? asMap(topProvider?['parameters']);
         if (params != null) {
           if (aspectRatios.isEmpty) {
-            aspectRatios = asStrList(
-              asMap(params['aspect_ratio'])?['values'] ??
-                  asMap(params['aspect_ratio'])?['enum'],
-            );
+            aspectRatios = constraintValues(params['aspect_ratio']);
           }
           if (resolutions.isEmpty) {
-            resolutions = asStrList(
-              asMap(params['image_resolution'])?['values'] ??
-                  asMap(params['resolution'])?['values'] ??
-                  asMap(params['resolution'])?['enum'],
-            );
+            final imageRes = constraintValues(params['image_resolution']);
+            final videoRes = constraintValues(params['resolution']);
+            resolutions = imageRes.isNotEmpty ? imageRes : videoRes;
           }
           if (durations.isEmpty) {
-            durations = asIntList(
-              asMap(params['duration'])?['values'] ??
-                  asMap(params['duration'])?['enum'],
-            );
+            durations = durationValues(params['duration']);
           }
           if (qualities.isEmpty) {
-            qualities = asStrList(
-              asMap(params['quality'])?['values'] ??
-                  asMap(params['quality'])?['enum'],
-            );
+            qualities = constraintValues(params['quality']);
           }
         }
       }
@@ -447,6 +479,46 @@ abstract final class RouterAiParser {
     for (final e in v) {
       final i = asInt(e);
       if (i != null) out.add(i);
+    }
+    return out;
+  }
+
+  /// Значения ограничения параметра: values / enum / value_labels /
+  /// плоский список. Пустой список — данных нет.
+  static List<String> constraintValues(Object? raw) {
+    final map = asMap(raw);
+    if (map != null) {
+      final values = asStrList(map['values'] ?? map['enum']);
+      if (values.isNotEmpty) return values;
+      final labels = asMap(map['value_labels']);
+      if (labels != null) {
+        final out = <String>[];
+        labels.forEach((k, v) {
+          final s = (v ?? k).toString().trim();
+          if (s.isNotEmpty) out.add(s);
+        });
+        if (out.isNotEmpty) return out;
+      }
+      return const <String>[];
+    }
+    return asStrList(raw);
+  }
+
+  /// Длительности: список значений (строки '4' -> int) либо диапазон
+  /// min..max с шагом step, если значения не перечислены.
+  static List<int> durationValues(Object? raw) {
+    final map = asMap(raw);
+    if (map == null) return asIntList(raw);
+    final values = asIntList(map['values'] ?? map['enum']);
+    if (values.isNotEmpty) return values;
+    final min = asInt(map['min']);
+    final max = asInt(map['max']);
+    if (min == null || max == null || max < min) return const <int>[];
+    final stepRaw = asInt(map['step']);
+    final step = (stepRaw == null || stepRaw <= 0) ? 1 : stepRaw;
+    final out = <int>[];
+    for (int v = min; v <= max && out.length < 20; v += step) {
+      out.add(v);
     }
     return out;
   }

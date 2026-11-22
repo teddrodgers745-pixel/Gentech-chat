@@ -162,6 +162,7 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
       ),
       child: Text(
         text,
+        softWrap: true,
         style: TextStyle(
           fontSize: 10.5,
           fontWeight: FontWeight.w700,
@@ -229,6 +230,7 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
               ),
             ),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Icon(
                   Icons.error_outline_rounded,
@@ -372,6 +374,8 @@ class _PolzaAuthSectionState extends State<PolzaAuthSection> {
                     ],
                   ),
                   const SizedBox(height: 3),
+                  // Email и маскированный токен переносятся целиком —
+                  // текст не обрезается многоточием.
                   Text(
                     (acc?.email.isNotEmpty == true)
                         ? '${acc!.email} • ${polzaAuth.maskedToken}'

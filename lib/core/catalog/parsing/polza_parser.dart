@@ -9,8 +9,11 @@ import 'reasoning_levels.dart';
 ///
 /// Разбирает известные поля формата Polza:
 ///  - type, context_length, max_completion_tokens;
-///  - top_provider.reasoning (supported_efforts, default_effort,
-///    mandatory) и supported_parameters;
+///  - reasoning: supported_efforts / default_effort / mandatory — из
+///    записи модели (`reasoning`), из `top_provider.reasoning`, из
+///    `parameters.reasoning`, а также из `capabilities.reasoning_effort`
+///    (поле `values`) top_provider и каждого провайдера из `providers[]`;
+///  - supported_parameters (наличие 'reasoning'/'reasoning_effort');
 ///  - top_provider.pricing — цены за миллион токенов (prompt_per_million,
 ///    completion_per_million ...);
 ///  - parameters — медиа-поля: aspect_ratio, image_resolution/resolution,
@@ -27,7 +30,13 @@ import 'reasoning_levels.dart';
 ///    'pricing_tiers' (Map<String, double> из top_provider.pricing.tiers),
 ///    'images_min' (int из parameters.images.min),
 ///    'images_max' (int из parameters.images.max),
-///    'prompt_max_length' (int из parameters.prompt.max_length).
+///    'prompt_max_length' (int из parameters.prompt.max_length),
+///    'output_formats' (List<String> из parameters.output_format).
+///
+/// Уровни размышлений НЕ подставляются «всем моделям одинаково»: если
+/// провайдер не перечислил уровни, парсер возвращает unknown=true, чтобы
+/// резолвер модели использовал собственные источники, а не выдуманный
+/// набор ['off', 'high'].
 ///
 /// Битые значения приводятся к null/пустым спискам, разбор одной записи
 /// никогда не роняет остальные. Запись без идентификатора отбрасывается.
@@ -38,8 +47,9 @@ abstract final class PolzaParser {
     'classification',
   };
 
-  /// Уровни размышлений по умолчанию, когда провайдер заявил reasoning,
-  /// но не перечислил уровни.
+  /// Уровни размышлений по умолчанию — применяются ТОЛЬКО когда провайдер
+  /// явно заявил поддержку reasoning, но не перечислил уровни НИГДЕ
+  /// (ни reasoning.supported_efforts, ни capabilities.reasoning_effort).
   static const List<String> defaultReasoningLevels = <String>[
     'off', 'low', 'medium', 'high',
   ];
@@ -135,11 +145,15 @@ abstract final class PolzaParser {
     final imagesMax = imagesMap == null ? null : asInt(imagesMap['max']);
     final promptMaxLength =
         promptMap == null ? null : asInt(promptMap['max_length']);
+    final outputFormats = paramsMap == null
+        ? const <String>[]
+        : constraintValues(paramsMap['output_format']);
     final mediaParams = <String, dynamic>{
       if (pricingTiers.isNotEmpty) 'pricing_tiers': pricingTiers,
       if (imagesMin != null) 'images_min': imagesMin,
       if (imagesMax != null) 'images_max': imagesMax,
       if (promptMaxLength != null) 'prompt_max_length': promptMaxLength,
+      if (outputFormats.isNotEmpty) 'output_formats': outputFormats,
     };
 
     return CatalogEntry(
@@ -169,59 +183,94 @@ abstract final class PolzaParser {
     );
   }
 
-  /// Reasoning: m['reasoning'] и/или m['top_provider']['reasoning'],
-  /// а также m['parameters']['reasoning'].
-  /// Возвращает (reasoning, unknown); unknown=true — провайдер не отдал
-  /// ни reasoning, ни supported_parameters (данные неизвестны).
+  /// Reasoning: m['reasoning'], m['top_provider']['reasoning'],
+  /// m['parameters']['reasoning'], а также уровни из
+  /// `capabilities.reasoning_effort.values` (top_provider и providers[]).
+  ///
+  /// Возвращает (reasoning, unknown):
+  ///  - reasoning != null — уровни найдены (supported_efforts / capabilities
+  ///    / default_effort);
+  ///  - unknown = true — уровни у провайдера неизвестны: подставлять
+  ///    одинаковый набор всем моделям нельзя, резолвер разберётся сам;
+  ///  - unknown = false, reasoning = null — провайдер явно заявил, что
+  ///    reasoning не поддерживается.
   static (CatalogReasoning?, bool) parseReasoning(
     Map<String, dynamic> m,
     Map<String, dynamic>? topProvider,
     List<String> supportedParams,
   ) {
     final tpRaw = topProvider?['reasoning'];
+    final modelRaw = m['reasoning'];
     final paramsMap =
         asMap(topProvider?['parameters']) ?? asMap(m['parameters']);
     final paramReasoning =
         paramsMap == null ? null : asMap(paramsMap['reasoning']);
 
-    // Проверяем сначала top_provider.reasoning, затем m.reasoning,
-    // затем parameters.reasoning (в соответствии со структурой Polza API).
-    final Map<String, dynamic>? candidate =
-        asMap(tpRaw) ?? asMap(m['reasoning']) ?? paramReasoning;
-    final marker =
-        identical(tpRaw, true) || identical(m['reasoning'], true);
+    final tpReasoning = asMap(tpRaw);
+    final modelReasoning = asMap(modelRaw);
+    final marker = tpRaw == true || modelRaw == true;
 
-    if (candidate != null) {
-      final efforts = asStrList(
-        candidate['supported_efforts'] ??
-            candidate['supportedEfforts'] ??
-            candidate['values'] ??
-            candidate['efforts'] ??
-            candidate['levels'],
-      );
-      final def = asStr(
-            candidate['default_effort'] ??
-                candidate['defaultEffort'] ??
-                candidate['default'],
-          ) ??
-          '';
-      final mandatory = candidate['mandatory'] == true ||
-          candidate['required'] == true;
-      if (efforts.isNotEmpty) {
-        return (
-          CatalogReasoning(
-            levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
-            defaultEffort: normalizeReasoningEffort(def),
-            mandatory: mandatory,
-          ),
-          false,
-        );
+    // Уровни собираем из ВСЕХ источников сразу: модель, top_provider,
+    // parameters, capabilities провайдера и плоские списки записи.
+    final efforts = <String>[];
+    void addAll(List<String> values) {
+      for (final v in values) {
+        final t = v.trim();
+        if (t.isEmpty) continue;
+        if (!efforts.contains(t)) efforts.add(t);
       }
-      // Словарь без списка усилий: базовые уровни.
+    }
+
+    for (final c in <Map<String, dynamic>?>[
+      modelReasoning,
+      tpReasoning,
+      paramReasoning,
+    ]) {
+      if (c == null) continue;
+      addAll(effortValues(c));
+    }
+    addAll(capabilityEfforts(topProvider));
+    addAll(providerEfforts(m));
+    addAll(asStrList(
+      m['supported_reasoning_efforts'] ??
+          m['supported_efforts'] ??
+          m['reasoning_efforts'],
+    ));
+
+    final def = asStr(
+          modelReasoning?['default_effort'] ??
+              modelReasoning?['defaultEffort'] ??
+              tpReasoning?['default_effort'] ??
+              tpReasoning?['defaultEffort'] ??
+              paramReasoning?['default_effort'] ??
+              paramReasoning?['defaultEffort'] ??
+              m['default_reasoning_effort'],
+        ) ??
+        '';
+    final mandatory = modelReasoning?['mandatory'] == true ||
+        modelReasoning?['required'] == true ||
+        tpReasoning?['mandatory'] == true ||
+        tpReasoning?['required'] == true ||
+        paramReasoning?['mandatory'] == true ||
+        paramReasoning?['required'] == true;
+
+    if (efforts.isNotEmpty) {
+      return (
+        CatalogReasoning(
+          levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
+          defaultEffort: normalizeReasoningEffort(def),
+          mandatory: mandatory,
+        ),
+        false,
+      );
+    }
+
+    // Уровней нет, но провайдер назвал уровень по умолчанию — используем его.
+    if (def.isNotEmpty) {
       return (
         CatalogReasoning(
           levels: normalizeReasoningLevels(
-            List<String>.of(defaultReasoningLevels),
+            <String>[def],
             mandatory: mandatory,
           ),
           defaultEffort: normalizeReasoningEffort(def),
@@ -230,27 +279,20 @@ abstract final class PolzaParser {
         false,
       );
     }
-    if (marker) {
-      // reasoning: true — уровни не перечислены.
-      return (
-        CatalogReasoning(
-          levels: normalizeReasoningLevels(
-            List<String>.of(defaultReasoningLevels),
-          ),
-        ),
-        false,
-      );
+
+    final declared = modelReasoning != null ||
+        tpReasoning != null ||
+        paramReasoning != null ||
+        marker;
+    if (declared) {
+      // Провайдер заявил reasoning, но уровни не перечислил: данные
+      // неизвестны — одинаковый набор уровней всем моделям не подставляем.
+      return (null, true);
     }
     if (supportedParams.contains('reasoning') ||
         supportedParams.contains('reasoning_effort')) {
-      return (
-        CatalogReasoning(
-          levels: normalizeReasoningLevels(
-            List<String>.of(defaultReasoningLevels),
-          ),
-        ),
-        false,
-      );
+      // Reasoning в supported_parameters есть, конкретных уровней нет.
+      return (null, true);
     }
     if (supportedParams.isNotEmpty) {
       // supported_parameters есть, reasoning не заявлен: провайдер явно
@@ -259,6 +301,39 @@ abstract final class PolzaParser {
     }
     // Ни reasoning, ни supported_parameters — неизвестно.
     return (null, true);
+  }
+
+  /// Уровни из объекта reasoning (supported_efforts / values / levels).
+  static List<String> effortValues(Map<String, dynamic> c) => asStrList(
+        c['supported_efforts'] ??
+            c['supportedEfforts'] ??
+            c['values'] ??
+            c['efforts'] ??
+            c['levels'],
+      );
+
+  /// Уровни из capabilities.reasoning_effort.values провайдера.
+  static List<String> capabilityEfforts(Map<String, dynamic>? provider) {
+    final caps = asMap(provider?['capabilities']);
+    if (caps == null) return const <String>[];
+    final re = asMap(caps['reasoning_effort']);
+    if (re == null) return const <String>[];
+    return asStrList(re['values']);
+  }
+
+  /// Уровни из всех провайдеров записи (providers[]).
+  static List<String> providerEfforts(Map<String, dynamic> m) {
+    final out = <String>[];
+    final providers = m['providers'];
+    if (providers is! List) return out;
+    for (final p in providers) {
+      if (p is! Map) continue;
+      final pm = Map<String, dynamic>.from(p);
+      final r = asMap(pm['reasoning']);
+      if (r != null) out.addAll(effortValues(r));
+      out.addAll(capabilityEfforts(pm));
+    }
+    return out;
   }
 
   /// Цены ТОЛЬКО в известных формах. Возвращает (in, out, currency).
@@ -356,7 +431,8 @@ abstract final class PolzaParser {
     Map<String, dynamic>? topProvider,
   ]) {
     var aspectRatios = const <String>[];
-    var resolutions = const <String>[];
+    var imageResolutions = const <String>[];
+    var videoResolutions = const <String>[];
     var durations = const <int>[];
     var qualities = const <String>[];
     int? maxImages;
@@ -369,35 +445,19 @@ abstract final class PolzaParser {
       ];
       for (final params in paramsList) {
         if (aspectRatios.isEmpty) {
-          aspectRatios = asStrList(
-            asMap(params['aspect_ratio'])?['values'] ??
-                asMap(params['aspect_ratio'])?['enum'] ??
-                params['aspect_ratio'],
-          );
+          aspectRatios = constraintValues(params['aspect_ratio']);
         }
-        if (resolutions.isEmpty) {
-          resolutions = asStrList(
-            asMap(params['image_resolution'])?['values'] ??
-                asMap(params['image_resolution'])?['enum'] ??
-                asMap(params['resolution'])?['values'] ??
-                asMap(params['resolution'])?['enum'] ??
-                params['image_resolution'] ??
-                params['resolution'],
-          );
+        if (imageResolutions.isEmpty) {
+          imageResolutions = constraintValues(params['image_resolution']);
+        }
+        if (videoResolutions.isEmpty) {
+          videoResolutions = constraintValues(params['resolution']);
         }
         if (durations.isEmpty) {
-          durations = asIntList(
-            asMap(params['duration'])?['values'] ??
-                asMap(params['duration'])?['enum'] ??
-                params['duration'],
-          );
+          durations = durationValues(params['duration']);
         }
         if (qualities.isEmpty) {
-          qualities = asStrList(
-            asMap(params['quality'])?['values'] ??
-                asMap(params['quality'])?['enum'] ??
-                params['quality'],
-          );
+          qualities = constraintValues(params['quality']);
         }
         maxImages ??= asInt(asMap(params['images'])?['max']);
       }
@@ -409,12 +469,14 @@ abstract final class PolzaParser {
               topProvider?['supported_aspect_ratios'],
         );
       }
-      if (resolutions.isEmpty) {
-        resolutions = asStrList(
+      if (imageResolutions.isEmpty && videoResolutions.isEmpty) {
+        final flat = asStrList(
           m['supported_resolutions'] ??
               topProvider?['supported_resolutions'] ??
               m['supported_image_sizes'],
         );
+        imageResolutions = flat;
+        videoResolutions = flat;
       }
       if (durations.isEmpty) {
         durations = asIntList(
@@ -429,6 +491,32 @@ abstract final class PolzaParser {
     } catch (_) {
       // Битые медиа-поля не роняют разбор записи.
     }
+
+    // Разрешения: для видео приоритет у `resolution` (720p/1080p),
+    // для картинок — у `image_resolution` (0.5K/1K/2K/4K).
+    final type = (asStr(m['type']) ?? '').toLowerCase();
+    final resolutions = <String>[];
+    void addRes(String v) {
+      final t = v.trim();
+      if (t.isEmpty) return;
+      if (!resolutions.contains(t)) resolutions.add(t);
+    }
+    if (type == 'video') {
+      for (final v in videoResolutions) {
+        addRes(v);
+      }
+      for (final v in imageResolutions) {
+        addRes(v);
+      }
+    } else {
+      for (final v in imageResolutions) {
+        addRes(v);
+      }
+      for (final v in videoResolutions) {
+        addRes(v);
+      }
+    }
+
     return (
       aspectRatios: aspectRatios,
       resolutions: resolutions,
@@ -478,6 +566,46 @@ abstract final class PolzaParser {
     for (final e in v) {
       final i = asInt(e);
       if (i != null) out.add(i);
+    }
+    return out;
+  }
+
+  /// Значения ограничения параметра: values / enum / value_labels /
+  /// плоский список. Пустой список — данных нет.
+  static List<String> constraintValues(Object? raw) {
+    final map = asMap(raw);
+    if (map != null) {
+      final values = asStrList(map['values'] ?? map['enum']);
+      if (values.isNotEmpty) return values;
+      final labels = asMap(map['value_labels']);
+      if (labels != null) {
+        final out = <String>[];
+        labels.forEach((k, v) {
+          final s = (v ?? k).toString().trim();
+          if (s.isNotEmpty) out.add(s);
+        });
+        if (out.isNotEmpty) return out;
+      }
+      return const <String>[];
+    }
+    return asStrList(raw);
+  }
+
+  /// Длительности: список значений (строки '4' -> int) либо диапазон
+  /// min..max с шагом step, если значения не перечислены.
+  static List<int> durationValues(Object? raw) {
+    final map = asMap(raw);
+    if (map == null) return asIntList(raw);
+    final values = asIntList(map['values'] ?? map['enum']);
+    if (values.isNotEmpty) return values;
+    final min = asInt(map['min']);
+    final max = asInt(map['max']);
+    if (min == null || max == null || max < min) return const <int>[];
+    final stepRaw = asInt(map['step']);
+    final step = (stepRaw == null || stepRaw <= 0) ? 1 : stepRaw;
+    final out = <int>[];
+    for (int v = min; v <= max && out.length < 20; v += step) {
+      out.add(v);
     }
     return out;
   }

@@ -55,7 +55,8 @@ class _CreateResult {
 ///
 /// Схема Polza Media API (https://polza.ai/docs/api-reference/media/create.md,
 /// https://polza.ai/docs/api-reference/media/status.md):
-///  1. POST {baseUrl}/media -> получаем `id` и `status` (`pending`/`processing`/`completed`/`failed`);
+///  1. POST {baseUrl}/media с телом {model, input: {...}, async: true} —
+///     получаем `id` и `status` (`pending`/`processing`/`completed`/`failed`);
 ///  2. Если `status == completed` и `data.url` уже есть — сразу скачиваем;
 ///  3. Иначе опрашиваем GET {baseUrl}/media/{id} каждые 4 секунды
 ///     (интервал 3-5 с по документации), проверяем статусы
@@ -69,6 +70,7 @@ class AsyncJobExecutor extends GenerationExecutor {
   /// Пути создания задачи: первый удачный; 404/405 -> следующий.
   static const List<String> _createPaths = <String>[
     '/media',
+    '/v1/media',
     '/videos/generations',
     '/generations',
     '/videos',
@@ -77,6 +79,7 @@ class AsyncJobExecutor extends GenerationExecutor {
   /// Пути опроса статуса (к каждому добавляется идентификатор задачи).
   static const List<String> _pollPrefixes = <String>[
     '/media/',
+    '/v1/media/',
     '/videos/',
     '/generations/',
     '/jobs/',
@@ -331,7 +334,7 @@ class AsyncJobExecutor extends GenerationExecutor {
       yield GenProgress(
         jobId: record.jobId,
         percent: lastPct,
-        indeterminate: false,
+        indeterminate: res.indeterminate,
         debugSnippets: _debugPayload(),
         debugLogPath: debugLogPath,
       );
@@ -369,13 +372,28 @@ class AsyncJobExecutor extends GenerationExecutor {
     );
     final isVideoModel = info.outputModalities.contains(Modality.video) ||
         info.route == GenerationRoute.asyncJob;
+    final isPolza = providerId == 'polza' ||
+        base.toLowerCase().contains('polza.ai');
     debugPrint('[PolzaVideo] create: async=true (video route: $isVideoModel)');
-    final bodyMap = <String, dynamic>{
-      'model': request.model,
-      'prompt': prompt,
-      ...translated,
-      'async': true,
-    };
+    // Polza Media API: тело — {model, input: {...}, async}. Параметры
+    // генерации (aspect_ratio/duration/resolution) лежат ВНУТРИ input,
+    // иначе провайдер их игнорирует (и генерация идёт с дефолтами).
+    final bodyMap = isPolza
+        ? <String, dynamic>{
+            'model': request.model,
+            'input': ParameterTranslator.toPolzaMediaInput(
+              prompt,
+              translated,
+              isVideo: true,
+            ),
+            'async': true,
+          }
+        : <String, dynamic>{
+            'model': request.model,
+            'prompt': prompt,
+            ...translated,
+            'async': true,
+          };
     final body = jsonEncode(bodyMap);
     for (final path in _createPaths) {
       final uri = Uri.tryParse('$base$path');
@@ -568,7 +586,7 @@ class AsyncJobExecutor extends GenerationExecutor {
       final byAttempt = _defaultPercent(attempt);
       percent = byTime > byAttempt ? byTime : byAttempt;
     }
-    return _PollResult(percent: percent, indeterminate: false);
+    return _PollResult(percent: percent, indeterminate: pct == null);
   }
 
   /// Извлекает URL из полей Polza Media API (`data.url`, `data[0].url`,

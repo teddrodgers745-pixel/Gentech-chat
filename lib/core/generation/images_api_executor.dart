@@ -18,12 +18,32 @@ import 'image_dialect.dart';
 import 'parameter_translator.dart';
 import 'parameter_validation_exception.dart';
 
+/// Состояние одного опроса статуса генерации изображения.
+class _ImagePollState {
+  /// Готовая ссылка на изображение (null — ещё генерируется).
+  final String? url;
+
+  /// Текущий процент (0..100).
+  final double percent;
+
+  /// Текстовый статус провайдера ('pending'/'processing'/...).
+  final String status;
+
+  const _ImagePollState({
+    this.url,
+    this.percent = 0,
+    this.status = 'processing',
+  });
+}
+
 /// Исполнитель генерации изображений (HTTP через dio).
 ///
 /// Поддерживает:
-///  - Polza Media API: POST {baseUrl}/media (и фоллбэк на /images/generations)
-///    с автоматическим опросом GET {baseUrl}/media/{id} каждые 4 секунды,
-///    если провайдер вернул задачу в статусе `pending`/`processing`;
+///  - Polza Media API: POST {baseUrl}/media с телом
+///    {model, input: {...}, async: true} и автоматическим опросом
+///    GET {baseUrl}/media/{id} каждые 4 секунды (интервал 3-5 с по
+///    документации), пока статус не станет completed/failed; результат
+///    берётся из `data.url` (или `output`);
 ///  - openAiStandard: POST {baseUrl}/images/generations;
 ///  - shortImagesPath: POST {baseUrl}/images (RouterAI);
 ///  - openRouterChatImages: POST {baseUrl}/chat/completions.
@@ -113,16 +133,20 @@ class ImagesApiExecutor extends GenerationExecutor {
         final asyncJobId = _extractAsyncJobId(body);
         if (asyncJobId != null && asyncJobId.isNotEmpty) {
           yield GenProgress(jobId: asyncJobId, percent: 10);
-          final polledUrl = await _pollMediaStatus(
+          await for (final st in _pollMediaStatus(
             dio: dio,
             token: token,
             base: base,
             apiKey: request.apiKey,
             jobId: asyncJobId,
-          );
-          if (_cancelled) return;
-          if (polledUrl != null && polledUrl.isNotEmpty) {
-            sources = <String>[polledUrl];
+          )) {
+            if (_cancelled) return;
+            final url = st.url;
+            if (url != null && url.isNotEmpty) {
+              sources = <String>[url];
+              break;
+            }
+            yield GenProgress(jobId: asyncJobId, percent: st.percent);
           }
         }
       }
@@ -169,14 +193,16 @@ class ImagesApiExecutor extends GenerationExecutor {
     }
   }
 
-  /// Опрос GET {baseUrl}/media/{id} каждые 4 секунды по спецификации Polza Media API.
-  Future<String?> _pollMediaStatus({
+  /// Опрос GET {baseUrl}/media/{id} каждые 4 секунды по спецификации
+  /// Polza Media API: статусы pending/processing/completed/failed,
+  /// результат — `data.url` (или `output`).
+  Stream<_ImagePollState> _pollMediaStatus({
     required Dio dio,
     required CancelToken token,
     required String base,
     required String apiKey,
     required String jobId,
-  }) async {
+  }) async* {
     final cleanKey = apiKey
         .trim()
         .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
@@ -186,13 +212,13 @@ class ImagesApiExecutor extends GenerationExecutor {
     };
     for (int attempt = 1; attempt <= _maxPollAttempts; attempt++) {
       await Future<void>.delayed(_pollInterval);
-      if (_cancelled) return null;
+      if (_cancelled) return;
       final resp = await dio.get<String>(
         '$base/media/$jobId',
         options: Options(headers: headers),
         cancelToken: token,
       );
-      if (_cancelled) return null;
+      if (_cancelled) return;
       final code = resp.statusCode ?? 0;
       final body = resp.data ?? '';
       if (code == 401 || code == 403) {
@@ -221,10 +247,24 @@ class ImagesApiExecutor extends GenerationExecutor {
         throw UnknownGenError(details: _errorDetails(body));
       }
       final extracted = _extractImageSourcesFromResponse(body);
-      if (extracted.isNotEmpty) return extracted.first;
-      if (status == 'completed' || status == 'succeeded' || status == 'done') {
-        return null;
+      if (extracted.isNotEmpty) {
+        yield _ImagePollState(url: extracted.first, percent: 100, status: status);
+        return;
       }
+      if (status == 'completed' ||
+          status == 'succeeded' ||
+          status == 'success' ||
+          status == 'done') {
+        yield _ImagePollState(percent: 100, status: status);
+        return;
+      }
+      // Числового прогресса провайдер не отдал — считаем сами, чтобы
+      // индикатор не зависал на 0%.
+      final pct = (10.0 + attempt * 2.0).clamp(10.0, 92.0);
+      yield _ImagePollState(
+        percent: pct,
+        status: status.isEmpty ? 'processing' : status,
+      );
     }
     throw const JobTimeout(
       details: 'Генерация изображения не завершилась за отведённое время.',
@@ -302,12 +342,22 @@ class ImagesApiExecutor extends GenerationExecutor {
       );
     }
     final body = _restBody(request.model, prompt, translated);
-    // Для Polza пробуем сначала /media (единый эндпоинт Polza Media API),
-    // при 404/405 переходим на /images/generations.
+    // Для Polza пробуем сначала /media (единый эндпоинт Polza Media API):
+    // тело {model, input: {...}, async: true} — параметры генерации лежат
+    // внутри input, иначе провайдер их игнорирует.
     if (isPolza) {
+      final mediaBody = <String, dynamic>{
+        'model': request.model,
+        'input': ParameterTranslator.toPolzaMediaInput(
+          prompt,
+          translated,
+          isVideo: false,
+        ),
+        'async': true,
+      };
       final mediaResp = await dio.post<String>(
         '$base/media',
-        data: body,
+        data: mediaBody,
         options: Options(headers: headers),
         cancelToken: token,
       );
@@ -361,7 +411,7 @@ class ImagesApiExecutor extends GenerationExecutor {
     final body = <String, dynamic>{
       'model': model,
       'messages': <Map<String, dynamic>>[
-        <String, dynamic>{'role': 'user', 'content': prompt},
+        <Map<String, dynamic>>{'role': 'user', 'content': prompt},
       ],
       'modalities': <String>['image', 'text'],
     };
