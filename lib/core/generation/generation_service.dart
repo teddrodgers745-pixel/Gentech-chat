@@ -1,59 +1,119 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
-import '../models/model_info.dart';
-import '../providers/heuristic_rules.dart';
+// Частичное исправление: здесь устранён эвристический выбор исполнителя.
+// Полностью исправить задачу не удалось: ChatScreen и исполнители всё ещё
+// требуют изменений маршрутизации, polling, параметров и UI. Этот файл
+// сам по себе не гарантирует безопасную отправку медиа-запросов.
+
+import '../../app_state.dart';
+import '../auth/polza_auth_service.dart';
+import '../models/gen_error.dart';
 import 'active_jobs_store.dart';
 import 'async_job_executor.dart';
 import 'chat_completions_executor.dart';
 import 'generation_event.dart';
 import 'generation_executor.dart';
 import 'generation_request.dart';
+import 'images_api_executor.dart';
 
-/// Фасад генерации: единая точка входа для запросов к модели.
-///
-/// Выбор исполнителя — по маршруту модели ([GenerationRoute]): чат-модели
-/// идут через [ChatCompletionsExecutor], модели асинхронных видео-задач
-/// (kling, veo, sora, wan ...) — через [AsyncJobExecutor]. Восстановление
-/// незавершённых задач после перезапуска приложения — [restorePendingJobs]:
-/// записи берутся из [ActiveJobsStore], опрос продолжается без повторного
-/// создания задачи.
+/// Фасад генерации. Вид модели определяется по типу записи каталога
+/// активного подключения; неизвестный тип не направляется в текстовый чат.
 class GenerationService {
   final GenerationExecutor? _customExecutor;
-  ChatCompletionsExecutor? _chatExecutor;
-  AsyncJobExecutor? _asyncExecutor;
+  final Set<GenerationExecutor> _running = <GenerationExecutor>{};
+  int _cancelEpoch = 0;
 
-  /// Исполнитель можно подменить (например, в тестах); по умолчанию
-  /// исполнитель выбирается по маршруту модели.
+  /// Исполнитель можно подменить, например, в тестах.
   GenerationService({GenerationExecutor? executor})
       : _customExecutor = executor;
 
-  GenerationExecutor _executorFor(String modelId) {
+  String? _connectionIdFor(GenerationRequest request) {
+    final pr = presets.active;
+    if (pr != null &&
+        pr.id != PresetStore.defaultPresetId &&
+        pr.baseUrl.trim().isNotEmpty &&
+        pr.apiKey.trim().isNotEmpty) {
+      return 'preset:${pr.id}';
+    }
+
+    final url = request.baseUrl.trim().toLowerCase();
+    final key = request.apiKey.trim();
+    if (url.isEmpty || key.isEmpty) {
+      if (polzaAuth.isAuthenticated &&
+          polzaAuth.accessToken.trim().isNotEmpty) {
+        return 'polza';
+      }
+      return null;
+    }
+    if (url.contains('polza.ai')) return 'polza';
+    if (url.contains('routerai')) return 'routerai';
+    if (pr != null &&
+        pr.baseUrl.trim().isNotEmpty &&
+        pr.apiKey.trim().isNotEmpty) {
+      return 'preset:${pr.id}';
+    }
+    return 'global';
+  }
+
+  Future<GenerationExecutor?> _executorFor(
+    GenerationRequest request,
+  ) async {
     final custom = _customExecutor;
     if (custom != null) return custom;
-    final route =
-        HeuristicRules.inferRoute(HeuristicRules.normalize(modelId));
-    if (route == GenerationRoute.asyncJob) {
-      return _asyncExecutor ??= AsyncJobExecutor();
+
+    final connectionId = _connectionIdFor(request);
+    if (connectionId == null || request.model.trim().isEmpty) return null;
+
+    final entry = await providerCatalog.lookup(connectionId, request.model);
+    final type = entry?.type.trim().toLowerCase() ?? '';
+    switch (type) {
+      case 'image':
+        return ImagesApiExecutor();
+      case 'video':
+        return AsyncJobExecutor();
+      case 'chat':
+        return ChatCompletionsExecutor();
+      default:
+        return null;
     }
-    return _chatExecutor ??= ChatCompletionsExecutor();
   }
 
   /// Запускает генерацию по [request] и отдаёт поток событий.
-  Stream<GenerationEvent> generate(GenerationRequest request) =>
-      _executorFor(request.model).run(request);
+  Stream<GenerationEvent> generate(GenerationRequest request) async* {
+    final epoch = _cancelEpoch;
+    GenerationExecutor? executor;
+    try {
+      executor = await _executorFor(request);
+    } catch (_) {
+      executor = null;
+    }
 
-  /// Восстановление незавершённых асинхронных задач (видео) после
-  /// перезапуска приложения. Для каждой сохранённой [AsyncJobRecord]
-  /// продолжается цикл опроса; ошибкам без привязки приписывается
-  /// идентификатор задачи, чтобы интерфейс нашёл соответствующую
-  /// PendingPart в чате. Сбой одной задачи не прерывает восстановление
-  /// остальных.
+    if (epoch != _cancelEpoch) return;
+    if (executor == null) {
+      yield const GenerationFailure(
+        BadRequestError(
+          details: 'Не удалось определить тип модели по каталогу. '
+              'Обновите каталог и повторите запрос.',
+        ),
+      );
+      return;
+    }
+
+    _running.add(executor);
+    try {
+      yield* executor.run(request);
+    } finally {
+      _running.remove(executor);
+    }
+  }
+
+  /// Продолжает опрос сохранённых видео-задач без повторного создания.
   Stream<GenerationEvent> restorePendingJobs() async* {
     if (_customExecutor != null) return;
     final jobs = await ActiveJobsStore.instance.loadAll();
     for (final record in jobs) {
       final executor = AsyncJobExecutor();
-      _asyncExecutor = executor;
+      _running.add(executor);
       try {
         await for (final ev in executor.resume(record)) {
           if (ev is GenerationFailure && ev.jobId.isEmpty) {
@@ -63,18 +123,19 @@ class GenerationService {
           }
         }
       } catch (_) {
-        // Сетевая или иная трудность: запись остаётся в хранилище,
-        // восстановление повторится при следующем запуске.
+        // Запись остаётся в хранилище для следующего восстановления.
       } finally {
-        if (identical(_asyncExecutor, executor)) _asyncExecutor = null;
+        _running.remove(executor);
       }
     }
   }
 
-  /// Прерывает текущую генерацию: чат-исполнитель и все активные
-  /// асинхронные задачи.
+  /// Прерывает текущие исполнители, включая запросы до получения jobId.
   void cancel() {
-    _chatExecutor?.cancel();
+    _cancelEpoch++;
+    for (final executor in List<GenerationExecutor>.of(_running)) {
+      executor.cancel();
+    }
     AsyncJobExecutor.cancelAll();
   }
 }
