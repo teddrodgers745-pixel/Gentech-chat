@@ -7,6 +7,7 @@
 
 import '../../app_state.dart';
 import '../auth/polza_auth_service.dart';
+import '../catalog/provider_catalog_service.dart';
 import '../models/gen_error.dart';
 import 'active_jobs_store.dart';
 import 'async_job_executor.dart';
