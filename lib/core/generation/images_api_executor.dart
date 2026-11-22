@@ -411,7 +411,7 @@ class ImagesApiExecutor extends GenerationExecutor {
     final body = <String, dynamic>{
       'model': model,
       'messages': <Map<String, dynamic>>[
-        <Map<String, dynamic>>{'role': 'user', 'content': prompt},
+        <String, dynamic>{'role': 'user', 'content': prompt},
       ],
       'modalities': <String>['image', 'text'],
     };
