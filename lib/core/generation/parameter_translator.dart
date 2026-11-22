@@ -1,5 +1,12 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+// Частичное исправление: duration в input Polza теперь передаётся строкой.
+// Полную фильтрацию по схеме и передачу выбора из панели реализовать по
+// предоставленным файлам нельзя: нужны исходники ActiveModelController,
+// ModelCatalogAdapter, ModelInfoResolver, ModelInfo, ModelParameters и места
+// создания GenerationRequest, а также пример parameters из каталога Polza.
+// Остальные ошибки из задания этим файлом не исправлены.
+
 import '../models/generation_schema.dart';
 import '../models/model_info.dart';
 import '../models/param_spec.dart';
@@ -334,7 +341,7 @@ abstract final class ParameterTranslator {
   /// параметры генерации лежат ВНУТРИ объекта `input`, а не на верхнем
   /// уровне тела. Типы строго фиксированы:
   ///  - `aspect_ratio` — строка формата "16:9";
-  ///  - `duration` — int (секунды);
+  ///  - `duration` — строка с количеством секунд;
   ///  - `resolution` — строка ("720p"/"1080p" для видео);
   ///  - `image_resolution` — строка ("0.5K"/"1K"/"2K"/"4K" для картинок);
   ///  - `quality` — строка.
@@ -354,7 +361,7 @@ abstract final class ParameterTranslator {
           translated['seconds'] ??
           translated['duration_seconds'],
     );
-    if (duration != null) out['duration'] = duration;
+    if (duration != null) out['duration'] = duration.toString();
 
     final resolution = UniversalParams._string(
       translated[ParamKeys.resolution] ?? translated['image_resolution'],
