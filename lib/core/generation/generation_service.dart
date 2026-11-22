@@ -66,7 +66,7 @@ class GenerationService {
     if (connectionId == null || request.model.trim().isEmpty) return null;
 
     final entry = await providerCatalog.lookup(connectionId, request.model);
-    final type = entry?.type.trim().toLowerCase() ?? '';
+    final type = entry.type.trim().toLowerCase();
     switch (type) {
       case 'image':
         return ImagesApiExecutor();
