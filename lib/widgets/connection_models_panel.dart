@@ -1,5 +1,15 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+// Частичное исправление: панель загружает модели при открытии и при смене
+// подключения, а устаревшие ответы больше не заменяют новый список.
+//
+// Список панели и providerCatalog пока используют отдельные запросы.
+// Маршрутизация, повтор, параметры и объединение источников не исправлены.
+// Точный источник Cannot add to an unmodifiable list установить нельзя:
+// до POST исключение перехватывается в AsyncJobExecutor.run, но стектрейс
+// не прислан. Нужны стектрейс воспроизведения и исходники вызываемых там
+// ActiveModelController, ModelInfoResolver, ModelCatalogAdapter и каталога.
+
 import 'dart:async';
 import 'dart:convert';
 
@@ -9,15 +19,7 @@ import 'package:http/http.dart' as http;
 import '../app_state.dart';
 import '../core/catalog/provider_catalog_service.dart';
 
-/// Панель моделей внутри карточки подключения: кнопка «Загрузить модели»
-/// и выпадающий список загруженных моделей.
-///
-/// Показывается ТОЛЬКО после успешного OAuth-входа соответствующего
-/// провайдера (родитель рендерит панель в ветке authenticated).
-/// После успешной загрузки список моделей сохраняется в состоянии
-/// виджета и НЕ исчезает; фоновый Timer.periodic обновляет список
-/// каждые 2 часа (таймер отменяется в dispose), кнопка — ручное
-/// обновление.
+/// Панель моделей внутри карточки подключения.
 class ConnectionModelsPanel extends StatefulWidget {
   /// Идентификатор подключения для providerCatalog.sync
   /// ('polza' / 'routerai').
@@ -42,32 +44,52 @@ class ConnectionModelsPanel extends StatefulWidget {
 }
 
 class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
-  /// Интервал фонового автообновления списка моделей.
   static const Duration _autoRefreshInterval = Duration(hours: 2);
-
   static const Duration _requestTimeout = Duration(seconds: 30);
 
   bool _loading = false;
   String? _error;
-
-  /// Загруженные модели (сохраняются в состоянии — список не исчезает).
   List<String> _models = const <String>[];
-
   Timer? _autoRefreshTimer;
+
+  /// Ответ запроса с предыдущими параметрами подключения не должен
+  /// заменять список, загруженный для нового подключения.
+  int _requestVersion = 0;
 
   @override
   void initState() {
     super.initState();
-    // Автообновление моделей активного подключения каждые 2 часа;
-    // таймер отменяется в dispose.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_loadModels());
+    });
     _autoRefreshTimer = Timer.periodic(
       _autoRefreshInterval,
-      (_) => _loadModels(),
+      (_) => unawaited(_loadModels()),
     );
   }
 
   @override
+  void didUpdateWidget(covariant ConnectionModelsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.connectionId == widget.connectionId &&
+        oldWidget.baseUrl == widget.baseUrl &&
+        oldWidget.apiKey == widget.apiKey) {
+      return;
+    }
+
+    _requestVersion++;
+    _loading = false;
+    _error = null;
+    _models = const <String>[];
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) unawaited(_loadModels());
+    });
+  }
+
+  @override
   void dispose() {
+    _requestVersion++;
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = null;
     super.dispose();
@@ -85,13 +107,22 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     if (_loading) return;
     final base = _base;
     final key = _key;
+    final connectionId = widget.connectionId;
     if (base.isEmpty || key.isEmpty) return;
-    setState(() => _loading = true);
-    // Параллельно обновляем каталог возможностей/цен этого подключения.
+
+    final version = ++_requestVersion;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    // Это отдельная синхронизация: существующий API каталога не выдаёт
+    // панели список записей и не сообщает об ошибке обновления.
     unawaited(providerCatalog.sync(
-      CatalogConnection(id: widget.connectionId, baseUrl: base, apiKey: key),
+      CatalogConnection(id: connectionId, baseUrl: base, apiKey: key),
       force: true,
     ));
+
     try {
       final resp = await http
           .get(
@@ -99,7 +130,8 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
             headers: <String, String>{'Authorization': 'Bearer $key'},
           )
           .timeout(_requestTimeout);
-      if (!mounted) return;
+      if (!mounted || version != _requestVersion) return;
+
       if (resp.statusCode != 200) {
         setState(() {
           _loading = false;
@@ -107,26 +139,27 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
         });
         return;
       }
+
       final ids = _parseModelIds(resp.body);
-      if (!mounted) return;
+      if (!mounted || version != _requestVersion) return;
       setState(() {
         _loading = false;
         if (ids.isNotEmpty) {
           _models = ids;
           _error = null;
         } else {
-          // Пустой ответ: прежний список сохраняем, не исчезает.
+          // Пустой ответ: прежний список сохраняем.
           _error = 'Сервер не вернул ни одной модели.';
         }
       });
     } on TimeoutException {
-      if (!mounted) return;
+      if (!mounted || version != _requestVersion) return;
       setState(() {
         _loading = false;
         _error = 'Сервер не ответил за 30 секунд.';
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || version != _requestVersion) return;
       setState(() {
         _loading = false;
         _error = 'Не удалось загрузить модели: проверьте сеть.';
@@ -156,10 +189,7 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     return list;
   }
 
-  /// Выбор модели: сохраняем одновременно И модель, И url, И key этого
-  /// провайдера — иначе подключение могло остаться от другого источника
-  /// (модель Polza при ключе из общих настроек и т.п.), и запрос ушёл бы
-  /// с чужим ключом.
+  /// Сохраняем модель вместе с адресом и ключом её подключения.
   void _pickModel(String v) {
     final base = _base;
     final key = _key;
@@ -237,8 +267,6 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
                 },
               ),
               const SizedBox(height: 4),
-              // Адрес подключения виден явно: запрос уходит с ключом
-              // именно этого провайдера.
               Text(
                 'Подключение: $_base',
                 softWrap: true,
