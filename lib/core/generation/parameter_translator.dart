@@ -1,11 +1,11 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
-// Частичное исправление: duration в input Polza теперь передаётся строкой.
-// Полную фильтрацию по схеме и передачу выбора из панели реализовать по
-// предоставленным файлам нельзя: нужны исходники ActiveModelController,
-// ModelCatalogAdapter, ModelInfoResolver, ModelInfo, ModelParameters и места
-// создания GenerationRequest, а также пример parameters из каталога Polza.
-// Остальные ошибки из задания этим файлом не исправлены.
+// Частичное исправление: для изображений больше не формируется поле
+// resolution, а duration для видео передаётся строкой.
+// Полная фильтрация по схеме Polza и передача выбора из панели не исправлены:
+// для этого нужны исходники ActiveModelController, ModelCatalogAdapter,
+// ModelInfoResolver, ModelInfo, ModelParameters, места создания
+// GenerationRequest и пример parameters из каталога Polza.
 
 import '../models/generation_schema.dart';
 import '../models/model_info.dart';
@@ -118,7 +118,9 @@ abstract final class ParameterTranslator {
     final isVideo = _isVideoGenerator(model);
     final enriched = _enrichRawWithSelected(rawParams, isVideo: isVideo);
     final schema = model.generationSchema;
-    if (schema == null) return _normalizeRawTypes(enriched, isImage: model.isImageGenerator);
+    if (schema == null) {
+      return _normalizeRawTypes(enriched, isImage: model.isImageGenerator);
+    }
     final clean = schema.sanitize(enriched);
     final result = switch (schema.payloadStyle) {
       PayloadStyle.sizeOnly => _sizeOnly(clean, schema),
@@ -337,14 +339,8 @@ abstract final class ParameterTranslator {
 
   /// Тело `input` для Polza Media API (POST /v1/media).
   ///
-  /// Согласно документации (https://polza.ai/docs/api-reference/media/create.md)
-  /// параметры генерации лежат ВНУТРИ объекта `input`, а не на верхнем
-  /// уровне тела. Типы строго фиксированы:
-  ///  - `aspect_ratio` — строка формата "16:9";
-  ///  - `duration` — строка с количеством секунд;
-  ///  - `resolution` — строка ("720p"/"1080p" для видео);
-  ///  - `image_resolution` — строка ("0.5K"/"1K"/"2K"/"4K" для картинок);
-  ///  - `quality` — строка.
+  /// Параметры генерации лежат внутри объекта `input`. Этот метод
+  /// нормализует имена и типы, но не фильтрует поля по схеме модели.
   static Map<String, dynamic> toPolzaMediaInput(
     String prompt,
     Map<String, dynamic> translated, {
@@ -356,23 +352,24 @@ abstract final class ParameterTranslator {
     );
     if (ratio != null) out['aspect_ratio'] = ratio;
 
-    final duration = UniversalParams._int(
-      translated[ParamKeys.duration] ??
-          translated['seconds'] ??
-          translated['duration_seconds'],
-    );
-    if (duration != null) out['duration'] = duration.toString();
+    if (isVideo) {
+      final duration = UniversalParams._int(
+        translated[ParamKeys.duration] ??
+            translated['seconds'] ??
+            translated['duration_seconds'],
+      );
+      if (duration != null) out['duration'] = duration.toString();
 
-    final resolution = UniversalParams._string(
-      translated[ParamKeys.resolution] ?? translated['image_resolution'],
-    );
-    if (resolution != null) {
-      if (isVideo) {
-        out['resolution'] = resolution;
-      } else if (_isImageResolutionTier(resolution)) {
+      final resolution = UniversalParams._string(
+        translated[ParamKeys.resolution],
+      );
+      if (resolution != null) out['resolution'] = resolution;
+    } else {
+      final resolution = UniversalParams._string(
+        translated['image_resolution'] ?? translated[ParamKeys.resolution],
+      );
+      if (resolution != null && _isImageResolutionTier(resolution)) {
         out['image_resolution'] = resolution;
-      } else {
-        out['resolution'] = resolution;
       }
     }
 
