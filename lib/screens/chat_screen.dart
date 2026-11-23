@@ -254,9 +254,7 @@ class _ChatScreenState extends State<ChatScreen> {
   static bool _heuristicReasoning(String modelId) =>
       HeuristicRules.inferSupportsReasoning(HeuristicRules.normalize(modelId));
 
-  /// Эффективный тип активной модели для панели ввода: ручной override
-  /// типа имеет приоритет, затем эвристика и каталог параметров
-  /// (см. ModelTypeOverrideStore.effectiveType).
+  /// Эффективный тип активной модели для панели ввода.
   Future<void> _resolveType(String modelId, {bool force = false}) async {
     final id = modelId.trim();
     if (!force && id == _typeFor) return;
@@ -533,7 +531,7 @@ class _ChatScreenState extends State<ChatScreen> {
         final done = await processAttachment(d);
         if (!mounted) return;
         final i = _attachments.indexOf(d);
-        if (i < 0) continue; // вложение удалено пользователем
+        if (i < 0) continue;
         setState(() => _attachments[i] = done);
         final st = done.status;
         if (st == AttachmentStatus.failed || st == AttachmentStatus.tooLarge) {
@@ -572,29 +570,29 @@ class _ChatScreenState extends State<ChatScreen> {
     final hasReady =
         _attachments.any((a) => a.status == AttachmentStatus.ready);
     if ((txt.isEmpty && !hasReady) || _streaming) return;
-    // Пока хоть одно вложение обрабатывается, отправка недоступна.
     if (_attachments.any((a) => a.isBusy)) return;
     if (effectiveConfig().apiKey.isEmpty) {
       _snack('Создайте и выберите профиль модели в настройках');
       return;
     }
+
     final modelId = effectiveConfig().model.trim();
-    // Эффективный тип модели: ручной override типа > эвристика по
-    // идентификатору > тип из каталога параметров (ModelTypeOverrideStore).
     String genType;
     try {
       genType = await ModelTypeOverrideStore.instance.effectiveType(modelId);
     } catch (_) {
-      genType = ModelTypes.text;
+      if (!mounted) return;
+      await _addGenErrorBubble(
+        'Не удалось определить тип модели по каталогу. '
+        'Обновите каталог и повторите запрос.',
+      );
+      return;
     }
-    if (genType == ModelTypes.text &&
-        (_effectiveModelType == ModelTypes.video ||
-            _effectiveModelType == ModelTypes.image)) {
-      genType = _effectiveModelType;
-    }
+    if (!mounted) return;
+
+    // Не пересматриваем текстовый тип через _effectiveModelType:
+    // ручной «Текст» и каталожный chat не должны уходить в медиа.
     if (genType == ModelTypes.image) {
-      // Валидация перед отправкой: без спецификации параметров отправка
-      // блокируется с ErrorBubble, при спецификации проверяются комбинации.
       if (!await _validateGenParams(
         modelId,
         isVideo: false,
@@ -617,6 +615,17 @@ class _ChatScreenState extends State<ChatScreen> {
       await _sendVideo(txt);
       return;
     }
+    if (genType != ModelTypes.text) {
+      await _addGenErrorBubble(
+        'Не удалось определить тип модели по каталогу. '
+        'Обновите каталог и повторите запрос.',
+      );
+      return;
+    }
+
+    // Ограничение текущего effectiveType: он возвращает text и для
+    // неизвестной модели. Без отдельного признака исходного type в
+    // CatalogEntry этот случай здесь нельзя надёжно отличить от chat.
     final picked = <PickedFileRef>[
       for (final a in _attachments)
         if (a.status == AttachmentStatus.ready)
@@ -645,10 +654,8 @@ class _ChatScreenState extends State<ChatScreen> {
     await _runCompletion(chat, userApiContent: apiContent);
   }
 
-  /// Генерация изображения: запрос к /images/generations через
-  /// [ImagesApiExecutor]. Результат приходит одним markdown-изображением
-  /// (ссылка провайдера либо локальный файл) и попадает в чат как
-  /// обычное сообщение ассистента.
+  /// Генерация изображения: результат попадает в чат как сообщение
+  /// ассистента с markdown-ссылкой на изображение.
   Future<void> _sendImage(String txt) async {
     if (txt.isEmpty) {
       _snack('Опишите изображение');
@@ -681,9 +688,6 @@ class _ChatScreenState extends State<ChatScreen> {
         <String, dynamic>{'role': 'user', 'content': txt},
       ],
       stream: false,
-      // Разрешение изображения уходит как 'resolution' (безопасный дефолт,
-      // совместим с RouterAI и Media API); ImagesApiExecutor для Polza
-      // дополнительно дублирует значение в 'image_resolution'.
       parameters: <String, dynamic>{
         ParamKeys.aspectRatio: _aspectRatio,
         if ((_mediaResolution ?? '').trim().isNotEmpty)
@@ -711,16 +715,12 @@ class _ChatScreenState extends State<ChatScreen> {
     _uiTimer?.cancel();
     _uiTimer = null;
     if (genError != null) {
-      // Ошибка генерации изображения: карточка ErrorBubble в чате
-      // вместо снекбара, с возможностью повторить запрос.
       reply
         ..errorCode = genError.code
         ..errorText = GenErrorMapper.detailsOf(genError);
     } else if (reply.content.isEmpty) {
       chat.messages.remove(reply);
     } else {
-      // Стоимость генерации под картинкой: TextPart с MessageCost,
-      // отображается той же строкой, что и у текстовых ответов.
       final usd = estimate.estimatedUsd ?? 0.0;
       final costRub = usd > 0 ? usd * 95.0 : 1.5;
       final tokens = (txt.length / 4).ceil().clamp(1, 100000);
@@ -741,10 +741,7 @@ class _ChatScreenState extends State<ChatScreen> {
     await store.save();
   }
 
-  /// Генерация видео (маршрут asyncJob): у провайдера создаётся
-  /// асинхронная задача; в чате появляется PendingPart с прогрессом и
-  /// кнопкой отмены, при успехе она заменяется на VideoPart (локальный
-  /// файл либо ссылка провайдера).
+  /// Генерация видео: асинхронная задача с PendingPart и прогрессом.
   Future<void> _sendVideo(String txt) async {
     if (txt.isEmpty) {
       _snack('Опишите видео');
@@ -792,7 +789,6 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     GenError? genError;
     var cancelled = false;
-    var crashTrace = '';
     try {
       await for (final ev in _genService.generate(request)) {
         if (ev is GenProgress) {
@@ -815,9 +811,8 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         _scheduleUi();
       }
-    } catch (e, st) {
+    } catch (e) {
       genError = GenErrorMapper.fromException(e);
-      crashTrace = '$e\n$st';
     }
 
     _uiTimer?.cancel();
@@ -828,7 +823,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (genError != null) {
       reply
         ..errorCode = genError.code
-        ..errorText = '${GenErrorMapper.detailsOf(genError)}\n$crashTrace';
+        ..errorText = GenErrorMapper.detailsOf(genError);
     }
     if (reply.parts.isEmpty &&
         reply.content.isEmpty &&
@@ -846,8 +841,7 @@ class _ChatScreenState extends State<ChatScreen> {
     await store.save();
   }
 
-  /// Обновляет ожидающую часть видео-задачи в сообщении [reply]:
-  /// прогресс и идентификатор задачи (после создания у провайдера).
+  /// Обновляет ожидающую часть видео-задачи в сообщении [reply].
   void _updateVideoPending(
     ChatMessage reply, {
     required String jobId,
@@ -867,11 +861,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Файлы из ответа модели: блоки ```lang name=filename.ext извлекаются
-  /// через [FileBlockExtractor], содержимое сохраняется в
-  /// Documents/GenTech/files/, каждый файл прикрепляется к сообщению
-  /// как Artifact (попадает в галерею артефактов). Ошибка сохранения
-  /// не роняет ответ: файл остаётся только в тексте сообщения.
+  /// Сохраняет файлы из блоков ответа модели.
   Future<void> _materializeResponseFiles(
     ChatMessage reply,
     String modelId,
@@ -902,13 +892,12 @@ class _ChatScreenState extends State<ChatScreen> {
           modelId: modelId,
         ));
       } catch (_) {
-        // Диск недоступен — файл не сохраняется, ответ не ломается.
+        // Диск недоступен — ответ не ломается.
       }
     }
   }
 
-  /// Добавляет в чат сообщение-ошибку, которое рендерится ErrorBubble
-  /// (код 'bad_request' -> заголовок «Некорректный запрос», текст — детали).
+  /// Добавляет в чат сообщение-ошибку для ErrorBubble.
   Future<void> _addGenErrorBubble(String text) async {
     final chat = store.current ?? store.createChat();
     chat.messages.add(ChatMessage(
@@ -923,11 +912,7 @@ class _ChatScreenState extends State<ChatScreen> {
     await store.save();
   }
 
-  /// Валидация отправки для генеративных моделей (изображение/видео).
-  /// Без спецификации параметров (курированный каталог либо override
-  /// пользователя) отправка блокируется с ErrorBubble. При известной
-  /// спецификации тело собирается через toImageBody/toVideoBody, чтобы
-  /// поймать ParameterValidationException до реального запроса.
+  /// Валидация отправки для генеративных моделей.
   Future<bool> _validateGenParams(
     String modelId, {
     required bool isVideo,
@@ -938,10 +923,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!CuratedParameterCatalog.isLoaded) {
         await CuratedParameterCatalog.load();
       }
-    } catch (_) {
-      // Каталог недоступен — resolveParams вернёт null, отправка будет
-      // заблокирована с подсказкой указать параметры вручную.
-    }
+    } catch (_) {}
     ModelParameters? spec;
     try {
       spec = await ParameterTranslator.resolveParams(
@@ -1017,9 +999,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    // Единый селектор: уровень берётся из настроек (капсула «Мышление»
-    // сохраняет его в SharedPreferences) и переводится в payload
-    // через ReasoningMapper в ChatService.
     final rawLvl = ReasoningMapper.fromId(settings.reasoningLevel);
     final lvl = !_activeModel.current.reasoning
         ? ReasoningLevel.off
@@ -1053,8 +1032,6 @@ class _ChatScreenState extends State<ChatScreen> {
     GenError? genError;
     Map<String, dynamic>? lastUsage;
     final sources = <String>[];
-    // Подписка UI на пейсер плавного вывода: ValueNotifier<String>
-    // ([StreamPacer.displayed]) несёт полный показанный текст ответа.
     StreamPacer? pacer;
     void onPaced() {
       if (!mounted) return;
@@ -1077,7 +1054,6 @@ class _ChatScreenState extends State<ChatScreen> {
         reasoningEffort: reasoningEffort,
         tools: tools,
       )) {
-        // Пейсер появляется при первом чанке (поток запускается лениво).
         if (pacer == null) {
           pacer = _chatService.activePacer;
           pacer?.displayed.addListener(onPaced);
@@ -1117,9 +1093,6 @@ class _ChatScreenState extends State<ChatScreen> {
     _uiTimer = null;
     final err = genError;
     if (err != null) {
-      // Ошибка сохраняется в самом сообщении и отображается через
-      // ErrorBubble (MessageView читает errorCode/errorText): карточка
-      // с иконкой, текстом и одной контекстной кнопкой «Повторить».
       reply
         ..errorCode = err.code
         ..errorText = GenErrorMapper.detailsOf(err);
@@ -1127,7 +1100,6 @@ class _ChatScreenState extends State<ChatScreen> {
       chat.messages.remove(reply);
     }
     if (err == null && chat.messages.contains(reply)) {
-      // Стоимость ответа из usage провайдера: мелкая строка под ответом.
       final usageCost = MessageCost.fromUsage(lastUsage);
       if (usageCost != null) {
         reply.parts.add(TextPart(
@@ -1135,18 +1107,14 @@ class _ChatScreenState extends State<ChatScreen> {
           cost: usageCost,
           sources: List<String>.of(sources),
         ));
-        // Суммарная стоимость чата: прибавляем и сохраняем вместе с чатом.
         chat.totalCost += usageCost.cost;
       } else if (sources.isNotEmpty) {
-        // Источники из citations/annotations провайдера — в TextPart.sources.
         reply.parts.add(TextPart('', sources: List<String>.of(sources)));
       }
     }
     if (err == null &&
         chat.messages.contains(reply) &&
         reply.content.trim().isNotEmpty) {
-      // Файлы из ответа: сохраняем в Documents/GenTech/files/ и
-      // прикрепляем к сообщению как артефакты.
       await _materializeResponseFiles(reply, cfg.model.trim());
     }
     if (!mounted) {
@@ -1270,9 +1238,6 @@ class _ChatScreenState extends State<ChatScreen> {
               children: [
                 Expanded(child: _messages(chat, p)),
                 _attachmentActions(p),
-                // Панель ввода подписана на контроллер активной модели:
-                // смена модели (параметры, vision, reasoning) сразу
-                // перестраивает композер без ручных setState.
                 ListenableBuilder(
                   listenable: _activeModel,
                   builder: (ctx, _) {
@@ -1281,9 +1246,6 @@ class _ChatScreenState extends State<ChatScreen> {
                     final effectiveLevel = caps.reasoning
                         ? ReasoningMapper.fromId(settings.reasoningLevel)
                         : ReasoningLevel.off;
-                    // ValueKey из normalizedId модели и эффективного типа:
-                    // панель пересоздаётся при смене модели, состояние
-                    // композера синхронизировано с capabilities.
                     return AdaptiveChatInputBar(
                       key: ValueKey(caps.normalizedId + effType),
                       config: _currentConfig,
@@ -1335,48 +1297,49 @@ class _ChatScreenState extends State<ChatScreen> {
             onPointerUp: _up,
             onPointerCancel: _up,
             child: SelectionArea(
-          child: NotificationListener<UserScrollNotification>(
-            onNotification: _onUserScroll,
-            child: ListView.builder(
-            controller: _scroll,
-            physics: _pinching
-                ? const NeverScrollableScrollPhysics()
-                : const ClampingScrollPhysics(),
-            padding: const EdgeInsets.only(top: 4, bottom: 20),
-            itemCount: msgs.length,
-            itemBuilder: (context, i) {
-              final m = msgs[i];
-              final isLast = i == msgs.length - 1;
-              final live = _streaming && isLast && m.role == 'assistant';
-              final canRegen = !_streaming && isLast && m.role == 'assistant';
-              final view = MessageView(
-                key: ValueKey(m.id),
-                message: m,
-                streaming: live,
-                onRegenerate: canRegen ? _regenerate : null,
-              );
-              if (isLast && !_streaming && m.role == 'user') {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    view,
-                    Padding(
-                      padding: const EdgeInsets.only(left: 12),
-                      child: TextButton.icon(
-                        onPressed: _regenerate,
-                        icon: const Icon(Icons.refresh_rounded, size: 18),
-                        label: const Text('Повторить запрос'),
-                      ),
-                    ),
-                  ],
-                );
-              }
-              return view;
-            },
-          ),
+              child: NotificationListener<UserScrollNotification>(
+                onNotification: _onUserScroll,
+                child: ListView.builder(
+                  controller: _scroll,
+                  physics: _pinching
+                      ? const NeverScrollableScrollPhysics()
+                      : const ClampingScrollPhysics(),
+                  padding: const EdgeInsets.only(top: 4, bottom: 20),
+                  itemCount: msgs.length,
+                  itemBuilder: (context, i) {
+                    final m = msgs[i];
+                    final isLast = i == msgs.length - 1;
+                    final live = _streaming && isLast && m.role == 'assistant';
+                    final canRegen =
+                        !_streaming && isLast && m.role == 'assistant';
+                    final view = MessageView(
+                      key: ValueKey(m.id),
+                      message: m,
+                      streaming: live,
+                      onRegenerate: canRegen ? _regenerate : null,
+                    );
+                    if (isLast && !_streaming && m.role == 'user') {
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          view,
+                          Padding(
+                            padding: const EdgeInsets.only(left: 12),
+                            child: TextButton.icon(
+                              onPressed: _regenerate,
+                              icon: const Icon(Icons.refresh_rounded, size: 18),
+                              label: const Text('Повторить запрос'),
+                            ),
+                          ),
+                        ],
+                      );
+                    }
+                    return view;
+                  },
+                ),
+              ),
             ),
-        ),
-        ),
+          ),
         ),
         if (_userScrolledUp)
           Positioned(
@@ -1393,8 +1356,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Кнопка «Вниз»: плавно возвращает список к нижнему краю и снова
-  /// включает автоскролл.
+  /// Кнопка «Вниз»: возвращает список к нижнему краю.
   void _scrollToBottom() {
     if (!_scroll.hasClients) return;
     setState(() {
@@ -1408,8 +1370,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Шторка «Параметры и пресеты»: все промпты-пресеты чипами в Wrap,
-  /// тап вставляет промпт в поле ввода.
+  /// Шторка промптов-пресетов.
   void _showPresetsSheet(BuildContext context, Palette p, List<String> prompts) {
     showModalBottomSheet<void>(
       context: context,
