@@ -792,6 +792,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
     GenError? genError;
     var cancelled = false;
+    var crashTrace = '';
     try {
       await for (final ev in _genService.generate(request)) {
         if (ev is GenProgress) {
@@ -814,8 +815,9 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         _scheduleUi();
       }
-    } catch (e) {
+    } catch (e, st) {
       genError = GenErrorMapper.fromException(e);
+      crashTrace = '$e\n$st';
     }
 
     _uiTimer?.cancel();
@@ -826,7 +828,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (genError != null) {
       reply
         ..errorCode = genError.code
-        ..errorText = GenErrorMapper.detailsOf(genError);
+        ..errorText = '${GenErrorMapper.detailsOf(genError)}\n$crashTrace';
     }
     if (reply.parts.isEmpty &&
         reply.content.isEmpty &&
