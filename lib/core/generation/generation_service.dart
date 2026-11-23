@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
-// Частичное исправление: здесь устранён эвристический выбор исполнителя.
-// Полностью исправить задачу не удалось: ChatScreen и исполнители всё ещё
-// требуют изменений маршрутизации, polling, параметров и UI. Этот файл
-// сам по себе не гарантирует безопасную отправку медиа-запросов.
+// Частичное исправление: для Polza отклоняется запись, которая целиком
+// получена из резервного источника. Это НЕ решает всю задачу: lookup может
+// синтезировать тип и для записи подключения с пустым исходным type.
+// ChatScreen, повтор, обновление каталога, параметры и диагностика
+// исключения в этом результате не исправлены.
 
 import '../../app_state.dart';
 import '../auth/polza_auth_service.dart';
@@ -66,6 +67,12 @@ class GenerationService {
     if (connectionId == null || request.model.trim().isEmpty) return null;
 
     final entry = await providerCatalog.lookup(connectionId, request.model);
+    final isPolza = request.baseUrl.toLowerCase().contains('polza.ai') ||
+        connectionId == 'polza';
+    if (isPolza && entry.capabilitiesSource != CatalogSources.connection) {
+      return null;
+    }
+
     final type = entry.type.trim().toLowerCase();
     switch (type) {
       case 'image':

@@ -1,7 +1,20 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+// ВНИМАНИЕ: это частичное исправление, не готовая реализация v6c.
+// Маршрутизация в ChatScreen, повтор, обновление каталога и панель
+// параметров остаются неисправленными. providerCatalog.lookup может
+// синтезировать тип, поэтому этот файл не обеспечивает строгую проверку
+// наличия исходного type в каталоге. Применять как завершённый фикс нельзя.
+//
+// Точный источник Cannot add to an unmodifiable list по приведённым
+// исходникам установить не удалось; временная диагностика в исполнителе
+// в этом частичном результате не добавлена.
+
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../app_state.dart';
+import '../auth/polza_auth_service.dart';
+import '../catalog/provider_catalog_service.dart';
 import '../models/model_info.dart';
 import '../providers/heuristic_rules.dart';
 import 'curated_parameter_catalog.dart';
@@ -16,12 +29,6 @@ abstract final class ModelTypes {
 }
 
 /// Хранилище ручного override типа модели.
-///
-/// Пользователь может явно указать, чем является модель — текстовой,
-/// генератором изображений или видео. Значение сохраняется в
-/// SharedPreferences по ключу 'model_type_override_<modelId>' и
-/// переживает перезапуск приложения. Все операции терпимы к сбоям
-/// хранилища: ошибка чтения/записи возвращает null, не роняя код.
 class ModelTypeOverrideStore {
   static const String _prefix = 'model_type_override_';
 
@@ -64,7 +71,7 @@ class ModelTypeOverrideStore {
       final p = await SharedPreferences.getInstance();
       await p.setString(keyFor(id), type);
     } catch (_) {
-      // Хранилище недоступно — override не сохранится, приложение работает.
+      // Хранилище недоступно — override не сохранится.
     }
   }
 
@@ -80,15 +87,42 @@ class ModelTypeOverrideStore {
     }
   }
 
-  /// Эффективный тип модели ('text' / 'image' / 'video').
+  /// Идентификатор активного подключения, соответствующий существующей
+  /// логике ActiveModelController и GenerationService.
+  String? _connectionId() {
+    final pr = presets.active;
+    if (pr != null &&
+        pr.id != PresetStore.defaultPresetId &&
+        pr.baseUrl.trim().isNotEmpty &&
+        pr.apiKey.trim().isNotEmpty) {
+      return 'preset:${pr.id}';
+    }
+
+    final cfg = effectiveConfig();
+    final url = cfg.baseUrl.trim().toLowerCase();
+    final key = cfg.apiKey.trim();
+    if (url.isEmpty || key.isEmpty) {
+      if (polzaAuth.isAuthenticated &&
+          polzaAuth.accessToken.trim().isNotEmpty) {
+        return 'polza';
+      }
+      return null;
+    }
+    if (url.contains('polza.ai')) return 'polza';
+    if (url.contains('routerai')) return 'routerai';
+    if (pr != null &&
+        pr.baseUrl.trim().isNotEmpty &&
+        pr.apiKey.trim().isNotEmpty) {
+      return 'preset:${pr.id}';
+    }
+    return 'global';
+  }
+
+  /// Эффективный тип модели: ручной override, затем запись подключения,
+  /// затем прежние резервные источники.
   ///
-  /// Порядок приоритетов:
-  ///  1. явный override пользователя;
-  ///  2. эвристика по идентификатору (маршрут генерации);
-  ///  3. если эвристика дала текст, но модель известна каталогу параметров
-  ///     (курированный каталог либо пользовательский override параметров) —
-  ///     тип берётся из параметров: есть длительности -> видео,
-  ///     иначе изображение.
+  /// Ограничение текущего API: lookup может дозаполнить пустой тип.
+  /// Для строгой маршрутизации нужен доступ к исходной записи каталога.
   Future<String> effectiveType(String modelId) async {
     final id = modelId.trim();
     if (id.isEmpty) return ModelTypes.text;
@@ -96,6 +130,32 @@ class ModelTypeOverrideStore {
     final ov = await loadOverride(id) ??
         (norm.isNotEmpty && norm != id ? await loadOverride(norm) : null);
     if (ov != null) return ov;
+
+    final connectionId = _connectionId();
+    if (connectionId != null) {
+      try {
+        final entry = await providerCatalog.lookup(connectionId, id);
+        if (entry.capabilitiesSource == CatalogSources.connection) {
+          final type = entry.type.trim().toLowerCase();
+          switch (type) {
+            case 'chat':
+            case 'text':
+              return ModelTypes.text;
+            case 'image':
+              return ModelTypes.image;
+            case 'video':
+              return ModelTypes.video;
+            case '':
+              break;
+            default:
+              return type;
+          }
+        }
+      } catch (_) {
+        // Каталог недоступен — остаются прежние резервные источники.
+      }
+    }
+
     final lower = norm.toLowerCase();
     const videoHints = <String>[
       'seedance',
@@ -129,7 +189,7 @@ class ModelTypeOverrideStore {
       try {
         await CuratedParameterCatalog.load();
       } catch (_) {
-        // Каталог недоступен — считаем модель текстовой ниже.
+        // Каталог недоступен — используем прежний резерв ниже.
       }
     }
     var spec = CuratedParameterCatalog.byId(id) ??
