@@ -15,11 +15,6 @@ import 'universal_catalog_adapter.dart';
 ///  2. запись каталога для конкретной модели, если она передана напрямую;
 ///  3. эвристику по идентификатору модели ([HeuristicRules]) — откат,
 ///     когда каталог недоступен или структура ответа не распознана.
-///
-/// Эвристика также выступает «предохранителем» против неверных данных
-/// каталога: если провайдер прислал неправильный тип (например,
-/// text->text для flux-schnell), [enforceHeuristicOverrides] принудительно
-/// восстанавливает маршрут генерации изображений и модальность выхода.
 abstract final class ModelInfoResolver {
   /// Адаптер каталога по идентификатору провайдера. Для известных
   /// провайдеров — специализированный адаптер; для остальных —
@@ -85,9 +80,8 @@ abstract final class ModelInfoResolver {
   }
 
   /// Заполняет generationSchema итоговой модели. Уже заданная схема
-  /// (пользовательское переопределение) имеет приоритет и не затирается;
-  /// иначе применяется каталог правил [CuratedParameterSchemas]
-  /// по провайдеру и идентификатору модели.
+  /// имеет приоритет и не затирается; иначе применяется каталог правил
+  /// [CuratedParameterSchemas] по провайдеру и идентификатору модели.
   static ModelInfo _withSchema(ModelInfo info) {
     if (info.generationSchema != null) return info;
     final out = info.outputModalities;
@@ -105,16 +99,18 @@ abstract final class ModelInfoResolver {
     return info.copyWith(generationSchema: schema);
   }
 
-  /// Принудительное обогащение по эвристике: если каталог провайдера
-  /// сообщил неверный тип модели, эвристика по идентификатору
-  /// восстанавливает маршрут и модальности выхода.
+  /// Для медиа-моделей Polza маршрут, полученный адаптером каталога,
+  /// не заменяется эвристикой по идентификатору.
   ///
-  /// Пример: провайдер отдаёт flux-schnell как text->text — модель
-  /// принудительно помечается маршрутом генерации изображений
-  /// ([GenerationRoute.imageGeneration]) и выходом [Modality.image].
-  /// Аналогично видео-семейства (kling, sora, wan ...) форсируются
-  /// в асинхронный видео-маршрут с выходом [Modality.video].
+  /// Для остальных провайдеров сохраняется прежнее поведение.
   static ModelInfo enforceHeuristicOverrides(ModelInfo info) {
+    if (info.providerId.trim().toLowerCase() == 'polza' &&
+        info.source == CapabilitySource.providerCatalog &&
+        (info.outputModalities.contains(Modality.image) ||
+            info.outputModalities.contains(Modality.video))) {
+      return info;
+    }
+
     final id = HeuristicRules.normalize(info.id);
     final heuristicRoute = HeuristicRules.inferRoute(id);
     if (heuristicRoute == GenerationRoute.imageGeneration) {
@@ -169,8 +165,7 @@ abstract final class ModelInfoResolver {
     return out;
   }
 
-  /// Индекс разобранного каталога по идентификатору модели —
-  /// удобно, чтобы позже достать запись для конкретной модели.
+  /// Индекс разобранного каталога по идентификатору модели.
   static Map<String, ModelInfo> indexById(List<ModelInfo> models) {
     return <String, ModelInfo>{
       for (final m in models) m.id: m,

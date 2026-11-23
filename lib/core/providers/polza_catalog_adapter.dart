@@ -5,13 +5,6 @@ import 'heuristic_rules.dart';
 import 'model_catalog_adapter.dart';
 
 /// Адаптер каталога Polza (GET {baseUrl}/models).
-///
-/// Формат ответа — OpenAI-совместимый:
-/// {"data": [{"id": "vendor/model", "name": "Модель", ...},
-///           ...]}
-/// Часть полей (модальности, маршрут, флаги) в ответе обычно отсутствует —
-/// они добираются эвристикой по идентификатору модели; цены и понятное имя
-/// берутся из каталога, поэтому источник помечается как [CapabilitySource.providerCatalog].
 class PolzaCatalogAdapter extends ModelCatalogAdapter {
   const PolzaCatalogAdapter();
 
@@ -37,9 +30,7 @@ class PolzaCatalogAdapter extends ModelCatalogAdapter {
   ModelInfo? parseModelEntry(Map<String, dynamic> entry) {
     final id = ((entry['id'] as String?) ?? '').trim();
     if (id.isEmpty) {
-      // Некоторые каталоги кладут идентификатор в 'name' или 'model'.
-      final fallback =
-          ((entry['model'] as String?) ?? '').trim();
+      final fallback = ((entry['model'] as String?) ?? '').trim();
       if (fallback.isEmpty) return null;
       final fb = HeuristicRules.build(
         fallback,
@@ -50,21 +41,56 @@ class PolzaCatalogAdapter extends ModelCatalogAdapter {
     }
 
     final name = ((entry['name'] as String?) ?? '').trim();
-    final base = HeuristicRules.build(id, displayName: name, providerId: providerId);
+    final base = HeuristicRules.build(
+      id,
+      displayName: name,
+      providerId: providerId,
+    );
     return _enrich(base, entry);
   }
 
-  /// Дополняет эвристическую модель данными каталога: цены, контекст.
-  /// Модальности каталог Polza в общем случае не сообщает, поэтому
-  /// эвристические значения остаются (они консервативны и безопасны).
   ModelInfo _enrich(ModelInfo base, Map<String, dynamic> entry) {
     final ctx = ModelCatalogAdapter.asInt(entry['context_length']) ??
         ModelCatalogAdapter.asInt(entry['contextLength']) ??
         ModelCatalogAdapter.asInt(entry['context_window']);
+
+    final type = (entry['type'] is String)
+        ? (entry['type'] as String).trim().toLowerCase()
+        : '';
+
+    Set<Modality>? inputModalities;
+    final architecture = entry['architecture'];
+    if (architecture is Map) {
+      final rawInput = architecture['input_modalities'];
+      if (rawInput is List) {
+        final parsed = <Modality>{};
+        for (final value in rawInput) {
+          final modality = Modality.fromName(value?.toString());
+          if (modality != null) parsed.add(modality);
+        }
+        if (parsed.isNotEmpty) inputModalities = parsed;
+      }
+    }
+
+    GenerationRoute? route;
+    Set<Modality>? outputModalities;
+    switch (type) {
+      case 'image':
+        route = GenerationRoute.imageGeneration;
+        outputModalities = const <Modality>{Modality.image};
+        break;
+      case 'video':
+        route = GenerationRoute.asyncJob;
+        outputModalities = const <Modality>{Modality.video};
+        break;
+    }
+
     return base.copyWith(
-      pricing:
-          ModelCatalogAdapter.parsePricing(entry) ?? base.pricing,
+      pricing: ModelCatalogAdapter.parsePricing(entry) ?? base.pricing,
       contextLength: ctx ?? base.contextLength,
+      inputModalities: outputModalities != null ? inputModalities : null,
+      outputModalities: outputModalities,
+      route: route,
       source: CapabilitySource.providerCatalog,
     );
   }
