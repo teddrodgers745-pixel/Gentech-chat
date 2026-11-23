@@ -5,28 +5,11 @@ import 'parsing/openrouter_parser.dart';
 import 'parsing/polza_parser.dart';
 import 'parsing/routerai_parser.dart';
 
-/// Разбирает уже декодированный ответ `GET {baseUrl}/models`
-/// в список [CatalogEntry], выбирая парсер по адресу провайдера.
-///
-/// Детект провайдера — по [baseUrl] (без учёта регистра):
-/// - содержит `polza.ai` → PolzaParser.parseEntry для каждой записи;
-/// - содержит `routerai.ru` → RouterAiParser.parseEntry для каждой записи;
-/// - содержит `openrouter.ai` → parseOpenRouterModel для каждой записи;
-/// - иначе → пустой список.
-///
-/// Реальные сигнатуры парсеров (сами парсеры не меняются):
-/// PolzaParser/RouterAiParser.parseEntry принимают ОДНУ запись
-/// Map<String, dynamic> + connectionId (их parseCatalogResponse берёт
-/// сырую строку ответа String, а не Map, поэтому здесь не используется);
-/// parseOpenRouterModel — top-level функция с одной картой записи.
-/// Идентификатор подключения диспетчеру не известен (его передаст
-/// ProviderCatalogService на следующем этапе), поэтому в parseEntry
-/// передаётся '' — нейтральное значение по умолчанию
-/// CatalogEntry.connectionId.
+/// Разбирает ответ каталога, выбирая парсер по адресу провайдера.
 List<CatalogEntry> parseModelsList(Map<String, dynamic> json, String baseUrl) {
-  final String u = baseUrl.trim().toLowerCase();
+  final u = baseUrl.trim().toLowerCase();
   if (u.contains('polza.ai')) {
-    return _parseEachEntry(json, (m) => PolzaParser.parseEntry(m, ''));
+    return _parseEachEntry(json, _parsePolzaEntry);
   }
   if (u.contains('routerai.ru')) {
     return _parseEachEntry(json, (m) => RouterAiParser.parseEntry(m, ''));
@@ -37,12 +20,78 @@ List<CatalogEntry> parseModelsList(Map<String, dynamic> json, String baseUrl) {
   return const <CatalogEntry>[];
 }
 
-/// Общий цикл разбора: список моделей берётся из `data` либо `models`
-/// (те же ключи, что принимают сами парсеры Polza/RouterAI), каждая
-/// запись безопасно приводится к `Map<String, dynamic>` (ключи-не-строки
-/// переводятся в строки) и разбирается [parseOne]. Записи не-Map,
-/// битые записи (исключение) и записи без идентификатора (null)
-/// пропускаются, не мешая остальным.
+/// Дополняет результат существующего парсера Polza исходной схемой.
+///
+/// Полная карта сохраняется в mediaParams['parameters']; CatalogEntry уже
+/// сериализует mediaParams в дисковый кэш. Отсутствующая схема не подменяется
+/// пустой: это позволяет отличить отсутствие данных от явно пустой схемы.
+CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
+  final entry = PolzaParser.parseEntry(raw, '');
+  if (entry == null) return null;
+
+  final rawParameters = raw['parameters'];
+  if (rawParameters is! Map) return entry;
+
+  final parameters = <String, dynamic>{
+    for (final item in rawParameters.entries)
+      if (item.key is String) item.key as String: item.value,
+  };
+  final mediaParams = <String, dynamic>{
+    ...entry.mediaParams,
+    'parameters': parameters,
+  };
+
+  // Остальные типы моделей сохраняют прежнее поведение парсера.
+  final type = (raw['type'] is String)
+      ? (raw['type'] as String).trim().toLowerCase()
+      : '';
+  if (type != 'image' && type != 'video') {
+    return entry.copyWith(mediaParams: mediaParams);
+  }
+
+  List<String> values(String key) {
+    final constraint = parameters[key];
+    if (constraint is! Map) return const <String>[];
+    final rawValues = constraint['values'] ?? constraint['enum'];
+    if (rawValues is! List) return const <String>[];
+    return <String>[
+      for (final value in rawValues)
+        if (value is String || value is num || value is bool) value.toString(),
+    ];
+  }
+
+  final sizes = values('size');
+  mediaParams['sizes'] = sizes;
+
+  final durations = <int>[];
+  for (final value in values('duration')) {
+    final parsed = int.tryParse(value);
+    if (parsed != null) durations.add(parsed);
+  }
+
+  final images = parameters['images'];
+  final maxImages = images is Map ? images['max'] : null;
+  int? maxReferenceImages;
+  if (maxImages is int) {
+    maxReferenceImages = maxImages;
+  } else if (maxImages is num && maxImages == maxImages.roundToDouble()) {
+    maxReferenceImages = maxImages.toInt();
+  } else if (maxImages is String) {
+    maxReferenceImages = int.tryParse(maxImages);
+  }
+
+  return entry.copyWith(
+    type: type,
+    aspectRatios: values('aspect_ratio'),
+    resolutions: values(type == 'image' ? 'image_resolution' : 'resolution'),
+    durations: durations,
+    qualities: values('quality'),
+    maxReferenceImages: maxReferenceImages,
+    mediaParams: mediaParams,
+  );
+}
+
+/// Битая запись каталога не мешает разбору остальных.
 List<CatalogEntry> _parseEachEntry(
   Map<String, dynamic> json,
   CatalogEntry? Function(Map<String, dynamic> m) parseOne,
@@ -59,7 +108,7 @@ List<CatalogEntry> _parseEachEntry(
               if (e.key != null) e.key.toString(): e.value,
           };
     try {
-      final CatalogEntry? parsed = parseOne(m);
+      final parsed = parseOne(m);
       if (parsed != null) out.add(parsed);
     } catch (_) {
       // Одна битая запись не роняет разбор остальных.

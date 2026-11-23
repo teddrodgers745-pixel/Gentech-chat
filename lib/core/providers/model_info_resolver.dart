@@ -9,17 +9,8 @@ import 'polza_catalog_adapter.dart';
 import 'universal_catalog_adapter.dart';
 
 /// Универсальный резолвер сведений о моделях.
-///
-/// Сводит воедино три источника:
-///  1. каталог провайдера (адаптер по [providerId]) — высший приоритет;
-///  2. запись каталога для конкретной модели, если она передана напрямую;
-///  3. эвристику по идентификатору модели ([HeuristicRules]) — откат,
-///     когда каталог недоступен или структура ответа не распознана.
 abstract final class ModelInfoResolver {
-  /// Адаптер каталога по идентификатору провайдера. Для известных
-  /// провайдеров — специализированный адаптер; для остальных —
-  /// [UniversalCatalogAdapter], разбирающий общие поля каталога.
-  /// null — идентификатор пуст.
+  /// Адаптер каталога по идентификатору провайдера.
   static ModelCatalogAdapter? adapterFor(String providerId) {
     final id = providerId.trim().toLowerCase();
     if (id.isEmpty) return null;
@@ -41,8 +32,6 @@ abstract final class ModelInfoResolver {
   }
 
   /// Разбирает полный ответ каталога через подходящий адаптер.
-  /// Возвращает пустой список, если ответ не разобран, — вызывающий
-  /// код в этом случае откатывается к эвристике.
   static List<ModelInfo> parseCatalog(
     String providerId,
     Map<String, dynamic> responseBody,
@@ -57,9 +46,8 @@ abstract final class ModelInfoResolver {
 
   /// Сведения об одной модели.
   ///
-  /// [catalogEntry] — запись каталога для этой модели, если известна:
-  /// она разбирается адаптером провайдера; при неудаче используется
-  /// эвристика. Без записи каталога работает только эвристика.
+  /// При наличии записи каталога она разбирается адаптером провайдера;
+  /// иначе используется эвристика.
   static ModelInfo resolveModel(
     String providerId,
     String rawModelId, {
@@ -79,11 +67,17 @@ abstract final class ModelInfoResolver {
     return _withSchema(HeuristicRules.build(id, providerId: providerId));
   }
 
-  /// Заполняет generationSchema итоговой модели. Уже заданная схема
-  /// имеет приоритет и не затирается; иначе применяется каталог правил
-  /// [CuratedParameterSchemas] по провайдеру и идентификатору модели.
+  /// Схема каталога имеет приоритет. Для медиа Polza её отсутствие не
+  /// восполняется курированными схемами: параметры модели неизвестны.
   static ModelInfo _withSchema(ModelInfo info) {
     if (info.generationSchema != null) return info;
+    if (info.providerId.trim().toLowerCase() == 'polza' &&
+        (info.outputModalities.contains(Modality.image) ||
+            info.outputModalities.contains(Modality.video) ||
+            info.route == GenerationRoute.imageGeneration ||
+            info.route == GenerationRoute.asyncJob)) {
+      return info;
+    }
     final out = info.outputModalities;
     final modality = out.contains(Modality.video)
         ? Modality.video
@@ -99,9 +93,7 @@ abstract final class ModelInfoResolver {
     return info.copyWith(generationSchema: schema);
   }
 
-  /// Для медиа-моделей Polza маршрут, полученный адаптером каталога,
-  /// не заменяется эвристикой по идентификатору.
-  ///
+  /// Для медиа-моделей Polza маршрут каталога не заменяется эвристикой.
   /// Для остальных провайдеров сохраняется прежнее поведение.
   static ModelInfo enforceHeuristicOverrides(ModelInfo info) {
     if (info.providerId.trim().toLowerCase() == 'polza' &&
@@ -135,9 +127,7 @@ abstract final class ModelInfoResolver {
     return info;
   }
 
-  /// Список моделей из ответа каталога с откатом к эвристике:
-  /// если адаптер не смог разобрать ответ, каждый идентификатор
-  /// (строка либо поле 'id' записи) превращается в [ModelInfo] эвристикой.
+  /// Список моделей из каталога с откатом к эвристике по идентификатору.
   static List<ModelInfo> resolveCatalogWithFallback(
     String providerId,
     Map<String, dynamic> responseBody,
