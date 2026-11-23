@@ -218,10 +218,11 @@ class AsyncJobExecutor extends GenerationExecutor {
       if (!_cancelled) {
         yield GenerationFailure(BadRequestError(details: e.message));
       }
-    } catch (e) {
+    } catch (e, st) {
       if (!_cancelled) {
+        // TEMP-DIAG-UNMODIFIABLE
         yield GenerationFailure(
-          NetworkError(details: 'Ошибка соединения: $e'),
+          NetworkError(details: 'Ошибка соединения: $e\n$st'),
         );
       } else {
         yield const GenerationFailure(
@@ -400,6 +401,9 @@ class AsyncJobExecutor extends GenerationExecutor {
       if (uri == null) continue;
       final http.Response resp;
       try {
+        if (isPolza) {
+          debugPrint('[MediaExec] Request body: $body');
+        }
         resp = await client
             .post(uri, headers: headers, body: body)
             .timeout(_requestTimeout);
