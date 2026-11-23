@@ -2,8 +2,7 @@
 
 /// Модель параметров генерации конкретной модели: какие пропорции,
 /// длительности, разрешения, размеры и качества она поддерживает.
-/// Данные приходят из курированного каталога (assets/data/models_curated.json)
-/// либо из пользовательского override (UserParamOverrideStore).
+/// Данные приходят из каталога либо пользовательского override.
 ///
 /// Нейтральная модель: значения — plain data, подписи и нормализацию
 /// под конкретный API делает существующий ParameterTranslator.
@@ -31,7 +30,8 @@ class DurationRange {
   /// длительность задаётся диапазоном min..max, если он известен.
   List<int>? discrete;
 
-  DurationRange({this.min, this.max, this.discrete});
+  DurationRange({this.min, this.max, List<int>? discrete})
+      : discrete = discrete == null ? null : List<int>.of(discrete);
 
   /// Есть ли хоть какие-то данные о длительности.
   bool get isEmpty =>
@@ -78,24 +78,22 @@ class ModelParameters {
   /// Допустимые уровни качества ('low', 'hd' ...).
   List<String> qualities;
 
-  /// Особые ограничения модели в свободной текстовой форме
-  /// ('no aspect_ratio, use size only', '4K only with 8s' ...).
+  /// Особые ограничения модели в свободной текстовой форме.
   List<String> constraints;
 
   /// Тип модели ('video' и т.п.); null — тип не задан (авто).
   String? type;
 
-  /// Достоверность данных: 'high' в курированном каталоге, 'auto' из
-  /// пресетов моделей, 'user' в пользовательских override, 'skip' —
-  /// модель не является генератором.
+  /// Достоверность данных.
   String confidence;
 
   /// true — параметры заданы пользователем (override), а не каталогом.
   bool isUserDefined;
 
+  /// Создаёт собственные изменяемые копии переданных списков.
   ModelParameters({
     List<String>? aspectRatios,
-    this.durations,
+    DurationRange? durations,
     List<String>? resolutions,
     List<String>? sizes,
     List<String>? qualities,
@@ -103,15 +101,20 @@ class ModelParameters {
     this.type,
     this.confidence = 'low',
     this.isUserDefined = false,
-  })  : aspectRatios = aspectRatios ?? <String>[],
+  })  : aspectRatios = List<String>.of(aspectRatios ?? const <String>[]),
+        durations = durations == null
+            ? null
+            : DurationRange(
+                min: durations.min,
+                max: durations.max,
+                discrete: durations.discrete,
+              ),
+        resolutions = List<String>.of(resolutions ?? const <String>[]),
+        sizes = List<String>.of(sizes ?? const <String>[]),
+        qualities = List<String>.of(qualities ?? const <String>[]),
+        constraints = List<String>.of(constraints ?? const <String>[]);
 
-        resolutions = resolutions ?? <String>[],
-        sizes = sizes ?? <String>[],
-        qualities = qualities ?? <String>[],
-        constraints = constraints ?? <String>[];
-
-  /// Пустая спецификация: данных о параметрах нет. Используется каталогом,
-  /// чтобы отличить «нет данных» от «модель не генератор» (confidence='skip').
+  /// Пустая спецификация: данных о параметрах нет.
   factory ModelParameters.unknown({String confidence = 'low'}) =>
       ModelParameters(confidence: confidence, isUserDefined: false);
 
@@ -136,7 +139,7 @@ class ModelParameters {
       };
 
   /// Терпимый разбор: отсутствующие поля -> пустые значения,
-  /// битые элементы пропускаются, разбор не роняет вызывающий код.
+  /// битые элементы пропускаются.
   factory ModelParameters.fromJson(Map<String, dynamic> j) {
     List<String> strings(Object? raw) {
       if (raw is! List) return <String>[];

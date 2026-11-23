@@ -20,17 +20,22 @@ List<CatalogEntry> parseModelsList(Map<String, dynamic> json, String baseUrl) {
   return const <CatalogEntry>[];
 }
 
-/// Дополняет результат существующего парсера Polza исходной схемой.
+/// Дополняет результат парсера Polza исходным типом и схемой параметров.
 ///
-/// Полная карта сохраняется в mediaParams['parameters']; CatalogEntry уже
-/// сериализует mediaParams в дисковый кэш. Отсутствующая схема не подменяется
-/// пустой: это позволяет отличить отсутствие данных от явно пустой схемы.
+/// Пустой тип остаётся пустым: определение запасного типа относится к
+/// вызывающей стороне. Полная карта параметров сохраняется в кэше через
+/// mediaParams['parameters'].
 CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
   final entry = PolzaParser.parseEntry(raw, '');
   if (entry == null) return null;
 
+  final type = raw['type'] is String
+      ? (raw['type'] as String).trim().toLowerCase()
+      : '';
   final rawParameters = raw['parameters'];
-  if (rawParameters is! Map) return entry;
+  if (rawParameters is! Map) {
+    return entry.copyWith(type: type);
+  }
 
   final parameters = <String, dynamic>{
     for (final item in rawParameters.entries)
@@ -41,27 +46,22 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
     'parameters': parameters,
   };
 
-  // Остальные типы моделей сохраняют прежнее поведение парсера.
-  final type = (raw['type'] is String)
-      ? (raw['type'] as String).trim().toLowerCase()
-      : '';
   if (type != 'image' && type != 'video') {
-    return entry.copyWith(mediaParams: mediaParams);
+    return entry.copyWith(type: type, mediaParams: mediaParams);
   }
 
   List<String> values(String key) {
     final constraint = parameters[key];
-    if (constraint is! Map) return const <String>[];
+    if (constraint is! Map) return <String>[];
     final rawValues = constraint['values'] ?? constraint['enum'];
-    if (rawValues is! List) return const <String>[];
+    if (rawValues is! List) return <String>[];
     return <String>[
       for (final value in rawValues)
         if (value is String || value is num || value is bool) value.toString(),
     ];
   }
 
-  final sizes = values('size');
-  mediaParams['sizes'] = sizes;
+  mediaParams['sizes'] = values('size');
 
   final durations = <int>[];
   for (final value in values('duration')) {
@@ -97,7 +97,7 @@ List<CatalogEntry> _parseEachEntry(
   CatalogEntry? Function(Map<String, dynamic> m) parseOne,
 ) {
   final dynamic data = json['data'] ?? json['models'];
-  if (data is! List) return const <CatalogEntry>[];
+  if (data is! List) return <CatalogEntry>[];
   final out = <CatalogEntry>[];
   for (final dynamic item in data) {
     if (item is! Map) continue;
