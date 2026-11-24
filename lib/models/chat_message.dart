@@ -8,6 +8,76 @@ const String toolStatusRunning = 'running';
 const String toolStatusDone = 'done';
 const String toolStatusError = 'error';
 
+/// Снимок запроса, необходимый для повторной генерации.
+///
+/// [route] содержит исходный маршрут: text, image или video.
+/// [connectionId] идентифицирует исходное подключение; секреты в снимке
+/// не хранятся. [connectionBaseUrl] позволяет обнаружить изменение адреса
+/// подключения. [typeOverride] равен null, если был выбран автоматический
+/// тип модели.
+///
+/// Некорректный снимок не следует считать отсутствующим: при повторе
+/// его необходимо отклонить с понятной ошибкой, а не выбирать маршрут
+/// заново.
+class GenerationSnapshot {
+  final String route;
+  final String modelId;
+  final String connectionId;
+  final String connectionBaseUrl;
+  final String prompt;
+  final String? typeOverride;
+  final Map<String, dynamic> parameters;
+
+  GenerationSnapshot({
+    required this.route,
+    required this.modelId,
+    required this.connectionId,
+    required this.connectionBaseUrl,
+    required this.prompt,
+    this.typeOverride,
+    Map<String, dynamic> parameters = const <String, dynamic>{},
+  }) : parameters = Map<String, dynamic>.unmodifiable(parameters);
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'route': route,
+        'modelId': modelId,
+        'connectionId': connectionId,
+        'connectionBaseUrl': connectionBaseUrl,
+        'prompt': prompt,
+        if (typeOverride != null) 'typeOverride': typeOverride,
+        'parameters': parameters,
+      };
+
+  factory GenerationSnapshot.fromJson(Object? raw) {
+    final j = raw is Map ? raw : const <String, dynamic>{};
+    final rawParams = j['parameters'];
+    final params = <String, dynamic>{};
+    if (rawParams is Map) {
+      for (final entry in rawParams.entries) {
+        if (entry.key is String) {
+          params[entry.key as String] = entry.value;
+        }
+      }
+    }
+
+    String stringValue(String key) {
+      final value = j[key];
+      return value is String ? value : '';
+    }
+
+    final rawOverride = j['typeOverride'];
+    return GenerationSnapshot(
+      route: stringValue('route'),
+      modelId: stringValue('modelId'),
+      connectionId: stringValue('connectionId'),
+      connectionBaseUrl: stringValue('connectionBaseUrl'),
+      prompt: stringValue('prompt'),
+      typeOverride: rawOverride is String ? rawOverride : null,
+      parameters: params,
+    );
+  }
+}
+
 class ChatMessage {
   final String id;
   final String role;
@@ -33,6 +103,9 @@ class ChatMessage {
   /// Для обычных текстовых сообщений список пуст.
   final List<MessagePart> parts;
 
+  /// Исходный запрос для повтора. В старой истории отсутствует.
+  final GenerationSnapshot? generationSnapshot;
+
   final DateTime createdAt;
 
   ChatMessage({
@@ -47,6 +120,7 @@ class ChatMessage {
     this.errorCode = '',
     this.errorText = '',
     List<MessagePart>? parts,
+    this.generationSnapshot,
     DateTime? createdAt,
   })  : parts = parts ?? <MessagePart>[],
         createdAt = createdAt ?? DateTime.now();
@@ -67,6 +141,8 @@ class ChatMessage {
         'parts': <Map<String, dynamic>>[
           for (final p in parts) _encodePart(p),
         ],
+        if (generationSnapshot != null)
+          'generationSnapshot': generationSnapshot!.toJson(),
         'createdAt': createdAt.toIso8601String(),
       };
 
@@ -82,6 +158,9 @@ class ChatMessage {
         errorCode: (j['errorCode'] as String?) ?? '',
         errorText: (j['errorText'] as String?) ?? '',
         parts: _decodeParts(j['parts']),
+        generationSnapshot: j.containsKey('generationSnapshot')
+            ? GenerationSnapshot.fromJson(j['generationSnapshot'])
+            : null,
         createdAt:
             DateTime.tryParse((j['createdAt'] as String?) ?? '') ??
                 DateTime.now(),
