@@ -56,6 +56,20 @@ import 'live_screen.dart';
 import 'quick_access_sheet.dart';
 import 'settings_screen.dart';
 
+/// Подключение, восстановленное из снимка для повтора: адрес, ключ и
+/// модель именно того запроса, а не текущего выбора пользователя.
+class _RetryConn {
+  final String baseUrl;
+  final String apiKey;
+  final String model;
+
+  const _RetryConn({
+    required this.baseUrl,
+    required this.apiKey,
+    required this.model,
+  });
+}
+
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
 
@@ -659,6 +673,94 @@ class _ChatScreenState extends State<ChatScreen> {
     await _runCompletion(chat, userApiContent: apiContent);
   }
 
+  /// Текущий тип-переопределение модели (null — «Авто»); пишется в снимок.
+  Future<String?> _typeOverrideFor(String modelId) async {
+    try {
+      return await ModelTypeOverrideStore.instance.loadOverride(modelId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Идентификатор активного подключения по той же логике, что
+  /// GenerationService._connectionIdFor; пишется в снимок запроса и
+  /// сравнивается при повторе.
+  String? _snapshotConnectionId() {
+    final cfg = effectiveConfig();
+    final url = cfg.baseUrl.trim().toLowerCase();
+    final key = cfg.apiKey.trim();
+    final pr = presets.active;
+    if (url.contains('polza.ai')) return 'polza';
+    if (pr != null &&
+        pr.id != PresetStore.defaultPresetId &&
+        pr.baseUrl.trim().isNotEmpty &&
+        pr.apiKey.trim().isNotEmpty) {
+      return 'preset:${pr.id}';
+    }
+    if (url.isEmpty || key.isEmpty) {
+      if (polzaAuth.isAuthenticated &&
+          polzaAuth.accessToken.trim().isNotEmpty) {
+        return 'polza';
+      }
+      return null;
+    }
+    if (url.contains('routerai')) return 'routerai';
+    if (pr != null &&
+        pr.baseUrl.trim().isNotEmpty &&
+        pr.apiKey.trim().isNotEmpty) {
+      return 'preset:${pr.id}';
+    }
+    return 'global';
+  }
+
+  /// Восстанавливает подключение из снимка. Возвращает null, если
+  /// подключение сменилось и восстановить его нельзя (тогда повтор
+  /// показывает понятную ошибку, а не молча уходит в текстовый чат).
+  _RetryConn? _retryConnFor(GenerationSnapshot snap) {
+    final cfg = effectiveConfig();
+    final snapId = snap.connectionId.trim();
+    final curId = _snapshotConnectionId();
+    final model = snap.modelId.trim().isNotEmpty
+        ? snap.modelId.trim()
+        : cfg.model.trim();
+
+    // Снимок без id подключения (совместимость) либо совпадение с текущим:
+    // используем текущие адрес и ключ.
+    if (snapId.isEmpty || snapId == curId) {
+      if (cfg.apiKey.trim().isEmpty) return null;
+      return _RetryConn(
+        baseUrl: cfg.baseUrl.trim(),
+        apiKey: cfg.apiKey.trim(),
+        model: model,
+      );
+    }
+
+    // Подключение из снимка отличается от текущего — восстанавливаем его.
+    // Polza OAuth восстанавливается независимо от активного пресета.
+    if (snapId == 'polza') {
+      final token =
+          polzaAuth.isAuthenticated ? polzaAuth.accessToken.trim() : '';
+      if (token.isEmpty) return null;
+      return _RetryConn(
+        baseUrl: PolzaAuthService.polzaBaseUrl,
+        apiKey: token,
+        model: model,
+      );
+    }
+    // Прочие подключения (пресет/global/routerai) при смене недоступны.
+    return null;
+  }
+
+  /// Понятный текст ошибки, когда подключение из снимка восстановить нельзя.
+  String _retryConnectionError(GenerationSnapshot snap) {
+    final id = snap.connectionId.trim();
+    if (id == 'polza') {
+      return 'Сессия Polza истекла. Войдите заново и повторите запрос.';
+    }
+    return 'Подключение, использованное для этого запроса, больше недоступно. '
+        'Выберите его в настройках и повторите.';
+  }
+
   /// Генерация изображения: результат попадает в чат как сообщение
   /// ассистента с markdown-ссылкой на изображение.
   Future<void> _sendImage(String txt) async {
@@ -667,39 +769,79 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     final chat = store.current ?? store.createChat();
-    final reply = ChatMessage(id: newId(), role: 'assistant');
-    chat.messages.add(ChatMessage(id: newId(), role: 'user', content: txt));
-    chat.messages.add(reply);
+    final cfg = effectiveConfig();
+    final modelId = cfg.model.trim();
+    final params = <String, dynamic>{
+      ParamKeys.aspectRatio: _aspectRatio,
+      if ((_mediaResolution ?? '').trim().isNotEmpty)
+        ParamKeys.resolution: _mediaResolution!.trim(),
+      if ((_mediaQuality ?? '').trim().isNotEmpty)
+        ParamKeys.quality: _mediaQuality!.trim(),
+    };
+    final override = await _typeOverrideFor(modelId);
+    final snap = GenerationSnapshot(
+      route: ModelTypes.image,
+      modelId: modelId,
+      connectionId: _snapshotConnectionId() ?? '',
+      connectionBaseUrl: cfg.baseUrl.trim(),
+      prompt: txt,
+      typeOverride: override,
+      parameters: params,
+    );
+    chat.messages.add(ChatMessage(
+      id: newId(),
+      role: 'user',
+      content: txt,
+      generationSnapshot: snap,
+    ));
     if (chat.title == 'Новый чат') {
       chat.title = txt.length > 40 ? '${txt.substring(0, 40)}…' : txt;
     }
     _input.clear();
+    await _generateImage(
+      chat: chat,
+      prompt: txt,
+      conn: _RetryConn(
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        model: modelId,
+      ),
+      parameters: params,
+    );
+  }
+
+  /// Общий путь генерации изображения (используется и при отправке,
+  /// и при повторе из снимка).
+  Future<void> _generateImage({
+    required Chat chat,
+    required String prompt,
+    required _RetryConn conn,
+    required Map<String, dynamic> parameters,
+  }) async {
+    final reply = ChatMessage(id: newId(), role: 'assistant');
+    chat.messages.add(reply);
     setState(() => _streaming = true);
     store.touch(chat);
     _toEnd();
 
-    final cfg = effectiveConfig();
+    final model = conn.model.trim();
+    final rawRatio = parameters[ParamKeys.aspectRatio]?.toString().trim() ?? '';
+    final aspectRatio = rawRatio.isNotEmpty ? rawRatio : '1:1';
     final estimate = CostEstimator.estimate(
-      modelId: cfg.model,
-      prompt: txt,
+      modelId: model,
+      prompt: prompt,
     );
-    final executor = ImagesApiExecutor(aspectRatio: _aspectRatio);
+    final executor = ImagesApiExecutor(aspectRatio: aspectRatio);
     _imageExecutor = executor;
     final request = GenerationRequest(
-      baseUrl: cfg.baseUrl,
-      apiKey: cfg.apiKey,
-      model: cfg.model,
+      baseUrl: conn.baseUrl,
+      apiKey: conn.apiKey,
+      model: model,
       messages: <Map<String, dynamic>>[
-        <String, dynamic>{'role': 'user', 'content': txt},
+        <String, dynamic>{'role': 'user', 'content': prompt},
       ],
       stream: false,
-      parameters: <String, dynamic>{
-        ParamKeys.aspectRatio: _aspectRatio,
-        if ((_mediaResolution ?? '').trim().isNotEmpty)
-          ParamKeys.resolution: _mediaResolution!.trim(),
-        if ((_mediaQuality ?? '').trim().isNotEmpty)
-          ParamKeys.quality: _mediaQuality!.trim(),
-      },
+      parameters: parameters,
       estimatedUsd: estimate.estimatedUsd,
     );
     GenError? genError;
@@ -728,7 +870,7 @@ class _ChatScreenState extends State<ChatScreen> {
     } else {
       final usd = estimate.estimatedUsd ?? 0.0;
       final costRub = usd > 0 ? usd * 95.0 : 1.5;
-      final tokens = (txt.length / 4).ceil().clamp(1, 100000);
+      final tokens = (prompt.length / 4).ceil().clamp(1, 100000);
       final imgCost = MessageCost(
         promptTokens: tokens,
         completionTokens: 0,
@@ -753,6 +895,56 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     final chat = store.current ?? store.createChat();
+    final cfg = effectiveConfig();
+    final modelId = cfg.model.trim();
+    final params = <String, dynamic>{
+      ParamKeys.aspectRatio: _aspectRatio,
+      if (_videoDuration != null) ParamKeys.duration: _videoDuration!,
+      if ((_mediaResolution ?? '').trim().isNotEmpty)
+        ParamKeys.resolution: _mediaResolution!.trim(),
+      if ((_mediaQuality ?? '').trim().isNotEmpty)
+        ParamKeys.quality: _mediaQuality!.trim(),
+    };
+    final override = await _typeOverrideFor(modelId);
+    final snap = GenerationSnapshot(
+      route: ModelTypes.video,
+      modelId: modelId,
+      connectionId: _snapshotConnectionId() ?? '',
+      connectionBaseUrl: cfg.baseUrl.trim(),
+      prompt: txt,
+      typeOverride: override,
+      parameters: params,
+    );
+    chat.messages.add(ChatMessage(
+      id: newId(),
+      role: 'user',
+      content: txt,
+      generationSnapshot: snap,
+    ));
+    if (chat.title == 'Новый чат') {
+      chat.title = txt.length > 40 ? '${txt.substring(0, 40)}…' : txt;
+    }
+    _input.clear();
+    await _generateVideo(
+      chat: chat,
+      prompt: txt,
+      conn: _RetryConn(
+        baseUrl: cfg.baseUrl,
+        apiKey: cfg.apiKey,
+        model: modelId,
+      ),
+      parameters: params,
+    );
+  }
+
+  /// Общий путь генерации видео (/v1/media через AsyncJobExecutor,
+  /// тот же, что и при обычной отправке; используется и при повторе).
+  Future<void> _generateVideo({
+    required Chat chat,
+    required String prompt,
+    required _RetryConn conn,
+    required Map<String, dynamic> parameters,
+  }) async {
     final reply = ChatMessage(
       id: newId(),
       role: 'assistant',
@@ -760,37 +952,27 @@ class _ChatScreenState extends State<ChatScreen> {
         const PendingPart(name: 'Генерация видео'),
       ],
     );
-    chat.messages.add(ChatMessage(id: newId(), role: 'user', content: txt));
     chat.messages.add(reply);
-    if (chat.title == 'Новый чат') {
-      chat.title = txt.length > 40 ? '${txt.substring(0, 40)}…' : txt;
-    }
-    _input.clear();
     setState(() => _streaming = true);
     store.touch(chat);
     _toEnd();
 
-    final cfg = effectiveConfig();
+    final model = conn.model.trim();
     final request = GenerationRequest(
-      baseUrl: cfg.baseUrl,
-      apiKey: cfg.apiKey,
-      model: cfg.model,
+      baseUrl: conn.baseUrl,
+      apiKey: conn.apiKey,
+      model: model,
       messages: <Map<String, dynamic>>[
-        <String, dynamic>{'role': 'user', 'content': txt},
+        <String, dynamic>{'role': 'user', 'content': prompt},
       ],
       stream: false,
-      parameters: <String, dynamic>{
-        ParamKeys.aspectRatio: _aspectRatio,
-        if (_videoDuration != null) ParamKeys.duration: _videoDuration!,
-        if ((_mediaResolution ?? '').trim().isNotEmpty)
-          ParamKeys.resolution: _mediaResolution!.trim(),
-        if ((_mediaQuality ?? '').trim().isNotEmpty)
-          ParamKeys.quality: _mediaQuality!.trim(),
-      },
+      parameters: parameters,
       estimatedUsd: CostEstimator.estimate(
-        modelId: cfg.model,
-        prompt: txt,
+        modelId: model,
+        prompt: prompt,
       ).estimatedUsd,
+      // Гарантируем видео-маршрут: повтор не должен уйти в текстовый чат.
+      routeHint: ModelTypes.video,
     );
     GenError? genError;
     var cancelled = false;
@@ -962,18 +1144,85 @@ class _ChatScreenState extends State<ChatScreen> {
     return true;
   }
 
+  /// Повтор последнего запроса. Читает снимок из user-сообщения и
+  /// воспроизводит ИСХОДНЫЙ маршрут: видео -> /v1/media, картинка ->
+  /// images API, текст -> _runCompletion. Без снимка (старая история) —
+  /// ведёт себя как раньше (текстовый повтор), без падения.
   Future<void> _regenerate() async {
     final chat = store.current;
     if (chat == null || chat.messages.isEmpty || _streaming) return;
-    if (effectiveConfig().apiKey.isEmpty) {
-      _snack('Создайте и выберите профиль модели в настройках');
-      return;
-    }
     if (chat.messages.last.role == 'assistant') chat.messages.removeLast();
     if (chat.messages.isEmpty) return;
     _atBottom = true;
     _userScrolledUp = false;
-    await _runCompletion(chat);
+
+    final last = chat.messages.last;
+    final snap = last.role == 'user' ? last.generationSnapshot : null;
+
+    // Старая история без снимка либо текстовый маршрут — как раньше.
+    if (snap == null) {
+      if (effectiveConfig().apiKey.isEmpty) {
+        _snack('Создайте и выберите профиль модели в настройках');
+        return;
+      }
+      await _runCompletion(chat);
+      return;
+    }
+
+    final route = snap.route.trim().toLowerCase();
+    if (route.isEmpty) {
+      await _addGenErrorBubble(
+        'Не удалось восстановить маршрут запроса из снимка. '
+        'Отправьте запрос заново.',
+      );
+      return;
+    }
+    if (route == ModelTypes.text) {
+      if (effectiveConfig().apiKey.isEmpty) {
+        _snack('Создайте и выберите профиль модели в настройках');
+        return;
+      }
+      await _runCompletion(chat);
+      return;
+    }
+    if (route != ModelTypes.image && route != ModelTypes.video) {
+      await _addGenErrorBubble(
+        'Не удалось восстановить маршрут запроса из снимка. '
+        'Отправьте запрос заново.',
+      );
+      return;
+    }
+    if (snap.prompt.trim().isEmpty) {
+      await _addGenErrorBubble(
+        'В снимке запроса нет промпта — отправьте запрос заново.',
+      );
+      return;
+    }
+
+    // Восстановление подключения из снимка: если сменилось или OAuth истёк —
+    // понятная ошибка в карточке, а не молчаливый текстовый чат.
+    final conn = _retryConnFor(snap);
+    if (conn == null) {
+      await _addGenErrorBubble(_retryConnectionError(snap));
+      return;
+    }
+
+    final params = Map<String, dynamic>.of(snap.parameters);
+    if (route == ModelTypes.video) {
+      await _generateVideo(
+        chat: chat,
+        prompt: snap.prompt,
+        conn: conn,
+        parameters: params,
+      );
+    } else {
+      await _generateImage(
+        chat: chat,
+        prompt: snap.prompt,
+        conn: conn,
+        parameters: params,
+      );
+    }
   }
 
   void _stop() {

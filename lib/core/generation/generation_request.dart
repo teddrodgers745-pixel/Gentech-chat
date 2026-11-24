@@ -39,6 +39,12 @@ class GenerationRequest {
   /// [ParameterTranslator] в исполнителе; пустая карта — параметров нет.
   final Map<String, dynamic> parameters;
 
+  /// Подсказка маршрута из снимка повтора ('text'/'image'/'video').
+  /// Задана — исполнитель выбирается по ней (повтор воспроизводит исходный
+  /// маршрут). null — исполнитель выбирается как обычно: ручной override,
+  /// затем тип из каталога.
+  final String? routeHint;
+
   const GenerationRequest({
     required this.baseUrl,
     required this.apiKey,
@@ -50,11 +56,12 @@ class GenerationRequest {
     this.tools = const <Tool>[],
     this.estimatedUsd,
     this.parameters = const <String, dynamic>{},
+    this.routeHint,
   });
 
   @override
   String toString() =>
       'GenerationRequest(model: $model, messages: ${messages.length}, '
-      'stream: $stream, tools: ${tools.length})';
+      'stream: $stream, tools: ${tools.length}, '
+      'routeHint: ${routeHint ?? '-'})';
 }
-

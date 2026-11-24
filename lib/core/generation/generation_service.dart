@@ -65,6 +65,15 @@ class GenerationService {
     final modelId = request.model.trim();
     if (modelId.isEmpty) return null;
 
+    // Маршрут из снимка повтора: воспроизводим исходный исполнитель,
+    // не полагаясь на текущее состояние каталога или ручного override.
+    // Так повтор видео гарантированно идёт в /v1/media, а не в текстовый
+    // чат, даже если каталог/override с тех пор изменились.
+    final hint = (request.routeHint ?? '').trim().toLowerCase();
+    if (hint == ModelTypes.image) return ImagesApiExecutor();
+    if (hint == ModelTypes.video) return AsyncJobExecutor();
+    if (hint == ModelTypes.text) return ChatCompletionsExecutor();
+
     // Как и в effectiveType, ручной выбор побеждает тип каталога.
     final overrides = ModelTypeOverrideStore.instance;
     final norm = HeuristicRules.normalize(modelId);
