@@ -25,6 +25,10 @@ List<CatalogEntry> parseModelsList(Map<String, dynamic> json, String baseUrl) {
 /// Пустой тип остаётся пустым: определение запасного типа относится к
 /// вызывающей стороне. Полная карта параметров сохраняется в кэше через
 /// mediaParams['parameters'].
+///
+/// Сырые блоки цен сохраняются отдельно от плоской карты pricing_tiers:
+/// условия, валюта и единицы не должны теряться при сериализации кэша.
+/// Само сохранение не означает, что оценщик уже умеет рассчитывать цену.
 CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
   final entry = PolzaParser.parseEntry(raw, '');
   if (entry == null) return null;
@@ -32,19 +36,34 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
   final type = raw['type'] is String
       ? (raw['type'] as String).trim().toLowerCase()
       : '';
+  final mediaParams = <String, dynamic>{...entry.mediaParams};
+
+  final modelPricing = raw['pricing'];
+  if (modelPricing is Map) {
+    mediaParams['model_pricing_raw'] = <String, dynamic>{
+      for (final item in modelPricing.entries)
+        if (item.key is String) item.key as String: item.value,
+    };
+  }
+  final topProvider = raw['top_provider'];
+  final topPricing = topProvider is Map ? topProvider['pricing'] : null;
+  if (topPricing is Map) {
+    mediaParams['top_provider_pricing_raw'] = <String, dynamic>{
+      for (final item in topPricing.entries)
+        if (item.key is String) item.key as String: item.value,
+    };
+  }
+
   final rawParameters = raw['parameters'];
   if (rawParameters is! Map) {
-    return entry.copyWith(type: type);
+    return entry.copyWith(type: type, mediaParams: mediaParams);
   }
 
   final parameters = <String, dynamic>{
     for (final item in rawParameters.entries)
       if (item.key is String) item.key as String: item.value,
   };
-  final mediaParams = <String, dynamic>{
-    ...entry.mediaParams,
-    'parameters': parameters,
-  };
+  mediaParams['parameters'] = parameters;
 
   if (type != 'image' && type != 'video') {
     return entry.copyWith(type: type, mediaParams: mediaParams);

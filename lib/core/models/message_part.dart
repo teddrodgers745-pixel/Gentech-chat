@@ -64,18 +64,21 @@ class MessageCost {
         completionTokens: (j['completionTokens'] as num?)?.toInt() ?? 0,
       );
 
-  /// Разбор статистики использования провайдера (usage из ответа
-  /// /chat/completions): стоимость из полей cost/total_cost, валюта из
-  /// currency, токены из prompt_tokens/completion_tokens.
-  /// null — данных недостаточно, строку стоимости не показываем.
+  /// Разбор статистики использования провайдера.
+  ///
+  /// Если присутствует cost_rub, это фактическая сумма в рублях и она
+  /// имеет приоритет над cost/total_cost. Для ответов без cost_rub
+  /// сохраняется прежний порядок разбора и прежнее поведение.
   static MessageCost? fromUsage(Map<String, dynamic>? usage) {
     final u = usage;
     if (u == null) return null;
-    final cost = _num(u['cost']) ?? _num(u['total_cost']);
+    final costRub = _num(u['cost_rub']);
+    final cost = costRub ?? _num(u['cost']) ?? _num(u['total_cost']);
     final prompt = _num(u['prompt_tokens'])?.toInt() ?? 0;
     final completion = _num(u['completion_tokens'])?.toInt() ?? 0;
     if (cost == null && prompt == 0 && completion == 0) return null;
-    final currency = (u['currency'] as String?) ?? 'USD';
+    final currency =
+        costRub != null ? 'RUB' : ((u['currency'] as String?) ?? 'USD');
     return MessageCost(
       cost: cost ?? 0,
       currency: currency,
