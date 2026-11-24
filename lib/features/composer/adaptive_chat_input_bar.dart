@@ -130,13 +130,20 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
     return <String>[for (final r in ImageGenMode.aspectRatios) r.id];
   }
 
+  /// Длительности для чипсов панели: только значения, перечисленные
+  /// каталогом (`duration.values`), либо заданные пользователем.
+  /// Диапазон min..max значениями не считается: у Seedance в каталоге
+  /// Polza есть лишь границы 4..15 и default 15, поэтому выдуманных
+  /// чипсов (5 с, 8 с и т.п.) быть не должно — дефолт берётся из каталога
+  /// через [ActiveModelController].
   List<int> _availableDurations() {
     final ov = _override?.durations;
     if (ov != null && !ov.isEmpty) return _durationList(ov);
     final d = widget.capabilities.params?.durations;
-    if (d != null && !d.isEmpty) return _durationList(d);
-    if (_isVideoMode) return const <int>[5, 10];
-    return const <int>[];
+    if (d == null || d.isEmpty) return const <int>[];
+    final disc = d.discrete;
+    if (disc == null || disc.isEmpty) return const <int>[];
+    return List<int>.of(disc);
   }
 
   /// Длительности из диапазона/списка: дискретный список либо шаг 5 с
@@ -184,7 +191,10 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
         _selectedDuration = durations.first;
       }
     } else {
-      _selectedDuration = null;
+      // Каталог не перечислил значения (только диапазон min..max):
+      // сохраняем дефолт из каталога (например, 15 с у Seedance),
+      // а не стираем выбор и не подставляем первый элемент списка.
+      _selectedDuration = ActiveModelController.selectedDuration;
     }
     final resolutions = _availableResolutions();
     if (resolutions.isNotEmpty) {
