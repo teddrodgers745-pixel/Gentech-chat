@@ -794,26 +794,14 @@ class ProviderCatalogService extends ChangeNotifier {
       );
       unknown = false;
     }
-    return CatalogEntry(
-      connectionId: e.connectionId,
-      id: e.id,
-      name: e.name,
+    // Сохраняем все поля исходной записи, включая mediaParams со схемой
+    // модели, границами и дефолтом duration. Fallback reasoning не должен
+    // удалять данные каталога.
+    return e.copyWith(
       type: type,
-      contextLength: e.contextLength,
-      maxCompletionTokens: e.maxCompletionTokens,
       reasoning: reasoning,
       reasoningUnknown: unknown,
-      supportsTools: e.supportsTools,
-      aspectRatios: e.aspectRatios,
-      resolutions: e.resolutions,
-      durations: e.durations,
-      qualities: e.qualities,
-      maxReferenceImages: e.maxReferenceImages,
-      priceIn: e.priceIn,
-      priceOut: e.priceOut,
-      currency: e.currency,
-      capabilitiesSource: e.capabilitiesSource,
-      priceSource: e.priceSource,
+      clearReasoningUnknown: !unknown,
     );
   }
 }

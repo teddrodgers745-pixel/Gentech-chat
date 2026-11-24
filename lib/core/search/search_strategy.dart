@@ -31,7 +31,7 @@ abstract final class SearchModes {
   static SearchMode fromId(String id) {
     final s = id.trim().toLowerCase();
     for (final m in SearchMode.values) {
-      if (m.name == s) return m;
+      if (m.name.toLowerCase() == s) return m;
     }
     return SearchMode.off;
   }
@@ -40,7 +40,7 @@ abstract final class SearchModes {
   static bool isKnownId(String id) {
     final s = id.trim().toLowerCase();
     for (final m in SearchMode.values) {
-      if (m.name == s) return true;
+      if (m.name.toLowerCase() == s) return true;
     }
     return false;
   }
@@ -84,7 +84,7 @@ class SearchResult {
 
   @override
   String toString() =>
-      'SearchResult(query: $query, hits: ${hits.length}, ok: $ok)';
+      'SearchResult(query: $query, hits: ${hits.length}, error: $error)';
 }
 
 /// Интерфейс стратегии поиска: реализуется конкретными источниками
