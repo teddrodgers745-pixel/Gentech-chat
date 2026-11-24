@@ -53,21 +53,17 @@ class _CreateResult {
 
 /// Исполнитель асинхронных видео-задач (kling, veo, sora, wan ...).
 ///
-/// Схема Polza Media API (https://polza.ai/docs/api-reference/media/create.md,
-/// https://polza.ai/docs/api-reference/media/status.md):
-///  1. POST {baseUrl}/media с телом {model, input: {...}, async: true} —
-///     получаем `id` и `status` (`pending`/`processing`/`completed`/`failed`);
-///  2. Если `status == completed` и `data.url` уже есть — сразу скачиваем;
-///  3. Иначе опрашиваем GET {baseUrl}/media/{id} каждые 4 секунды
-///     (интервал 3-5 с по документации), проверяем статусы
-///     `pending`, `processing`, `completed`, `failed`, извлекаем URL
-///     из `data.url` или `output`.
+/// Схема Polza Media API:
+///  1. POST {baseUrl}/media с телом {model, input: {...}, async: true};
+///  2. При готовом результате сразу скачиваем его;
+///  3. Иначе опрашиваем GET {baseUrl}/media/{id} каждые 5 секунд.
+/// Для Polza запасные REST-эндпоинты не используются.
 class AsyncJobExecutor extends GenerationExecutor {
-  static const Duration _pollInterval = Duration(seconds: 4);
+  static const Duration _pollInterval = Duration(seconds: 5);
   static const int _maxAttempts = 150;
   static const Duration _requestTimeout = Duration(seconds: 60);
 
-  /// Пути создания задачи: первый удачный; 404/405 -> следующий.
+  /// Пути создания задачи для провайдеров, отличных от Polza.
   static const List<String> _createPaths = <String>[
     '/media',
     '/v1/media',
@@ -76,7 +72,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     '/videos',
   ];
 
-  /// Пути опроса статуса (к каждому добавляется идентификатор задачи).
+  /// Пути опроса для провайдеров, отличных от Polza.
   static const List<String> _pollPrefixes = <String>[
     '/media/',
     '/v1/media/',
@@ -101,8 +97,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     'created', 'submitted', 'generating', 'modifying', 'started',
   };
 
-  /// Активные исполнители по jobId — для отмены из интерфейса
-  /// (кнопка «Отменить» на карточке PendingPart).
+  /// Активные исполнители по jobId — для отмены из интерфейса.
   static final Map<String, AsyncJobExecutor> _active =
       <String, AsyncJobExecutor>{};
 
@@ -113,12 +108,10 @@ class AsyncJobExecutor extends GenerationExecutor {
   /// (Documents/GenTech/debug/video_<timestamp>.log); null — недоступен.
   String? debugLogPath;
 
-  /// События задачи для сниппетов PendingPart (create/poll, с отсечкой
-  /// хвоста, чтобы список не рос бесконечно).
+  /// События задачи для сниппетов PendingPart.
   final List<String> _snippets = <String>[];
 
-  /// Raw-тело последнего ответа создания задачи (до jsonDecode) —
-  /// для сниппета диагностики 'create: ...'.
+  /// Raw-тело последнего ответа создания задачи.
   String rawCreateBody = '';
 
   /// Сниппет 'file: <путь>' добавляется в debugSnippets один раз.
@@ -131,7 +124,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     _active[id]?._cancelled = true;
   }
 
-  /// Отменяет все активные задачи (кнопка «стоп»).
+  /// Отменяет все активные задачи.
   static void cancelAll() {
     for (final e in _active.values) {
       e._cancelled = true;
@@ -197,8 +190,6 @@ class AsyncJobExecutor extends GenerationExecutor {
       _jobId = record.jobId;
       _active[_jobId] = this;
       await ActiveJobsStore.instance.save(record);
-      // Первый прогресс сразу после создания: интерфейс узнаёт jobId и
-      // стартовый процент (>0, чтобы индикатор не зависал на 0%).
       yield GenProgress(
         jobId: record.jobId,
         percent: 5,
@@ -221,8 +212,20 @@ class AsyncJobExecutor extends GenerationExecutor {
     } catch (e, st) {
       if (!_cancelled) {
         // TEMP-DIAG-UNMODIFIABLE
-        yield GenerationFailure(
-          NetworkError(details: 'Ошибка соединения: $e\n$st'),
+        // TODO(2026-12-31): удалить после установления причины исключения.
+        // Стек остаётся в локальной диагностике, но не попадает в карточку.
+        await _logJson(<String, dynamic>{
+          'phase': 'exception',
+          'exceptionType': e.runtimeType.toString(),
+          'stack': st.toString(),
+        });
+        if (kDebugMode) {
+          debugPrint(
+            '[TEMP-DIAG-UNMODIFIABLE] ${e.runtimeType}\n$st',
+          );
+        }
+        yield const GenerationFailure(
+          NetworkError(details: 'Не удалось выполнить генерацию видео.'),
         );
       } else {
         yield const GenerationFailure(
@@ -237,8 +240,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
   }
 
-  /// Продолжает ранее созданную задачу после перезапуска приложения:
-  /// без повторного создания — сразу цикл опроса статуса.
+  /// Продолжает ранее созданную задачу после перезапуска приложения.
   Stream<GenerationEvent> resume(AsyncJobRecord record) async* {
     _cancelled = false;
     _jobId = record.jobId;
@@ -265,7 +267,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
   }
 
-  /// Цикл опроса: каждые 4 секунды (3-5 с по доке Polza), максимум 150 попыток.
+  /// Цикл опроса: каждые 5 секунд, максимум 150 попыток.
   Stream<GenerationEvent> _watch(
     http.Client client,
     String base,
@@ -376,9 +378,6 @@ class AsyncJobExecutor extends GenerationExecutor {
     final isPolza = providerId == 'polza' ||
         base.toLowerCase().contains('polza.ai');
     debugPrint('[PolzaVideo] create: async=true (video route: $isVideoModel)');
-    // Polza Media API: тело — {model, input: {...}, async}. Параметры
-    // генерации (aspect_ratio/duration/resolution) лежат ВНУТРИ input,
-    // иначе провайдер их игнорирует (и генерация идёт с дефолтами).
     final bodyMap = isPolza
         ? <String, dynamic>{
             'model': request.model,
@@ -396,7 +395,8 @@ class AsyncJobExecutor extends GenerationExecutor {
             'async': true,
           };
     final body = jsonEncode(bodyMap);
-    for (final path in _createPaths) {
+    final paths = isPolza ? const <String>['/media'] : _createPaths;
+    for (final path in paths) {
       final uri = Uri.tryParse('$base$path');
       if (uri == null) continue;
       final http.Response resp;
@@ -408,8 +408,14 @@ class AsyncJobExecutor extends GenerationExecutor {
             .post(uri, headers: headers, body: body)
             .timeout(_requestTimeout);
       } on TimeoutException {
+        if (isPolza) {
+          throw const NetworkError(
+            details: 'Провайдер не ответил при создании задачи.',
+          );
+        }
         continue;
       } catch (e) {
+        if (e is GenError) rethrow;
         throw NetworkError(details: 'Ошибка соединения: $e');
       }
       final String rawCreate = resp.body;
@@ -420,7 +426,10 @@ class AsyncJobExecutor extends GenerationExecutor {
       );
       await _logCreate('$base$path', resp.statusCode, rawCreate);
       final code = resp.statusCode;
-      if (code == 404 || code == 405) continue;
+      if (code == 404 || code == 405) {
+        if (isPolza) throw _mapStatus(code, resp.body);
+        continue;
+      }
       if (code < 200 || code >= 300) throw _mapStatus(code, resp.body);
       Object? json;
       try {
@@ -461,7 +470,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
     throw const UnknownGenError(
       details:
-          'Провайдер не поддерживает создание задач (404 на всех эндпоинтах).',
+          'Провайдер не создал задачу: идентификатор результата не найден.',
     );
   }
 
@@ -474,7 +483,10 @@ class AsyncJobExecutor extends GenerationExecutor {
     int attempt,
   ) async {
     var notFound = 0;
-    for (final prefix in _pollPrefixes) {
+    final prefixes = base.toLowerCase().contains('polza.ai')
+        ? const <String>['/media/']
+        : _pollPrefixes;
+    for (final prefix in prefixes) {
       final queryUrl = '$base$prefix$jobId';
       final uri = Uri.tryParse(queryUrl);
       if (uri == null) continue;
@@ -526,19 +538,17 @@ class AsyncJobExecutor extends GenerationExecutor {
       }
       return _PollResult(percent: _defaultPercent(attempt));
     }
-    if (notFound >= _pollPrefixes.length) {
+    if (notFound >= prefixes.length) {
       return const _PollResult(
         fatal: UnknownGenError(
-          details: 'Задача не найдена у провайдера (404).',
+          details: 'Задача не найдена у провайдера (404/405).',
         ),
       );
     }
     return _PollResult(percent: _defaultPercent(attempt));
   }
 
-  /// Разбор тела ответа опроса статуса согласно документации Polza Media API:
-  ///  - проверяет статусы `pending`, `processing`, `completed`, `failed`;
-  ///  - извлекает URL из `data.url`, `output` или вложенных полей `url`/`video_url`.
+  /// Разбор тела ответа опроса статуса.
   _PollResult _parsePollBody(
     String body,
     DateTime createdAt,
@@ -593,11 +603,9 @@ class AsyncJobExecutor extends GenerationExecutor {
     return _PollResult(percent: percent, indeterminate: pct == null);
   }
 
-  /// Извлекает URL из полей Polza Media API (`data.url`, `data[0].url`,
-  /// `output`, `output.url`, `result.url`, `url`).
+  /// Извлекает URL из полей ответа медиа-задачи.
   static String? _extractCompletedUrl(Object? node) {
     if (node is! Map) return null;
-    // 1. Прямое поле data.url или data[0].url (основной формат Polza /v1/media/{id})
     final data = node['data'];
     if (data is Map) {
       final u = data['url'] ?? data['video_url'] ?? data['file_url'];
@@ -615,15 +623,12 @@ class AsyncJobExecutor extends GenerationExecutor {
         }
       }
     }
-    // 2. Поле output (строка, список строк/объектов или карта с url)
     final fromOutput = _extractFromOutput(node['output']);
     if (fromOutput != null) return fromOutput;
 
-    // 3. Поле result
     final fromResult = _extractFromOutput(node['result']);
     if (fromResult != null) return fromResult;
 
-    // 4. Верхнеуровневый url / video_url
     final topUrl = node['video_url'] ?? node['url'];
     if (topUrl is String && _isHttpOrDataUrl(topUrl)) return topUrl.trim();
 
@@ -658,7 +663,7 @@ class AsyncJobExecutor extends GenerationExecutor {
         t.startsWith('data:');
   }
 
-  /// Любой валидный URL в дереве ответа, когда статус задачи уже `completed`.
+  /// Любой валидный URL в дереве ответа, когда статус уже completed.
   static String? _findAnyMediaUrl(Object? node, int depth) {
     if (node == null || depth > 8) return null;
     if (node is String) {
@@ -756,8 +761,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     return _urlFromMessage(json);
   }
 
-  /// Публичный опрос медиа-задачи: GET {baseUrl}/media/{jobId} каждые
-  /// 4 секунды, максимум 150 попыток.
+  /// Публичный опрос медиа-задачи: каждые 5 секунд, максимум 150 попыток.
   Future<String> pollMediaJob({
     required http.Client client,
     required String baseUrl,
@@ -1022,7 +1026,7 @@ class AsyncJobExecutor extends GenerationExecutor {
     return null;
   }
 
-  /// Рекурсивный поиск числового прогресса ('progress'/'percent').
+  /// Рекурсивный поиск числового прогресса.
   static double? _findPercent(Object? node, int depth) {
     if (node is Map && depth <= 8) {
       for (final entry in node.entries) {

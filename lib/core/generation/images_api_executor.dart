@@ -38,15 +38,8 @@ class _ImagePollState {
 
 /// Исполнитель генерации изображений (HTTP через dio).
 ///
-/// Поддерживает:
-///  - Polza Media API: POST {baseUrl}/media с телом
-///    {model, input: {...}, async: true} и автоматическим опросом
-///    GET {baseUrl}/media/{id} каждые 4 секунды (интервал 3-5 с по
-///    документации), пока статус не станет completed/failed; результат
-///    берётся из `data.url` (или `output`);
-///  - openAiStandard: POST {baseUrl}/images/generations;
-///  - shortImagesPath: POST {baseUrl}/images (RouterAI);
-///  - openRouterChatImages: POST {baseUrl}/chat/completions.
+/// Для Polza используется только POST {baseUrl}/media и опрос
+/// GET {baseUrl}/media/{id}. Другие диалекты сохраняют прежние маршруты.
 class ImagesApiExecutor extends GenerationExecutor {
   /// Stage 4.1 (d): in-memory blacklist параметров, не поддерживаемых
   /// моделью (выучено из 'warnings' медиа-ответа).
@@ -126,9 +119,6 @@ class ImagesApiExecutor extends GenerationExecutor {
       _learnWarnings(body, request.model);
       var sources = _extractImageSourcesFromResponse(body);
 
-      // Если POST /v1/media вернул асинхронную задачу (status: pending /
-      // processing и id задачи без готового URL), опрашиваем GET /v1/media/{id}
-      // каждые 4 секунды до статуса completed/failed.
       if (sources.isEmpty) {
         final asyncJobId = _extractAsyncJobId(body);
         if (asyncJobId != null && asyncJobId.isNotEmpty) {
@@ -193,9 +183,7 @@ class ImagesApiExecutor extends GenerationExecutor {
     }
   }
 
-  /// Опрос GET {baseUrl}/media/{id} каждые 4 секунды по спецификации
-  /// Polza Media API: статусы pending/processing/completed/failed,
-  /// результат — `data.url` (или `output`).
+  /// Опрос GET {baseUrl}/media/{id} каждые 4 секунды.
   Stream<_ImagePollState> _pollMediaStatus({
     required Dio dio,
     required CancelToken token,
@@ -258,8 +246,6 @@ class ImagesApiExecutor extends GenerationExecutor {
         yield _ImagePollState(percent: 100, status: status);
         return;
       }
-      // Числового прогресса провайдер не отдал — считаем сами, чтобы
-      // индикатор не зависал на 0%.
       final pct = (10.0 + attempt * 2.0).clamp(10.0, 92.0);
       yield _ImagePollState(
         percent: pct,
@@ -296,8 +282,8 @@ class ImagesApiExecutor extends GenerationExecutor {
     return null;
   }
 
-  /// Один запрос картинки с учётом диалекта и автоматическим фоллбэком
-  /// между /media, /images/generations и /images при ответе 404/405.
+  /// Один запрос картинки с учётом диалекта.
+  /// Для Polza 404/405 возвращается вызывающему коду без fallback.
   Future<Response<String>> _requestImage(
     Dio dio,
     CancelToken token,
@@ -332,6 +318,25 @@ class ImagesApiExecutor extends GenerationExecutor {
       if (res is String && res.trim().isNotEmpty) {
         translated['image_resolution'] = res.trim();
       }
+      final mediaBody = <String, dynamic>{
+        'model': request.model,
+        'input': ParameterTranslator.toPolzaMediaInput(
+          prompt,
+          translated,
+          isVideo: false,
+        ),
+        'async': true,
+      };
+      // Содержит промпт пользователя; ключ и заголовки не логируются.
+      if (kDebugMode) {
+        debugPrint('[MediaExec] Request body: ${jsonEncode(mediaBody)}');
+      }
+      return dio.post<String>(
+        '$base/media',
+        data: mediaBody,
+        options: Options(headers: headers),
+        cancelToken: token,
+      );
     }
     if (dialect == ImageApiDialect.openRouterChatImages) {
       return dio.post<String>(
@@ -342,30 +347,6 @@ class ImagesApiExecutor extends GenerationExecutor {
       );
     }
     final body = _restBody(request.model, prompt, translated);
-    // Для Polza пробуем сначала /media (единый эндпоинт Polza Media API):
-    // тело {model, input: {...}, async: true} — параметры генерации лежат
-    // внутри input, иначе провайдер их игнорирует.
-    if (isPolza) {
-      final mediaBody = <String, dynamic>{
-        'model': request.model,
-        'input': ParameterTranslator.toPolzaMediaInput(
-          prompt,
-          translated,
-          isVideo: false,
-        ),
-        'async': true,
-      };
-      final mediaResp = await dio.post<String>(
-        '$base/media',
-        data: mediaBody,
-        options: Options(headers: headers),
-        cancelToken: token,
-      );
-      final mediaCode = mediaResp.statusCode ?? 0;
-      if (mediaCode != 404 && mediaCode != 405) {
-        return mediaResp;
-      }
-    }
     final fallback = ImageDialectResolver.fallbackRestPath(dialect);
     final first = await dio.post<String>(
       '$base${ImageDialectResolver.primaryPath(dialect)}',
@@ -385,8 +366,7 @@ class ImagesApiExecutor extends GenerationExecutor {
     return first;
   }
 
-  /// Тело REST-запроса: базовые поля плюс нормализованные параметры
-  /// модели (size, aspect_ratio, image_resolution ... — по её схеме).
+  /// Тело REST-запроса: базовые поля плюс нормализованные параметры модели.
   Map<String, dynamic> _restBody(
     String model,
     String prompt,
@@ -516,8 +496,7 @@ class ImagesApiExecutor extends GenerationExecutor {
     return '';
   }
 
-  /// Универсальный парсер ответа провайдера: собирает источники из
-  /// `data.url`, `output`, `url`, `image_url`, `b64_json`.
+  /// Универсальный парсер ответа провайдера.
   static List<String> _extractImageSourcesFromResponse(String body) {
     Object? json;
     try {
