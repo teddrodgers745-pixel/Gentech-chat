@@ -622,16 +622,21 @@ class ActiveModelController extends ChangeNotifier {
           : (lower.contains('veo') || lower.contains('sora')
               ? const <String>['16:9', '9:16']
               : const <String>['16:9', '9:16', '1:1']);
-      final durations = (existing?.durations != null &&
-              !existing!.durations!.isEmpty)
-          ? existing.durations
-          : DurationRange(
-              discrete: lower.contains('sora')
-                  ? const <int>[4, 8, 12]
-                  : lower.contains('veo') || lower.contains('seedance')
-                      ? const <int>[5, 8]
-                      : const <int>[5, 10],
-            );
+      // Выдуманные секунды не подставляем: у Seedance в каталоге Polza
+      // нет списка duration (только min/max и default), поэтому панель
+      // показывает диапазон из каталога. Наборы прочих семейств прежние.
+      final known = existing?.durations;
+      final DurationRange? durations = (known != null && !known.isEmpty)
+          ? known
+          : (lower.contains('seedance')
+              ? null
+              : DurationRange(
+                  discrete: lower.contains('sora')
+                      ? const <int>[4, 8, 12]
+                      : lower.contains('veo')
+                          ? const <int>[5, 8]
+                          : const <int>[5, 10],
+                ));
       final resolutions = (existing != null && existing.resolutions.isNotEmpty)
           ? existing.resolutions
           : const <String>['720p', '1080p'];
@@ -831,10 +836,26 @@ class ActiveModelController extends ChangeNotifier {
         _selectedAspectRatio = ratios.first;
       }
       if (kind == ActiveModelKind.video) {
-        final disc = params?.durations?.discrete ?? const <int>[];
-        if (disc.isNotEmpty &&
-            (_selectedDuration == null || !disc.contains(_selectedDuration))) {
-          _selectedDuration = disc.first;
+        final range = params?.durations;
+        final disc = range?.discrete ?? const <int>[];
+        final current = _selectedDuration;
+        final valid = current != null &&
+            (disc.isNotEmpty
+                ? disc.contains(current)
+                : _inDurationRange(current, range));
+        if (!valid) {
+          // Дефолт из каталога (duration_default) важнее первого элемента
+          // списка: у Seedance это 15 с при диапазоне 4..15.
+          final catalogDefault = _catalogDurationDefault(entry);
+          if (catalogDefault != null) {
+            _selectedDuration = catalogDefault;
+          } else if (disc.isNotEmpty) {
+            _selectedDuration = disc.first;
+          } else if (range != null && !range.isEmpty) {
+            _selectedDuration = range.min ?? range.max;
+          } else {
+            _selectedDuration = null;
+          }
         }
       } else {
         _selectedDuration = null;
@@ -893,18 +914,23 @@ class ActiveModelController extends ChangeNotifier {
     final en = e;
     if (en == null) return null;
     final durs = en.durations;
+    // Длительность: сначала дискретные значения каталога, затем — только
+    // диапазон min..max (mediaParams duration_min/duration_max). Диапазон
+    // НЕ разворачивается в выдуманный список секунд.
+    final durationRange = durs.isNotEmpty
+        ? DurationRange(discrete: List<int>.of(durs))
+        : _durationRangeFromCatalog(en);
     final sizes = _entrySizes(en);
     final hasAny = en.aspectRatios.isNotEmpty ||
         en.resolutions.isNotEmpty ||
-        durs.isNotEmpty ||
+        durationRange != null ||
         en.qualities.isNotEmpty ||
         sizes.isNotEmpty;
     if (!hasAny) return null;
     return ModelParameters(
       type: en.type.isEmpty ? null : en.type,
       aspectRatios: List<String>.of(en.aspectRatios),
-      durations:
-          durs.isEmpty ? null : DurationRange(discrete: List<int>.of(durs)),
+      durations: durationRange,
       resolutions: List<String>.of(en.resolutions),
       sizes: sizes,
       qualities: List<String>.of(en.qualities),
@@ -924,6 +950,37 @@ class ActiveModelController extends ChangeNotifier {
       for (final v in raw)
         if (v != null && v.toString().trim().isNotEmpty) v.toString().trim(),
     ];
+  }
+
+  /// Диапазон duration из mediaParams каталога (duration_min/duration_max):
+  /// провайдер не перечислил значения, но задал границы. null — границ нет.
+  static DurationRange? _durationRangeFromCatalog(CatalogEntry e) {
+    final min = _intFromCatalog(e.mediaParams['duration_min']);
+    final max = _intFromCatalog(e.mediaParams['duration_max']);
+    if (min == null && max == null) return null;
+    return DurationRange(min: min, max: max);
+  }
+
+  /// Значение duration по умолчанию из каталога (duration_default).
+  static int? _catalogDurationDefault(CatalogEntry? e) =>
+      _intFromCatalog(e?.mediaParams['duration_default']);
+
+  /// Терпимое приведение числового значения каталога к int.
+  static int? _intFromCatalog(Object? raw) {
+    if (raw is int) return raw;
+    if (raw is num) return raw.round();
+    if (raw is String) return int.tryParse(raw.trim());
+    return null;
+  }
+
+  /// Попадает ли значение в диапазон min..max (границы необязательны).
+  static bool _inDurationRange(int? value, DurationRange? range) {
+    if (value == null || range == null || range.isEmpty) return false;
+    final min = range.min;
+    final max = range.max;
+    if (min != null && value < min) return false;
+    if (max != null && value > max) return false;
+    return true;
   }
 
   /// Вид модели: по типу из каталога подключения (приоритет после

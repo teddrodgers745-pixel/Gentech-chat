@@ -208,7 +208,12 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_typeFor != modelId) {
       _aspectRatio =
           ActiveModelController.isHeuristicVideo(modelId) ? '16:9' : '1:1';
+      // Смена модели: длительность, разрешение и качество предыдущей
+      // модели не должны утекать в запрос новой. Панель ввода заново
+      // сообщит значения из каталога уже выбранной модели.
       _videoDuration = null;
+      _mediaResolution = null;
+      _mediaQuality = null;
     }
     if (ActiveModelController.isHeuristicSearch(modelId) &&
         settings.searchMode == 'off') {
