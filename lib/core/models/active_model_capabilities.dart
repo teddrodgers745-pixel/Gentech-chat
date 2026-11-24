@@ -43,6 +43,16 @@ class ActiveModelCapabilities {
   /// пустой список — размышления не поддерживаются.
   final List<String> reasoningLevels;
 
+  /// Уровень по умолчанию из каталога (default_effort).
+  /// '' — каталог не сообщил; в этом случае используется первый
+  /// допустимый уровень (после сохранённого пользовательского).
+  final String reasoningDefault;
+
+  /// Разрешено ли отключение размышлений ('none'/'off').
+  /// false — mandatory: размышления включены всегда, каталог не разрешает
+  /// выбрать none/off.
+  final bool reasoningNoneAllowed;
+
   /// Умеет ли модель искать в интернете сама (нативный веб-поиск
   /// провайдера/модели). Определяется [SearchCapabilityResolver]
   /// по каталогу и fallback-префиксу; false — нативного поиска нет.
@@ -56,6 +66,8 @@ class ActiveModelCapabilities {
     this.vision = false,
     this.reasoning = false,
     this.reasoningLevels = const [],
+    this.reasoningDefault = '',
+    this.reasoningNoneAllowed = true,
     this.supportsNativeSearch = false,
   });
 
@@ -79,5 +91,7 @@ class ActiveModelCapabilities {
   @override
   String toString() =>
       'ActiveModelCapabilities($modelId, ${kind.name}, '
-      'vision: $vision, reasoning: $reasoning)';
+      'vision: $vision, reasoning: $reasoning, '
+      'default: ${reasoningDefault.isEmpty ? '-' : reasoningDefault}, '
+      'noneAllowed: $reasoningNoneAllowed)';
 }

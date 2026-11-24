@@ -673,6 +673,30 @@ class ActiveModelController extends ChangeNotifier {
     return existing ?? ModelParameters.unknown();
   }
 
+  /// Согласование сохранённого уровня reasoning с возможностями модели:
+  /// сохранённое значение остаётся, если модель его поддерживает; иначе
+  /// берётся default_effort каталога; иначе первый допустимый уровень.
+  static String _resolveReasoningLevel({
+    required List<String> levels,
+    required String? saved,
+    required String defaultEffort,
+  }) {
+    final s = saved?.trim() ?? '';
+    if (s.isNotEmpty) {
+      final sl = s.toLowerCase();
+      for (final l in levels) {
+        if (l.toLowerCase() == sl) return l;
+      }
+    }
+    final d = defaultEffort.trim();
+    if (d.isNotEmpty) return d;
+    if (levels.isNotEmpty) {
+      final first = levels.first.trim();
+      if (first.isNotEmpty) return first;
+    }
+    return 'off';
+  }
+
   Future<void> _resolve(
     String modelId, {
     bool vision = false,
@@ -793,39 +817,62 @@ class ActiveModelController extends ChangeNotifier {
     // ---- Reasoning ----
     final isText = kind == ActiveModelKind.text;
     var supportsReasoning = isText && reasoning;
-    var reasoningLevels = supportsReasoning
-        ? await _reasoningLevelsFor(norm)
-        : const <String>['off'];
+    var reasoningLevels = <String>['off'];
+    var reasoningDefault = 'off';
+    var reasoningNoneAllowed = true;
     var reasoningSource = 'прежние резолверы';
-    if (isText && entry != null) {
-      final r = entry.reasoning;
-      if (r != null) {
-        final levels = <String>[...r.levels];
-        if (r.mandatory) {
-          levels.removeWhere((l) => l == 'none' || l == 'off');
-        }
-        if (levels.isEmpty && r.defaultEffort.trim().isNotEmpty) {
-          levels.add(r.defaultEffort.trim());
-        }
-        supportsReasoning = true;
-        if (levels.isNotEmpty) {
-          reasoningLevels = levels;
+
+    if (isText) {
+      if (supportsReasoning) {
+        final (levels, def, none) = await _reasoningLevelsFor(norm);
+        reasoningLevels = levels;
+        reasoningDefault = def;
+        reasoningNoneAllowed = none;
+      }
+      if (entry != null) {
+        final r = entry.reasoning;
+        if (r != null) {
+          final levels = <String>[...r.levels];
+          if (r.mandatory) {
+            levels.removeWhere((l) => l == 'none' || l == 'off');
+          }
+          if (levels.isEmpty && r.defaultEffort.trim().isNotEmpty) {
+            levels.add(r.defaultEffort.trim());
+          }
+          supportsReasoning = true;
+          if (levels.isNotEmpty) {
+            reasoningLevels = levels;
+            reasoningSource =
+                'каталог (${entry.capabilitiesSource})'
+                '${r.mandatory ? ', mandatory' : ''}';
+          } else {
+            reasoningLevels = List<String>.of(_baseReasoningLevels);
+            reasoningSource =
+                'каталог (${entry.capabilitiesSource}), уровни не перечислены';
+          }
+          final def = r.defaultEffort.trim();
+          if (def.isNotEmpty) reasoningDefault = def;
+          reasoningNoneAllowed = !r.mandatory;
+        } else if (!entry.reasoningUnknown) {
+          supportsReasoning = false;
+          reasoningLevels = const <String>[];
+          reasoningDefault = '';
+          reasoningNoneAllowed = true;
           reasoningSource =
-              'каталог (${entry.capabilitiesSource})'
-              '${r.mandatory ? ', mandatory' : ''}';
-        } else {
-          reasoningLevels = List<String>.of(_baseReasoningLevels);
-          reasoningSource =
-              'каталог (${entry.capabilitiesSource}), уровни не перечислены';
+              'каталог (${entry.capabilitiesSource}): reasoning отсутствует';
         }
-      } else if (!entry.reasoningUnknown) {
-        supportsReasoning = false;
-        reasoningLevels = const <String>[];
-        reasoningSource =
-            'каталог (${entry.capabilitiesSource}): reasoning отсутствует';
       }
     }
     if (token != _resolveToken) return;
+
+    // Согласование выбора: сохранённое остаётся, если модель его поддерживает;
+    // иначе default_effort каталога; иначе первый допустимый.
+    final savedReasoning = settings.reasoningForModel(modelId);
+    final resolvedReasoningLevel = _resolveReasoningLevel(
+      levels: reasoningLevels,
+      saved: savedReasoning,
+      defaultEffort: reasoningDefault,
+    );
 
     // Синхронизируем дефолты выбранных медиа-параметров для активной модели.
     if (kind == ActiveModelKind.video || kind == ActiveModelKind.image) {
@@ -895,6 +942,8 @@ class ActiveModelController extends ChangeNotifier {
       vision: vision || isText,
       reasoning: supportsReasoning,
       reasoningLevels: reasoningLevels,
+      reasoningDefault: reasoningDefault,
+      reasoningNoneAllowed: reasoningNoneAllowed,
       supportsNativeSearch: nativeSearch,
     );
     debugPrint(
@@ -902,9 +951,16 @@ class ActiveModelController extends ChangeNotifier {
       'type=${(entry?.type.isNotEmpty ?? false) ? entry!.type : '?'}, '
       'kind=${kind.name} [$kindSource], '
       'params=${params == null ? 'нет' : params.confidence} [$paramsSource], '
-      'reasoning=[${reasoningLevels.join(',')}] [$reasoningSource]',
+      'reasoning=[${reasoningLevels.join(',')}] '
+      'default=${reasoningDefault.isEmpty ? '-' : reasoningDefault} '
+      'noneAllowed=$reasoningNoneAllowed '
+      'resolved=$resolvedReasoningLevel [$reasoningSource]',
     );
     notifyListeners();
+
+    if (resolvedReasoningLevel.isNotEmpty) {
+      settings.applyReasoningLevel(resolvedReasoningLevel);
+    }
   }
 
   /// Параметры генерации из записи каталога подключения
@@ -1025,7 +1081,10 @@ class ActiveModelController extends ChangeNotifier {
 
   /// Точные уровни размышлений активной модели из
   /// [ReasoningCapabilityResolver] (кэш каталога OpenRouter).
-  Future<List<String>> _reasoningLevelsFor(String normId) async {
+  /// Возвращает (доступные уровни, default_effort, noneAllowed).
+  Future<(List<String>, String, bool)> _reasoningLevelsFor(
+    String normId,
+  ) async {
     try {
       await ReasoningCapabilityResolver.loadCache();
       final cap = ReasoningCapabilityResolver.getCapability(normId);
@@ -1033,11 +1092,15 @@ class ActiveModelController extends ChangeNotifier {
       if (cap.mandatory) {
         levels.removeWhere((l) => l == 'none' || l == 'off');
       }
-      if (levels.isNotEmpty) return levels;
+      if (levels.isNotEmpty) {
+        return (levels, cap.defaultEffort, cap.allowsNone);
+      }
       final def = cap.defaultEffort.trim();
-      if (def.isNotEmpty) return <String>[def];
+      if (def.isNotEmpty) {
+        return (<String>[def], def, cap.allowsNone);
+      }
     } catch (_) {}
-    return const <String>['off', 'low', 'medium', 'high'];
+    return (const <String>['off', 'low', 'medium', 'high'], 'off', true);
   }
 
   /// Копия [ModelParameters] с заменённой достоверностью данных.

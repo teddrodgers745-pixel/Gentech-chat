@@ -11,7 +11,6 @@ import 'core/auth/routerai_auth_service.dart';
 import 'core/catalog/provider_catalog_service.dart';
 import 'core/search/search_strategy.dart';
 import 'core/storage.dart';
-import 'core/utils/reasoning_mapper.dart';
 import 'models.dart';
 import 'theme.dart';
 
@@ -373,9 +372,17 @@ class AppSettings extends ChangeNotifier {
   /// поддержку» в настройках поиска.
   bool providerSearchSupported = false;
 
-  /// Уровень размышлений (Reasoning Effort): id уровня 'off'..'xhigh'
-  /// (см. ReasoningMapper). Сохраняется в SharedPreferences.
+  /// Уровень размышлений, который уйдёт в следующий POST (Reasoning
+  /// Effort). Хранится строкой: значения и список допустимых приходят
+  /// из каталога активной модели — здесь не хардкодятся.
+  /// Для ненастроенной модели контроллер выставляет default_effort.
   String reasoningLevel = 'off';
+
+  /// Выбор пользователя ПО КАЖДОЙ модели (id модели -> уровень).
+  /// Используется, когда модель снова становится активной. Если записи
+  /// нет, контроллер берёт default_effort каталога либо первый
+  /// допустимый уровень.
+  final Map<String, String> reasoningByModel = <String, String>{};
 
   /// Режим для профи (Advanced): полные настройки вместо быстрой настройки.
   bool advancedMode = true;
@@ -391,6 +398,13 @@ class AppSettings extends ChangeNotifier {
 
   Palette get palette =>
       palettes.firstWhere((x) => x.id == paletteId, orElse: () => palettes.first);
+
+  /// Текущий идентификатор модели (активный пресет, иначе — настройки).
+  String get currentModelId {
+    final active = presets.active?.model.trim() ?? '';
+    if (active.isNotEmpty) return active;
+    return model.trim();
+  }
 
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
@@ -416,9 +430,25 @@ class AppSettings extends ChangeNotifier {
     webSearchSupported = p.getBool('webSearchSupported') ?? false;
     providerSearchSupported =
         p.getBool('isProviderSearchSupported') ?? false;
-    final rawReasoning = p.getString('reasoningLevel') ?? 'off';
-    reasoningLevel =
-        ReasoningMapper.isKnownId(rawReasoning) ? rawReasoning : 'off';
+    // Список допустимых усилий — только из каталога; здесь не валидируем,
+    // сохраняем строку как есть (незнакомое значение уходит в запрос).
+    reasoningLevel = p.getString('reasoningLevel') ?? 'off';
+    final rawByModel = p.getString('reasoningByModel');
+    if (rawByModel != null && rawByModel.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(rawByModel);
+        if (decoded is Map) {
+          reasoningByModel.clear();
+          decoded.forEach((k, v) {
+            if (v is String) {
+              reasoningByModel[k.toString()] = v;
+            }
+          });
+        }
+      } catch (_) {
+        // Битый JSON — оставляем пустую карту.
+      }
+    }
     advancedMode = p.getBool('advancedMode') ?? true;
     mcpEnabled = p.getBool('mcpEnabled') ?? true;
   }
@@ -446,6 +476,7 @@ class AppSettings extends ChangeNotifier {
     await p.setBool('webSearchSupported', webSearchSupported);
     await p.setBool('isProviderSearchSupported', providerSearchSupported);
     await p.setString('reasoningLevel', reasoningLevel);
+    await p.setString('reasoningByModel', jsonEncode(reasoningByModel));
     await p.setBool('advancedMode', advancedMode);
     await p.setBool('mcpEnabled', mcpEnabled);
   }
@@ -571,11 +602,37 @@ class AppSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Явный выбор пользователя: сохраняется по текущей модели, чтобы при
+  /// возврате к ней применился снова. Значение не валидируется по
+  /// захардкоженному списку — список усилий даёт каталог.
   void setReasoningLevel(String v) {
-    if (!ReasoningMapper.isKnownId(v)) return;
-    reasoningLevel = v;
+    final trimmed = v.trim();
+    if (trimmed.isEmpty) return;
+    final model = currentModelId;
+    if (model.isNotEmpty) {
+      reasoningByModel[model] = trimmed;
+    }
+    reasoningLevel = trimmed;
     _persist();
     notifyListeners();
+  }
+
+  /// Вычисленный контроллером уровень для текущей модели — уходит в
+  /// следующий POST. Per-model выбор не трогает: это «эффективное»
+  /// значение, а не явный выбор пользователя.
+  void applyReasoningLevel(String v) {
+    final trimmed = v.trim();
+    if (trimmed.isEmpty || reasoningLevel == trimmed) return;
+    reasoningLevel = trimmed;
+    _persist();
+    notifyListeners();
+  }
+
+  /// Сохранённый пользователем уровень для конкретной модели, либо null.
+  String? reasoningForModel(String modelId) {
+    final key = modelId.trim();
+    if (key.isEmpty) return null;
+    return reasoningByModel[key];
   }
 
   void setAdvancedMode(bool v) {
