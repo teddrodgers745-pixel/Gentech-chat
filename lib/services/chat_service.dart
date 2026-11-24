@@ -461,23 +461,55 @@ class ChatService {
       ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'polza' ||
       baseUrl.trim().toLowerCase().contains('polza.ai');
 
+  /// Признак «reasoning обязателен» (mandatory: true) из каталога Polza.
+  ///
+  /// Задача 2б прокидывает сюда поле из ActiveModelCapabilities
+  /// (reasoningNoneAllowed). Пока каталог не подключён, блок reasoning
+  /// отправляется как обычно.
+  static bool Function(String model)? reasoningMandatoryProbe;
+
+  static bool _reasoningMandatoryFor(String model) {
+    try {
+      return reasoningMandatoryProbe?.call(model) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   static Map<String, dynamic> _buildReasoningPayload({
     required String baseUrl,
     required String model,
     required String? reasoningEffort,
   }) {
     final effort = (reasoningEffort ?? '').trim().toLowerCase();
-    if (effort.isEmpty || effort == 'off' || effort == 'none') {
-      return const <String, dynamic>{};
-    }
+    if (effort.isEmpty) return const <String, dynamic>{};
+
     if (_isPolza(baseUrl)) {
-      var polzaEffort = effort;
-      if (effort == 'min') polzaEffort = 'minimal';
-      if (effort == 'xlow') polzaEffort = 'low';
+      // Polza принимает reasoning.effort как есть, без ремаппинга:
+      // low остаётся low, xhigh/max — как есть, неизвестное значение
+      // тоже не подменяется и не блокируется (провайдер решает сам).
+      // Верхнеуровневый reasoning_effort Polza игнорирует — отправляем
+      // объект {"reasoning": {"effort": ...}}.
+      if (effort == 'off' || effort == 'none') {
+        // Если каталог объявил reasoning обязательным (mandatory: true),
+        // отключить его нельзя — блок не отправляется вовсе.
+        if (_reasoningMandatoryFor(model)) {
+          return const <String, dynamic>{};
+        }
+        // none — легальное значение: «рассуждения отключены».
+        return <String, dynamic>{
+          'reasoning': <String, dynamic>{'effort': 'none'},
+        };
+      }
       return <String, dynamic>{
-        'reasoning': <String, dynamic>{'effort': polzaEffort},
+        'reasoning': <String, dynamic>{'effort': effort},
       };
     }
+
+    if (effort == 'off' || effort == 'none') {
+      return const <String, dynamic>{};
+    }
+
     if (_isRouterAI(baseUrl)) {
       var routerEffort = effort;
       if (effort == 'max' || effort == 'xhigh') routerEffort = 'high';

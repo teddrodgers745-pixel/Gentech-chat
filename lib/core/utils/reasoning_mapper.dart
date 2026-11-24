@@ -83,11 +83,21 @@ abstract final class ReasoningMapper {
     return ReasoningLevel.off;
   }
 
-  /// Известен ли идентификатор уровня (валидация сохранённых настроек).
-  static bool isKnownId(String id) {
+  /// Известен ли идентификатор уровня.
+  ///
+  /// Захардкоженного списка усилий больше нет: список усилий — только из
+  /// каталога модели. Незнакомое значение не подменяется и не блокируется:
+  /// оно уходит в запрос как есть, провайдер решает сам.
+  ///
+  /// Если передан [known] (например, caps.reasoningLevels из каталога),
+  /// проверяется принадлежность именно этому списку; без него блокировки
+  /// нет — валидировать нечем.
+  static bool isKnownId(String id, {Iterable<String>? known}) {
     final s = id.trim().toLowerCase();
-    for (final l in ReasoningLevel.values) {
-      if (l.name == s) return true;
+    if (s.isEmpty) return false;
+    if (known == null) return true;
+    for (final k in known) {
+      if (k.trim().toLowerCase() == s) return true;
     }
     return false;
   }
