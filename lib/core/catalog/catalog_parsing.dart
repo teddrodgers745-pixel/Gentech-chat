@@ -33,9 +33,11 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
   final entry = PolzaParser.parseEntry(raw, '');
   if (entry == null) return null;
 
-  final type = raw['type'] is String
-      ? (raw['type'] as String).trim().toLowerCase()
-      : '';
+  final rawType = raw['type'] is String ? raw['type'] as String : '';
+  final type = rawType.trim().toLowerCase();
+  final typeSource = type.isEmpty
+      ? CatalogTypeSources.unknown
+      : CatalogTypeSources.catalog;
   final mediaParams = <String, dynamic>{...entry.mediaParams};
 
   final modelPricing = raw['pricing'];
@@ -56,7 +58,12 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
 
   final rawParameters = raw['parameters'];
   if (rawParameters is! Map) {
-    return entry.copyWith(type: type, mediaParams: mediaParams);
+    return entry.copyWith(
+      type: type,
+      rawType: rawType,
+      typeSource: typeSource,
+      mediaParams: mediaParams,
+    );
   }
 
   final parameters = <String, dynamic>{
@@ -66,7 +73,12 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
   mediaParams['parameters'] = parameters;
 
   if (type != 'image' && type != 'video') {
-    return entry.copyWith(type: type, mediaParams: mediaParams);
+    return entry.copyWith(
+      type: type,
+      rawType: rawType,
+      typeSource: typeSource,
+      mediaParams: mediaParams,
+    );
   }
 
   List<String> values(String key) {
@@ -123,6 +135,8 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
 
   return entry.copyWith(
     type: type,
+    rawType: rawType,
+    typeSource: typeSource,
     aspectRatios: values('aspect_ratio'),
     resolutions: values(type == 'image' ? 'image_resolution' : 'resolution'),
     durations: durations,

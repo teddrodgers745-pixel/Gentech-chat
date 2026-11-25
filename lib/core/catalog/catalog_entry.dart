@@ -16,6 +16,22 @@ abstract final class CatalogSources {
   static const String fallback = 'fallback';
 }
 
+/// Источник именно типа модели, независимо от источника возможностей.
+abstract final class CatalogTypeSources {
+  static const String catalog = 'catalog';
+  static const String heuristic = 'heuristic';
+  static const String override = 'override';
+  static const String fallback = 'fallback';
+  static const String unknown = 'unknown';
+
+  static bool isValid(String value) =>
+      value == catalog ||
+      value == heuristic ||
+      value == override ||
+      value == fallback ||
+      value == unknown;
+}
+
 /// Подключение: адрес провайдера и ключ (либо OAuth-токен Polza).
 /// Нейтральные данные — собираются из пресетов, общих настроек
 /// и активной Polza-сессии вызывающим кодом.
@@ -228,6 +244,12 @@ class CatalogEntry {
   /// classification; '' — тип неизвестен ни одному источнику.
   final String type;
 
+  /// Исходная строка type из записи каталога, без нормализации.
+  final String rawType;
+
+  /// Источник поля [type], независимо от [capabilitiesSource].
+  final String typeSource;
+
   /// Поддерживаемые модальности модели (например: 'text', 'image', 'audio', 'video').
   final List<String> modalities;
 
@@ -306,6 +328,8 @@ class CatalogEntry {
     required this.id,
     this.name = '',
     this.type = '',
+    this.rawType = '',
+    this.typeSource = CatalogTypeSources.unknown,
     this.modalities = const <String>[],
     this.contextLength,
     this.maxCompletionTokens,
@@ -342,6 +366,10 @@ class CatalogEntry {
   /// `priceSource`, а также `currency`) поддерживают явное обнуление через
   /// передачу `null` (используется внутренний sentinel `_sentinel`).
   ///
+  /// Если тип меняется без явного указания нового источника, его источник
+  /// становится unknown: источник старого значения не доказывает источник
+  /// нового. При копировании без изменения типа происхождение сохраняется.
+  ///
   /// Для обратной совместимости с существующим кодом:
   /// - если для поля `name`, `type`, `aspectRatios`, `resolutions`, `durations`,
   ///   `qualities`, `capabilitiesSource` передан `null`, сохраняется прежнее
@@ -353,6 +381,8 @@ class CatalogEntry {
     String? id,
     String? name,
     String? type,
+    String? rawType,
+    String? typeSource,
     List<String>? modalities,
     Object? contextLength = _sentinel,
     Object? maxCompletionTokens = _sentinel,
@@ -443,6 +473,11 @@ class CatalogEntry {
       id: id ?? this.id,
       name: name ?? this.name,
       type: type ?? this.type,
+      rawType: rawType ?? this.rawType,
+      typeSource: typeSource ??
+          (type != null && type != this.type
+              ? CatalogTypeSources.unknown
+              : this.typeSource),
       modalities: modalities ?? this.modalities,
       contextLength: identical(contextLength, _sentinel)
           ? this.contextLength
@@ -489,6 +524,8 @@ class CatalogEntry {
         'id': id,
         'name': name,
         'type': type,
+        'rawType': rawType,
+        'typeSource': typeSource,
         'modalities': <String>[...modalities],
         if (contextLength != null) 'contextLength': contextLength,
         if (maxCompletionTokens != null)
@@ -622,12 +659,26 @@ class CatalogEntry {
 
     final parsedLevels =
         optStrings(j['reasoningLevels']) ?? parsedReasoning?.levels;
+    final parsedType = optStr(j['type']) ?? '';
+    final parsedRawType = optStr(j['rawType']) ?? '';
+    final storedTypeSource = optStr(j['typeSource']) ?? '';
+    var parsedTypeSource = CatalogTypeSources.isValid(storedTypeSource)
+        ? storedTypeSource
+        : CatalogTypeSources.unknown;
+    if (parsedTypeSource == CatalogTypeSources.catalog &&
+        (parsedRawType.trim().isEmpty ||
+            parsedRawType.trim().toLowerCase() !=
+                parsedType.trim().toLowerCase())) {
+      parsedTypeSource = CatalogTypeSources.unknown;
+    }
 
     return CatalogEntry(
       connectionId: optStr(j['connectionId']) ?? '',
       id: optStr(j['id']) ?? '',
       name: optStr(j['name']) ?? '',
-      type: optStr(j['type']) ?? '',
+      type: parsedType,
+      rawType: parsedRawType,
+      typeSource: parsedTypeSource,
       modalities: strings(j['modalities']),
       contextLength: optInt(j['contextLength']),
       maxCompletionTokens: optInt(j['maxCompletionTokens']),
@@ -658,6 +709,7 @@ class CatalogEntry {
 
   @override
   String toString() =>
-      'CatalogEntry($id, type: $type, src: $capabilitiesSource, '
+      'CatalogEntry($id, type: $type, rawType: $rawType, '
+      'typeSource: $typeSource, src: $capabilitiesSource, '
       'price: $priceSource)';
 }
