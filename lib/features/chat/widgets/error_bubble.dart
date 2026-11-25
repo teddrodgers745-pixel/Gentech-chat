@@ -14,6 +14,7 @@ enum _ErrorAction { retry, changeModel, settings }
 ///  - AuthError / InsufficientFunds -> «Настройки»;
 ///  - ModelNotFoundError -> «Сменить модель»;
 ///  - остальные -> «Повторить».
+///  - JobStatusUnknown -> «Повторить» (возобновление созданной задачи).
 /// Действия можно переопределить колбэками; без колбэка «Настройки»
 /// открывает экран настроек сама.
 class ErrorBubble extends StatelessWidget {
@@ -43,6 +44,7 @@ class ErrorBubble extends StatelessWidget {
         ServerError() => _ErrorAction.retry,
         NetworkError() => _ErrorAction.retry,
         JobTimeout() => _ErrorAction.retry,
+        JobStatusUnknown() => _ErrorAction.retry,
         ContentFiltered() => _ErrorAction.retry,
         BadRequestError() => _ErrorAction.retry,
         UnknownGenError() => _ErrorAction.retry,
@@ -57,6 +59,7 @@ class ErrorBubble extends StatelessWidget {
         NetworkError() => 'Проблема с сетью',
         ContentFiltered() => 'Запрос отклонён фильтром',
         JobTimeout() => 'Истекло время ожидания',
+        JobStatusUnknown() => 'Задача создана, статус неизвестен',
         BadRequestError() => 'Некорректный запрос',
         UnknownGenError() => 'Ошибка генерации',
       };
@@ -70,6 +73,7 @@ class ErrorBubble extends StatelessWidget {
         NetworkError() => Icons.wifi_off_rounded,
         ContentFiltered() => Icons.shield_outlined,
         JobTimeout() => Icons.hourglass_bottom_rounded,
+        JobStatusUnknown() => Icons.hourglass_bottom_rounded,
         BadRequestError() => Icons.warning_amber_rounded,
         UnknownGenError() => Icons.error_outline_rounded,
       };
