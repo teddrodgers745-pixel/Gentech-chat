@@ -3,6 +3,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../../app_state.dart';
+import '../../services/chat_service.dart';
 import '../auth/polza_auth_service.dart';
 // ignore: unused_import
 import '../auth/routerai_auth_service.dart';
@@ -42,6 +43,10 @@ class ActiveModelController extends ChangeNotifier {
             supportsNativeSearch ?? SearchCapabilityResolver.supportsNativeSearch {
     _presetController.addListener(_onPresetChanged);
     providerCatalog.addListener(_onCatalogChanged);
+    // Задача 4: прокидываем признак mandatory в ChatService, чтобы
+    // _buildReasoningPayload не отправлял none/off для моделей, где
+    // каталог объявил reasoning обязательным.
+    ChatService.reasoningMandatoryProbe = _probeReasoningMandatory;
   }
 
   static const List<String> _videoNameHints = <String>[
@@ -69,6 +74,36 @@ class ActiveModelController extends ChangeNotifier {
   static const List<String> _baseReasoningLevels = <String>[
     'off', 'low', 'medium', 'high',
   ];
+
+  /// Нормализованный id активной модели, для которой в последний раз
+  /// выполнился [_resolve]. Используется [_probeReasoningMandatory].
+  static String? _activeReasoningNorm;
+
+  /// Значение reasoningNoneAllowed для активной модели.
+  /// false — mandatory: каталог запрещает отключать reasoning.
+  static bool _activeReasoningNoneAllowed = true;
+
+  /// Проверка «reasoning обязателен» для активной модели (задача 4).
+  ///
+  /// Вызывается из [ChatService] через
+  /// [ChatService.reasoningMandatoryProbe] при построении payload
+  /// reasoning. true — mandatory (блок reasoning не отправляется).
+  /// Сравниваем по нормализованному id и по id без префикса провайдера,
+  /// чтобы не зависеть от того, в каком виде идентификатор пришёл в
+  /// запрос.
+  static bool _probeReasoningMandatory(String model) {
+    final active = _activeReasoningNorm;
+    if (active == null || active.isEmpty) return false;
+    final norm = ModelIdNormalizer.normalize(model);
+    if (norm.isEmpty) return false;
+    if (norm == active) return !_activeReasoningNoneAllowed;
+    final short = ModelIdNormalizer.withoutProviderPrefix(norm);
+    final shortActive = ModelIdNormalizer.withoutProviderPrefix(active);
+    if (short.isNotEmpty && short == shortActive) {
+      return !_activeReasoningNoneAllowed;
+    }
+    return false;
+  }
 
   final PresetStore _presetController;
   final UserParamOverrideStore _overrides;
@@ -956,6 +991,10 @@ class ActiveModelController extends ChangeNotifier {
     }
 
     _publishMergedParams(modelId, params);
+    // Задача 4: фиксируем «mandatory» для активной модели, чтобы
+    // ChatService.reasoningMandatoryProbe отвечал корректно.
+    _activeReasoningNorm = norm;
+    _activeReasoningNoneAllowed = reasoningNoneAllowed;
     _current = ActiveModelCapabilities(
       modelId: modelId,
       normalizedId: norm,
