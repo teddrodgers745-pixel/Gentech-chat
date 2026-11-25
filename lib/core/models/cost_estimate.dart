@@ -330,7 +330,7 @@ abstract final class CostEstimator {
   static bool _modelIsVideo(String modelId) {
     try {
       return HeuristicRules.inferRoute(modelId) ==
-          GenerationRoute.videoGeneration;
+          GenerationRoute.asyncJob;
     } catch (_) {
       return false;
     }
@@ -412,7 +412,6 @@ abstract final class CostEstimator {
     String currency,
     String unitLabel,
   ) {
-    final isRub = currency.trim().toUpperCase() == 'RUB';
     return CostEstimate(
       estimatedUsd: amount,
       unitLabel: unitLabel,
