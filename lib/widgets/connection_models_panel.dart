@@ -1,20 +1,8 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
-// Частичное исправление: панель загружает модели при открытии и при смене
-// подключения, а устаревшие ответы больше не заменяют новый список.
-//
-// Список панели и providerCatalog пока используют отдельные запросы.
-// Маршрутизация, повтор, параметры и объединение источников не исправлены.
-// Точный источник Cannot add to an unmodifiable list установить нельзя:
-// до POST исключение перехватывается в AsyncJobExecutor.run, но стектрейс
-// не прислан. Нужны стектрейс воспроизведения и исходники вызываемых там
-// ActiveModelController, ModelInfoResolver, ModelCatalogAdapter и каталога.
-
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 
 import '../app_state.dart';
 import '../core/catalog/provider_catalog_service.dart';
@@ -45,7 +33,6 @@ class ConnectionModelsPanel extends StatefulWidget {
 
 class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
   static const Duration _autoRefreshInterval = Duration(hours: 2);
-  static const Duration _requestTimeout = Duration(seconds: 30);
 
   bool _loading = false;
   String? _error;
@@ -116,47 +103,26 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
       _error = null;
     });
 
-    // Это отдельная синхронизация: существующий API каталога не выдаёт
-    // панели список записей и не сообщает об ошибке обновления.
-    unawaited(providerCatalog.sync(
-      CatalogConnection(id: connectionId, baseUrl: base, apiKey: key),
-      force: true,
-    ));
-
     try {
-      final resp = await http
-          .get(
-            Uri.parse('$base/models'),
-            headers: <String, String>{'Authorization': 'Bearer $key'},
-          )
-          .timeout(_requestTimeout);
+      final result = await providerCatalog.sync(
+        CatalogConnection(id: connectionId, baseUrl: base, apiKey: key),
+        force: true,
+      );
       if (!mounted || version != _requestVersion) return;
 
-      if (resp.statusCode != 200) {
-        setState(() {
-          _loading = false;
-          _error = 'Ошибка ${resp.statusCode}. Проверьте ключ и адрес.';
-        });
-        return;
-      }
+      final ids = <String>{
+        for (final entry in result.entries)
+          if (entry.id.trim().isNotEmpty) entry.id.trim(),
+      }.toList()
+        ..sort();
 
-      final ids = _parseModelIds(resp.body);
-      if (!mounted || version != _requestVersion) return;
       setState(() {
         _loading = false;
-        if (ids.isNotEmpty) {
-          _models = ids;
-          _error = null;
-        } else {
-          // Пустой ответ: прежний список сохраняем.
+        if (ids.isNotEmpty) _models = ids;
+        _error = result.error;
+        if (ids.isEmpty && _error == null) {
           _error = 'Сервер не вернул ни одной модели.';
         }
-      });
-    } on TimeoutException {
-      if (!mounted || version != _requestVersion) return;
-      setState(() {
-        _loading = false;
-        _error = 'Сервер не ответил за 30 секунд.';
       });
     } catch (_) {
       if (!mounted || version != _requestVersion) return;
@@ -165,28 +131,6 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
         _error = 'Не удалось загрузить модели: проверьте сеть.';
       });
     }
-  }
-
-  /// Идентификаторы моделей из поля data ответа /models.
-  static List<String> _parseModelIds(String body) {
-    final ids = <String>{};
-    try {
-      final j = jsonDecode(body);
-      if (j is Map && j['data'] is List) {
-        for (final e in (j['data'] as List)) {
-          String? id;
-          if (e is Map) {
-            final v = e['id'] ?? e['name'];
-            if (v is String && v.trim().isNotEmpty) id = v.trim();
-          } else if (e is String && e.trim().isNotEmpty) {
-            id = e.trim();
-          }
-          if (id != null) ids.add(id);
-        }
-      }
-    } catch (_) {}
-    final list = ids.toList()..sort();
-    return list;
   }
 
   /// Сохраняем модель вместе с адресом и ключом её подключения.

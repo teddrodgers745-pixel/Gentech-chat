@@ -30,7 +30,26 @@ List<CatalogEntry> parseModelsList(Map<String, dynamic> json, String baseUrl) {
 /// условия, валюта и единицы не должны теряться при сериализации кэша.
 /// Само сохранение не означает, что оценщик уже умеет рассчитывать цену.
 CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
-  final entry = PolzaParser.parseEntry(raw, '');
+  CatalogEntry? parsed;
+  try {
+    parsed = PolzaParser.parseEntry(raw, '');
+  } catch (_) {
+    // Запись с корректным id остаётся доступной даже тогда, когда
+    // специализированный парсер не разобрал необязательное поле.
+  }
+
+  final rawId = raw['id'];
+  final id = rawId is String ? rawId.trim() : '';
+  final entry = parsed ??
+      (id.isEmpty
+          ? null
+          : CatalogEntry(
+              connectionId: '',
+              id: id,
+              name: raw['name'] is String ? raw['name'] as String : '',
+              reasoningUnknown: true,
+              capabilitiesSource: CatalogSources.connection,
+            ));
   if (entry == null) return null;
 
   final rawType = raw['type'] is String ? raw['type'] as String : '';
@@ -100,11 +119,6 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
     if (parsed != null) durations.add(parsed);
   }
 
-  // Длительность видео у Polza может быть задана не списком значений,
-  // а только границами (min/max) и значением по умолчанию: у
-  // bytedance/seedance-2-mini это min 4, max 15, default 15. Границы и
-  // дефолт сохраняются в mediaParams как есть — выдуманный список секунд
-  // (5 с, 8 с и т.п.) не строится ни здесь, ни в панели ввода.
   final durationSpec = parameters['duration'];
   if (durationSpec is Map) {
     int? intOf(Object? v) {

@@ -76,35 +76,69 @@ const Set<String> _knownTypes = <String>{
   'classification',
 };
 
+/// Результат обновления каталога. При ошибке [entries] содержит
+/// доступный прежний кэш, а [error] описывает причину ошибки.
+class CatalogSyncResult {
+  final List<CatalogEntry> entries;
+  final String? error;
+
+  CatalogSyncResult({
+    required List<CatalogEntry> entries,
+    this.error,
+  }) : entries = List<CatalogEntry>.unmodifiable(entries);
+}
+
+typedef _ConnectionIdentity = (String, String);
+
 /// Каталог моделей по подключениям.
 ///
-/// Для каждого подключения (адрес + ключ, включая OAuth-токен Polza)
-/// читается GET {baseUrl}/models; записи разбираются терпимым парсером
-/// [parseEntry] (известные форматы Polza/OpenRouter плюс формат В —
-/// только id/owned_by). Кэш — json-файл на подключение в каталоге
-/// приложения; TTL 24 часа. Кэш и метка времени записываются ТОЛЬКО
-/// после успешного ответа с непустым списком; при ошибке сети
-/// используется прежний кэш и TTL не сдвигается.
+/// Данные общего подключения доступны под всеми его известными id.
+/// Эквивалентность определяется парой адреса и ключа, а не именем
+/// провайдера. Ключи используются только в памяти и не пишутся в кэш.
 ///
-/// [lookup] собирает итоговую запись по приоритету: connection ->
-/// openrouter (только возможности, не цены) -> curated -> fallback.
-/// Цены приходят исключительно из ответа подключения.
+/// Кэш и метка времени записываются только после успешного ответа с
+/// непустым списком; при ошибке используется прежний кэш.
 class ProviderCatalogService extends ChangeNotifier {
   ProviderCatalogService();
 
   static const Duration _ttl = Duration(hours: 24);
   static const Duration _timeout = Duration(seconds: 30);
 
+  // Ключ карты — исходный id модели. Это сохраняет разные исходные id,
+  // которые нормализатор мог бы привести к одному значению.
   final Map<String, Map<String, CatalogEntry>> _byConnection =
       <String, Map<String, CatalogEntry>>{};
   final Map<String, DateTime> _syncedAt = <String, DateTime>{};
-  final Set<String> _syncing = <String>{};
-  bool _loaded = false;
+
+  // Идентичности и ключи авторизации не сериализуются.
+  final Map<String, _ConnectionIdentity> _identityById =
+      <String, _ConnectionIdentity>{};
+  final Map<String, CatalogConnection> _lastConnectionById =
+      <String, CatalogConnection>{};
+
+  final Map<String, Future<CatalogSyncResult>> _syncingById =
+      <String, Future<CatalogSyncResult>>{};
+  final Map<String, _ConnectionIdentity> _syncingIdentityById =
+      <String, _ConnectionIdentity>{};
+  final Map<_ConnectionIdentity, Future<CatalogSyncResult>> _downloads =
+      <_ConnectionIdentity, Future<CatalogSyncResult>>{};
+
+  Future<void>? _loadFuture;
 
   int get connectionCount => _byConnection.length;
 
   int entryCountOf(String connectionId) =>
-      _byConnection[connectionId.trim()]?.length ?? 0;
+      _cachedForId(connectionId.trim())?.length ?? 0;
+
+  static String _baseOf(String raw) =>
+      raw.trim().replaceAll(RegExp(r'/+$'), '');
+
+  static String _keyOf(String raw) => raw
+      .trim()
+      .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
+
+  static _ConnectionIdentity _identityOf(CatalogConnection connection) =>
+      (_baseOf(connection.baseUrl), _keyOf(connection.apiKey));
 
   // ---------- кэш на диске ----------
 
@@ -118,11 +152,10 @@ class ProviderCatalogService extends ChangeNotifier {
   static String _safeId(String raw) =>
       raw.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
 
-  /// Читает сохранённые кэши всех подключений (один раз). Битые файлы
-  /// и сбои хранилища не роняют код.
-  Future<void> loadCache() async {
-    if (_loaded) return;
-    _loaded = true;
+  /// Все параллельные вызовы ожидают завершения одного чтения кэша.
+  Future<void> loadCache() => _loadFuture ??= _readCache();
+
+  Future<void> _readCache() async {
     try {
       final dir = await _cacheDir();
       if (!await dir.exists()) return;
@@ -131,7 +164,7 @@ class ProviderCatalogService extends ChangeNotifier {
         try {
           final decoded = jsonDecode(await f.readAsString());
           if (decoded is! Map) continue;
-          final cid = (decoded['connectionId'] ?? '').toString();
+          final cid = (decoded['connectionId'] ?? '').toString().trim();
           final list = decoded['entries'];
           final synced =
               DateTime.tryParse((decoded['syncedAt'] ?? '').toString());
@@ -142,11 +175,11 @@ class ProviderCatalogService extends ChangeNotifier {
             try {
               final entry =
                   CatalogEntry.fromJson(Map<String, dynamic>.from(e));
-              if (entry.id.isNotEmpty) {
-                map[ModelIdNormalizer.normalize(entry.id)] = entry;
-              }
+              final id = entry.id.trim();
+              if (id.isNotEmpty) map[id] = entry;
             } catch (_) {}
           }
+          if (map.isEmpty) continue;
           _byConnection[cid] = map;
           _syncedAt[cid] = synced;
         } catch (_) {}
@@ -154,14 +187,18 @@ class ProviderCatalogService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _persist(String cid, List<CatalogEntry> entries) async {
+  Future<void> _persist(
+    String cid,
+    List<CatalogEntry> entries,
+    DateTime syncedAt,
+  ) async {
     try {
       final dir = await _cacheDir();
       final f = File('${dir.path}/catalog_${_safeId(cid)}.json');
       await f.writeAsString(
         jsonEncode(<String, dynamic>{
           'connectionId': cid,
-          'syncedAt': DateTime.now().toIso8601String(),
+          'syncedAt': syncedAt.toIso8601String(),
           'entries': <Map<String, dynamic>>[
             for (final e in entries) e.toJson(),
           ],
@@ -171,71 +208,277 @@ class ProviderCatalogService extends ChangeNotifier {
     } catch (_) {}
   }
 
+  // ---------- идентичность подключений ----------
+
+  /// Все известные имена именно этого адреса и ключа.
+  Set<String> _relatedIds(CatalogConnection connection) {
+    final identity = _identityOf(connection);
+    final ids = <String>{connection.id.trim()};
+    for (final c in _collectConnections()) {
+      if (_identityOf(c) == identity) ids.add(c.id.trim());
+    }
+    for (final item in _lastConnectionById.entries) {
+      if (_identityOf(item.value) == identity) ids.add(item.key);
+    }
+    ids.remove('');
+    return ids;
+  }
+
+  CatalogConnection? _connectionForId(String connectionId) {
+    final id = connectionId.trim();
+    if (id.isEmpty) return null;
+
+    // Для пресета и общих настроек актуальная конфигурация важнее
+    // ранее выполненного запроса: адрес или ключ могли измениться.
+    if (id == 'global' || id.startsWith('preset:')) {
+      for (final c in _collectConnections()) {
+        if (c.id.trim() == id) return c;
+      }
+    }
+
+    final last = _lastConnectionById[id];
+    if (last != null) return last;
+    for (final c in _collectConnections()) {
+      if (c.id.trim() == id) return c;
+    }
+    return null;
+  }
+
+  Map<String, CatalogEntry>? _cachedFor(CatalogConnection connection) {
+    final identity = _identityOf(connection);
+    Map<String, CatalogEntry>? latest;
+    DateTime? latestAt;
+
+    for (final id in _relatedIds(connection)) {
+      final knownIdentity = _identityById[id];
+      if (knownIdentity != null && knownIdentity != identity) continue;
+      final entries = _byConnection[id];
+      if (entries == null || entries.isEmpty) continue;
+      final at = _syncedAt[id];
+      if (latest == null ||
+          (at != null && (latestAt == null || at.isAfter(latestAt)))) {
+        latest = entries;
+        latestAt = at;
+      }
+    }
+    return latest;
+  }
+
+  Map<String, CatalogEntry>? _cachedForId(String connectionId) {
+    final connection = _connectionForId(connectionId);
+    if (connection != null) return _cachedFor(connection);
+    return _byConnection[connectionId.trim()];
+  }
+
+  DateTime? _latestSyncFor(CatalogConnection connection) {
+    final identity = _identityOf(connection);
+    DateTime? latest;
+    for (final id in _relatedIds(connection)) {
+      final knownIdentity = _identityById[id];
+      if (knownIdentity != null && knownIdentity != identity) continue;
+      if (_byConnection[id]?.isNotEmpty != true) continue;
+      final at = _syncedAt[id];
+      if (at != null && (latest == null || at.isAfter(latest))) {
+        latest = at;
+      }
+    }
+    return latest;
+  }
+
   // ---------- синхронизация ----------
 
-  /// Синхронизация одного подключения. Никогда не бросает исключений:
-  /// при любой ошибке прежний кэш остаётся в силе.
-  Future<void> sync(CatalogConnection connection, {bool force = false}) async {
+  /// Синхронизирует указанное подключение и возвращает тот же набор
+  /// записей, который доступен через lookup.
+  ///
+  /// Параллельные запросы к одной паре адрес/ключ используют общий
+  /// сетевой запрос. Если тот же id уже обновляется с другими
+  /// реквизитами, новый запрос сначала ожидает предыдущий.
+  Future<CatalogSyncResult> sync(
+    CatalogConnection connection, {
+    bool force = false,
+  }) async {
     await loadCache();
+
     final cid = connection.id.trim();
-    if (_syncing.contains(cid)) return;
-    if (!force) {
-      final at = _syncedAt[cid];
-      if (at != null && DateTime.now().difference(at) < _ttl) return;
+    final identity = _identityOf(connection);
+    if (cid.isEmpty) {
+      return CatalogSyncResult(
+        entries: const <CatalogEntry>[],
+        error: 'Не указан идентификатор подключения.',
+      );
     }
-    _syncing.add(cid);
-    final client = http.Client();
+
+    while (true) {
+      final running = _syncingById[cid];
+      if (running == null) break;
+      final runningIdentity = _syncingIdentityById[cid];
+      final result = await running;
+      if (runningIdentity == identity) return result;
+      if (identical(_syncingById[cid], running)) {
+        _syncingById.remove(cid);
+        _syncingIdentityById.remove(cid);
+      }
+    }
+
+    final task = _syncOne(connection, force: force);
+    _syncingById[cid] = task;
+    _syncingIdentityById[cid] = identity;
     try {
-      final base = connection.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-      final uri = Uri.tryParse('$base/models');
-      if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
-        return;
-      }
-      final headers = <String, String>{'Accept': 'application/json'};
-      final key = connection.apiKey.trim();
-      // Та же авторизация, что и у обычных запросов к подключению.
-      if (key.isNotEmpty) headers['Authorization'] = 'Bearer $key';
-      final resp = await client.get(uri, headers: headers).timeout(_timeout);
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        debugPrint(
-            '[caps] $cid: HTTP ${resp.statusCode}, использую прежний кэш');
-        return;
-      }
-      final entries = parseCatalogResponse(resp.body, connection);
-      if (entries.isEmpty) {
-        debugPrint('[caps] $cid: пустой список моделей, TTL не сдвигаю');
-        return;
-      }
-      _byConnection[cid] = <String, CatalogEntry>{
-        for (final e in entries) ModelIdNormalizer.normalize(e.id): e,
-      };
-      _syncedAt[cid] = DateTime.now();
-      await _persist(cid, entries);
-      final typeCounts = <String, int>{};
-      var withPrice = 0;
-      var withReasoning = 0;
-      for (final e in entries) {
-        if (e.type.isNotEmpty) {
-          typeCounts[e.type] = (typeCounts[e.type] ?? 0) + 1;
-        }
-        if (e.priceSource != null) withPrice++;
-        if (e.reasoning != null) withReasoning++;
-      }
-      debugPrint('[caps] $cid: моделей ${entries.length}, по типам '
-          '$typeCounts, с ценой $withPrice, с reasoning $withReasoning');
-      notifyListeners();
-    } on TimeoutException {
-      debugPrint('[caps] $cid: таймаут, прежний кэш сохранён');
-    } catch (e) {
-      debugPrint('[caps] $cid: ошибка сети ($e), прежний кэш сохранён');
+      return await task;
     } finally {
-      client.close();
-      _syncing.remove(cid);
+      if (identical(_syncingById[cid], task)) {
+        _syncingById.remove(cid);
+        _syncingIdentityById.remove(cid);
+      }
     }
   }
 
-  /// Синхронизация всех известных подключений (пресеты, глобальные
-  /// настройки, Polza-сессия) плюс справочник OpenRouter.
+  Future<CatalogSyncResult> _syncOne(
+    CatalogConnection connection, {
+    required bool force,
+  }) async {
+    final cid = connection.id.trim();
+    final identity = _identityOf(connection);
+    final cached = _cachedFor(connection);
+    final at = _latestSyncFor(connection);
+
+    if (!force &&
+        cached != null &&
+        at != null &&
+        DateTime.now().difference(at) < _ttl) {
+      return CatalogSyncResult(entries: cached.values.toList());
+    }
+
+    var download = _downloads[identity];
+    if (download == null) {
+      download = _download(connection);
+      _downloads[identity] = download;
+    }
+
+    CatalogSyncResult result;
+    try {
+      result = await download;
+    } finally {
+      if (identical(_downloads[identity], download)) {
+        _downloads.remove(identity);
+      }
+    }
+
+    if (result.error != null || result.entries.isEmpty) {
+      final previous = _cachedFor(connection);
+      return CatalogSyncResult(
+        entries: previous?.values.toList() ?? const <CatalogEntry>[],
+        error: result.error ?? 'Сервер не вернул ни одной модели.',
+      );
+    }
+
+    final map = <String, CatalogEntry>{
+      for (final entry in result.entries)
+        if (entry.id.trim().isNotEmpty) entry.id.trim(): entry,
+    };
+    if (map.isEmpty) {
+      final previous = _cachedFor(connection);
+      return CatalogSyncResult(
+        entries: previous?.values.toList() ?? const <CatalogEntry>[],
+        error: 'Сервер не вернул ни одной модели.',
+      );
+    }
+
+    final syncedAt = DateTime.now();
+    final ids = _relatedIds(connection);
+    final appliedIds = <String>[];
+
+    for (final id in ids) {
+      // Не перезаписываем другой запрос, который уже обновляет тот же
+      // логический id с другим адресом или ключом.
+      final pendingIdentity = _syncingIdentityById[id];
+      if (pendingIdentity != null && pendingIdentity != identity) continue;
+      _byConnection[id] = map;
+      _syncedAt[id] = syncedAt;
+      _identityById[id] = identity;
+      appliedIds.add(id);
+    }
+    _lastConnectionById[cid] = connection;
+
+    final entries = map.values.toList();
+    for (final id in appliedIds) {
+      await _persist(id, entries, syncedAt);
+    }
+
+    final typeCounts = <String, int>{};
+    var withPrice = 0;
+    var withReasoning = 0;
+    for (final e in entries) {
+      if (e.type.isNotEmpty) {
+        typeCounts[e.type] = (typeCounts[e.type] ?? 0) + 1;
+      }
+      if (e.priceSource != null) withPrice++;
+      if (e.reasoning != null) withReasoning++;
+    }
+    debugPrint('[caps] $cid: моделей ${entries.length}, по типам '
+        '$typeCounts, с ценой $withPrice, с reasoning $withReasoning');
+    notifyListeners();
+
+    return CatalogSyncResult(entries: entries);
+  }
+
+  Future<CatalogSyncResult> _download(CatalogConnection connection) async {
+    final cid = connection.id.trim();
+    final client = http.Client();
+    try {
+      final base = _baseOf(connection.baseUrl);
+      final uri = Uri.tryParse('$base/models');
+      if (uri == null ||
+          (uri.scheme != 'http' && uri.scheme != 'https') ||
+          uri.host.isEmpty) {
+        return CatalogSyncResult(
+          entries: const <CatalogEntry>[],
+          error: 'Некорректный адрес подключения.',
+        );
+      }
+
+      final headers = <String, String>{'Accept': 'application/json'};
+      final key = _keyOf(connection.apiKey);
+      if (key.isNotEmpty) headers['Authorization'] = 'Bearer $key';
+
+      final resp = await client.get(uri, headers: headers).timeout(_timeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        debugPrint(
+          '[caps] $cid: HTTP ${resp.statusCode}, использую прежний кэш',
+        );
+        return CatalogSyncResult(
+          entries: const <CatalogEntry>[],
+          error: 'Ошибка ${resp.statusCode}. Проверьте ключ и адрес.',
+        );
+      }
+
+      final entries = parseCatalogResponse(resp.body, connection);
+      if (entries.isEmpty) {
+        debugPrint('[caps] $cid: пустой список моделей, TTL не сдвигаю');
+        return CatalogSyncResult(
+          entries: const <CatalogEntry>[],
+          error: 'Сервер не вернул ни одной модели.',
+        );
+      }
+      return CatalogSyncResult(entries: entries);
+    } on TimeoutException {
+      debugPrint('[caps] $cid: таймаут, прежний кэш сохранён');
+      return CatalogSyncResult(
+        entries: const <CatalogEntry>[],
+        error: 'Сервер не ответил за 30 секунд.',
+      );
+    } catch (e) {
+      debugPrint('[caps] $cid: ошибка сети ($e), прежний кэш сохранён');
+      return CatalogSyncResult(
+        entries: const <CatalogEntry>[],
+        error: 'Не удалось загрузить модели: проверьте сеть.',
+      );
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Синхронизация всех известных подключений плюс справочник OpenRouter.
   Future<void> syncAll() async {
     unawaited(openRouterReference.sync());
     for (final c in _collectConnections()) {
@@ -245,16 +488,15 @@ class ProviderCatalogService extends ChangeNotifier {
     }
   }
 
-  /// Подключения из пресетов, общих настроек и активных OAuth-сессий
-  /// (Polza, RouterAI). Дубликаты по паре (baseUrl, ключ) убираются.
+  /// Подключения из пресетов, общих настроек и активных OAuth-сессий.
+  /// Имена не отбрасываются: несколько id могут обозначать одну пару
+  /// адрес/ключ и должны видеть один каталог.
   List<CatalogConnection> _collectConnections() {
     final out = <CatalogConnection>[];
-    final seen = <String>{};
     void add(String id, String baseUrl, String apiKey) {
-      final base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
-      final key = apiKey.trim();
+      final base = _baseOf(baseUrl);
+      final key = _keyOf(apiKey);
       if (base.isEmpty || key.isEmpty) return;
-      if (!seen.add('$base|$key')) return;
       out.add(CatalogConnection(id: id, baseUrl: base, apiKey: key));
     }
 
@@ -295,11 +537,6 @@ class ProviderCatalogService extends ChangeNotifier {
     if (decoded is! Map) return out;
     final data = decoded['data'] ?? decoded['models'];
     if (data is! List) return out;
-    // Известные провайдеры (polza.ai / routerai.ru / openrouter.ai)
-    // разбираются dispatcher'ом parseModelsList из catalog_parsing.dart;
-    // прочие провайдеры — прежним универсальным parseEntry, чтобы не
-    // сломать формат В (модели только с id/owned_by). Если dispatcher
-    // упал, разбор откатывается на старый parseEntry.
     final String normUrl = connection.baseUrl.toLowerCase();
     final bool knownProvider = normUrl.contains('polza.ai') ||
         normUrl.contains('routerai.ru') ||
@@ -314,7 +551,6 @@ class ProviderCatalogService extends ChangeNotifier {
           if (entry.id.isNotEmpty) out.add(entry);
         }
       } catch (_) {
-        // fallback: старый parseEntry, если новый dispatcher упал
         for (final e in data) {
           if (e is! Map) continue;
           try {
@@ -324,8 +560,11 @@ class ProviderCatalogService extends ChangeNotifier {
         }
       }
     } else {
-      // провайдер не известен — старый универсальный parseEntry (формат В)
       for (final e in data) {
+        if (e is String && e.trim().isNotEmpty) {
+          out.add(parseEntry(<String, dynamic>{'id': e.trim()}, connection));
+          continue;
+        }
         if (e is! Map) continue;
         try {
           final entry = parseEntry(e, connection);
@@ -337,10 +576,6 @@ class ProviderCatalogService extends ChangeNotifier {
   }
 
   /// Универсальный терпимый парсер одной записи /models.
-  /// Известные формы: Polza (type, parameters, top_provider.reasoning/
-  /// supported_parameters/pricing за 1M), OpenRouter (reasoning,
-  /// supported_parameters, pricing за токен в USD) и формат В
-  /// (только id/owned_by). Каждая группа данных — в try/catch.
   static CatalogEntry parseEntry(Map raw, CatalogConnection connection) {
     final m = Map<String, dynamic>.from(raw);
     final id = (_asString(m['id']) ??
@@ -385,13 +620,10 @@ class ProviderCatalogService extends ChangeNotifier {
         aspectRatios =
             _asStringList(_asMap(params['aspect_ratio'])?['values']);
         resolutions = _asStringList(_asMap(params['resolution'])?['values']);
-        // duration у Polza — СТРОКИ ('4', '6'): приводим к int.
         durations = _asIntList(_asMap(params['duration'])?['values']);
         qualities = _asStringList(_asMap(params['quality'])?['values']);
         maxRefImages = _asInt(_asMap(params['images'])?['max']);
       }
-      // Формат RouterAI: плоские списки на верхнем уровне записи,
-      // если блок parameters (Polza) не дал данных.
       if (aspectRatios.isEmpty) {
         aspectRatios = _asStringList(m['supported_aspect_ratios']);
       }
@@ -444,21 +676,14 @@ class ProviderCatalogService extends ChangeNotifier {
     );
   }
 
-  /// Уровни размышлений по умолчанию, когда провайдер заявил reasoning,
-  /// но не перечислил уровни.
   static const List<String> _defaultReasoningLevels = <String>[
     'off', 'low', 'medium', 'high',
   ];
 
-  /// Базовые уровни для формата RouterAI: reasoning заявлен в
-  /// supported_parameters, но уровни не перечислены.
   static const List<String> _supportedParamsReasoningLevels = <String>[
     'off', 'high',
   ];
 
-  /// Reasoning: m['reasoning'] и/или m['top_provider']['reasoning'].
-  /// Возвращает (reasoning, unknown). unknown=true — провайдер не отдал
-  /// ни reasoning, ни supported_parameters (формат В).
   static (CatalogReasoning?, bool) _parseReasoning(
     Map<String, dynamic> m,
     Map<String, dynamic>? topProvider,
@@ -490,7 +715,6 @@ class ProviderCatalogService extends ChangeNotifier {
           false,
         );
       }
-      // Словарь без списка усилий: базовые уровни.
       return (
         CatalogReasoning(
           levels: normalizeReasoningLevels(
@@ -504,7 +728,6 @@ class ProviderCatalogService extends ChangeNotifier {
       );
     }
     if (sawMarker) {
-      // reasoning: true — уровни не перечислены.
       return (
         CatalogReasoning(
           levels: normalizeReasoningLevels(
@@ -516,8 +739,6 @@ class ProviderCatalogService extends ChangeNotifier {
     }
     if (supportedParams.contains('reasoning') ||
         supportedParams.contains('reasoning_effort')) {
-      // RouterAI: reasoning заявлен в supported_parameters без списка
-      // уровней — базовые уровни off/high.
       return (
         CatalogReasoning(
           levels: List<String>.of(_supportedParamsReasoningLevels),
@@ -525,16 +746,10 @@ class ProviderCatalogService extends ChangeNotifier {
         false,
       );
     }
-    if (supportedParams.isNotEmpty) {
-      // supported_parameters есть, reasoning не заявлен: провайдер явно
-      // не заявил (не неизвестно).
-      return (null, false);
-    }
-    // Формат В: ни reasoning, ни supported_parameters — неизвестно.
+    if (supportedParams.isNotEmpty) return (null, false);
     return (null, true);
   }
 
-  /// Цены ТОЛЬКО в известных формах. Возвращает (in, out, currency).
   static (double?, double?, String?) _parsePrice(
     Map<String, dynamic> m,
     Map<String, dynamic>? topProvider,
@@ -543,7 +758,6 @@ class ProviderCatalogService extends ChangeNotifier {
       m,
       if (topProvider != null) topProvider,
     ];
-    // 1) Явные цены за миллион токенов (Polza: top_provider.pricing).
     for (final spot in spots) {
       final pricing = _asMap(spot['pricing']);
       final inM = _asDouble(_pick(spot, const <String>[
@@ -572,14 +786,12 @@ class ProviderCatalogService extends ChangeNotifier {
         return (inM, outM, cur);
       }
     }
-    // 2) Цены за один токен (OpenRouter): pricing.prompt/completion в USD.
     for (final spot in spots) {
       final pricing = _asMap(spot['pricing']);
       if (pricing == null) continue;
       final inTok = _asDouble(pricing['prompt'] ?? pricing['input']);
       final outTok = _asDouble(pricing['completion'] ?? pricing['output']);
       if (inTok == null && outTok == null) continue;
-      // Цена меньше 0.01 — это цена за один токен; иначе уже за 1M.
       double? s(double? v) =>
           v == null ? null : (v < 0.01 ? v * 1000000 : v);
       return (s(inTok), s(outTok), _asString(pricing['currency']) ?? 'USD');
@@ -595,9 +807,17 @@ class ProviderCatalogService extends ChangeNotifier {
     await loadCache();
     final rawId = modelId.trim();
     final norm = ModelIdNormalizer.normalize(rawId);
-    // Переменная сразу объявлена непустым CatalogEntry: продвижение типов
-    // не участвует, присваивания дозаполненных записей безопасны.
-    CatalogEntry entry = _byConnection[connectionId.trim()]?[norm] ??
+    final entries = _cachedForId(connectionId);
+    CatalogEntry? found = entries?[rawId];
+    if (found == null && entries != null) {
+      for (final candidate in entries.values) {
+        if (ModelIdNormalizer.normalize(candidate.id) == norm) {
+          found = candidate;
+          break;
+        }
+      }
+    }
+    CatalogEntry entry = found ??
         CatalogEntry(
           connectionId: connectionId,
           id: rawId,
@@ -607,10 +827,6 @@ class ProviderCatalogService extends ChangeNotifier {
     var source = entry.capabilitiesSource;
     var refUsed = false;
 
-    // Stage 4.1 (a), архитектурное правило: для известных провайдеров
-    // (polza/routerai/openrouter) справочник OpenRouter НЕ вызывается —
-    // используются ТОЛЬКО данные их /v1/models. null от провайдера =
-    // «провайдер не сказал»: чипсы скрыты, reasoning не добирается.
     if (!_isKnownProviderConnection(connectionId, entry) &&
         _needsReference(entry)) {
       try {
@@ -660,20 +876,14 @@ class ProviderCatalogService extends ChangeNotifier {
   static String _upgradedSource(String current, String candidate) =>
       current == CatalogSources.fallback ? candidate : current;
 
-  /// Stage 4.1 (a): относится ли подключение к известному провайдеру
-  /// (polza.ai / routerai.ru / openrouter.ai). Провайдер определяется
-  /// так же, как в parseModelsList — по baseUrl подключения с данным id
-  /// (_collectConnections). Минимально-инвазивный вариант: сигнатура
-  /// _needsReference не менялась, фильтр применён в lookup перед вызовом;
-  /// _fillFromReference остаётся для сторонних API (кастомный baseUrl).
   bool _isKnownProviderConnection(String connectionId, CatalogEntry e) {
     final ids = <String>{
       connectionId.trim(),
       if (e.connectionId.trim().isNotEmpty) e.connectionId.trim(),
     };
-    if (ids.isEmpty) return false;
-    for (final c in _collectConnections()) {
-      if (!ids.contains(c.id)) continue;
+    for (final id in ids) {
+      final c = _connectionForId(id);
+      if (c == null) continue;
       final u = c.baseUrl.toLowerCase();
       if (u.contains('polza.ai') ||
           u.contains('routerai.ru') ||
@@ -696,8 +906,6 @@ class ProviderCatalogService extends ChangeNotifier {
           e.durations.isEmpty) &&
       (e.type.isEmpty || e.type == 'image' || e.type == 'video');
 
-  /// Дозаполнение возможностей из справочника OpenRouter (цены не трогаем).
-  /// Возвращает гарантированно непустую запись и признак изменений.
   static (CatalogEntry, bool) _fillFromReference(
     CatalogEntry e,
     Map<String, dynamic> ref,
@@ -736,7 +944,6 @@ class ProviderCatalogService extends ChangeNotifier {
     }
   }
 
-  /// Дозаполнение медиа-параметров из курированного каталога проекта.
   static (CatalogEntry, bool) _fillFromCurated(
     CatalogEntry e,
     ModelParameters spec,
@@ -770,8 +977,6 @@ class ProviderCatalogService extends ChangeNotifier {
     }
   }
 
-  /// Запасные значения: тип по эвристике идентификатора, базовые уровни
-  /// reasoning, если данные так и остались неизвестными.
   static CatalogEntry _applyFallback(CatalogEntry e, String rawModelId) {
     var type = e.type;
     if (type.isEmpty) {
@@ -794,9 +999,6 @@ class ProviderCatalogService extends ChangeNotifier {
       );
       unknown = false;
     }
-    // Сохраняем все поля исходной записи, включая mediaParams со схемой
-    // модели, границами и дефолтом duration. Fallback reasoning не должен
-    // удалять данные каталога.
     return e.copyWith(
       type: type,
       reasoning: reasoning,
