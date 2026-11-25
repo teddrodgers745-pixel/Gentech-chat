@@ -27,6 +27,9 @@ class ChatCompletionsExecutor extends GenerationExecutor {
 
   @override
   Stream<GenerationEvent> run(GenerationRequest request) async* {
+    // Один и тот же URL может прийти в нескольких чанках; потребитель
+    // должен получить SourcesReceived только с новыми источниками.
+    final seenSources = <String>{};
     try {
       await for (final chunk in _service.sendMessage(
         baseUrl: request.baseUrl,
@@ -59,7 +62,15 @@ class ChatCompletionsExecutor extends GenerationExecutor {
         // Источники — отдельное событие: чат-сцена собирает их
         // в TextPart.sources для отображения в интерфейсе.
         if (chunk.sources.isNotEmpty) {
-          yield SourcesReceived(sources: List<String>.of(chunk.sources));
+          final fresh = <String>[];
+          for (final raw in chunk.sources) {
+            final url = raw.trim();
+            if (url.isEmpty) continue;
+            if (seenSources.add(url)) fresh.add(url);
+          }
+          if (fresh.isNotEmpty) {
+            yield SourcesReceived(sources: fresh);
+          }
         }
         final delta = GenerationDelta(
           content: chunk.content,

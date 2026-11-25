@@ -328,6 +328,10 @@ class _ChatScreenState extends State<ChatScreen> {
           progress: ev.percent,
         );
       });
+    } else if (ev is SourcesReceived) {
+      if (_applySourcesToLatestPending(ev.sources)) {
+        store.save();
+      }
     } else if (ev is GenerationFailure) {
       if (ev.error.message.contains('отменена')) {
         _applyToJobParts(ev.jobId, (m, idx, part) => m.parts.removeAt(idx));
@@ -363,6 +367,74 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
     }
+  }
+
+  /// Добавляет источники в [target], отбрасывая пустые строки и дубликаты.
+  static void _mergeSources(List<String> target, Iterable<String> incoming) {
+    for (final raw in incoming) {
+      final url = raw.trim();
+      if (url.isEmpty) continue;
+      if (!target.contains(url)) target.add(url);
+    }
+  }
+
+  /// Прикрепляет источники к сообщению [reply] в TextPart.
+  /// Существующие TextPart (например, со стоимостью) сохраняются,
+  /// источники объединяются без дублей.
+  static void _attachSourcesToReply(
+    ChatMessage reply,
+    Iterable<String> sources,
+  ) {
+    final merged = <String>[];
+    for (final part in reply.parts) {
+      if (part is TextPart) _mergeSources(merged, part.sources);
+    }
+    _mergeSources(merged, sources);
+    if (merged.isEmpty) return;
+
+    for (int i = 0; i < reply.parts.length; i++) {
+      final part = reply.parts[i];
+      if (part is TextPart) {
+        reply.parts[i] = TextPart(
+          part.text,
+          cost: part.cost,
+          sources: List<String>.of(merged),
+        );
+        // Один и тот же URL не должен дублироваться в разных TextPart.
+        for (int j = 0; j < reply.parts.length; j++) {
+          if (j == i) continue;
+          final other = reply.parts[j];
+          if (other is TextPart && other.sources.isNotEmpty) {
+            reply.parts[j] = TextPart(
+              other.text,
+              cost: other.cost,
+              sources: const <String>[],
+            );
+          }
+        }
+        return;
+      }
+    }
+    reply.parts.add(TextPart('', sources: List<String>.of(merged)));
+  }
+
+  /// Источники восстановления не несут jobId, поэтому прикрепляем их
+  /// к самому свежему сообщению с ожидающей задачей.
+  bool _applySourcesToLatestPending(Iterable<String> sources) {
+    final merged = <String>[];
+    _mergeSources(merged, sources);
+    if (merged.isEmpty) return false;
+    for (final chat in store.chats) {
+      for (int i = chat.messages.length - 1; i >= 0; i--) {
+        final m = chat.messages[i];
+        if (m.role != 'assistant') continue;
+        if (m.parts.any((p) => p is PendingPart)) {
+          _attachSourcesToReply(m, merged);
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   /// Сбрасывает jobId в снимке запроса после успешного завершения:
@@ -871,11 +943,14 @@ class _ChatScreenState extends State<ChatScreen> {
       routeHint: ModelTypes.image,
     );
     GenError? genError;
+    final sources = <String>[];
     try {
       await for (final ev in executor.run(request)) {
         if (ev is GenerationDelta) {
           reply.content += ev.content;
           if (snapshot != null) snapshot.jobId = '';
+        } else if (ev is SourcesReceived) {
+          _mergeSources(sources, ev.sources);
         } else if (ev is GenProgress) {
           if (ev.jobId.isNotEmpty && snapshot != null) {
             snapshot.jobId = ev.jobId;
@@ -912,6 +987,11 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       reply.parts.add(TextPart('', cost: imgCost));
       chat.totalCost += imgCost.cost;
+    }
+    if (genError == null &&
+        chat.messages.contains(reply) &&
+        sources.isNotEmpty) {
+      _attachSourcesToReply(reply, sources);
     }
     if (!mounted) {
       await store.save();
@@ -1001,6 +1081,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final resumeJobId = snapshot?.jobId.trim() ?? '';
     GenError? genError;
     var cancelled = false;
+    final sources = <String>[];
     try {
       final Stream<GenerationEvent> events;
       if (resumeJobId.isNotEmpty) {
@@ -1036,6 +1117,8 @@ class _ChatScreenState extends State<ChatScreen> {
             snapshot.jobId = ev.jobId;
           }
           _updateVideoPending(reply, jobId: ev.jobId, progress: ev.percent);
+        } else if (ev is SourcesReceived) {
+          _mergeSources(sources, ev.sources);
         } else if (ev is GenCompleted) {
           if (snapshot != null) snapshot.jobId = '';
           final path = ev.localPath.trim();
@@ -1071,6 +1154,9 @@ class _ChatScreenState extends State<ChatScreen> {
       reply
         ..errorCode = genError.code
         ..errorText = GenErrorMapper.detailsOf(genError);
+    }
+    if (!cancelled && genError == null && sources.isNotEmpty) {
+      _attachSourcesToReply(reply, sources);
     }
     if (reply.parts.isEmpty &&
         reply.content.isEmpty &&
@@ -1395,9 +1481,7 @@ class _ChatScreenState extends State<ChatScreen> {
         reply.content += ch.content;
         reply.reasoning += ch.reasoning;
         if (ch.usage != null) lastUsage = ch.usage;
-        for (final s in ch.sources) {
-          if (!sources.contains(s)) sources.add(s);
-        }
+        _mergeSources(sources, ch.sources);
         _scheduleUi();
       }
     } catch (e) {
