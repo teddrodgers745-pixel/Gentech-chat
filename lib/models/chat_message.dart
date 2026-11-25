@@ -28,6 +28,11 @@ class GenerationSnapshot {
   final String? typeOverride;
   final Map<String, dynamic> parameters;
 
+  /// Идентификатор созданной асинхронной задачи (видео/изображение).
+  /// Пустая строка — задача ещё не создана. Сохраняется, чтобы повтор
+  /// возобновлял существующую задачу, а не создавал новую.
+  String jobId;
+
   GenerationSnapshot({
     required this.route,
     required this.modelId,
@@ -36,6 +41,7 @@ class GenerationSnapshot {
     required this.prompt,
     this.typeOverride,
     Map<String, dynamic> parameters = const <String, dynamic>{},
+    this.jobId = '',
   }) : parameters = Map<String, dynamic>.unmodifiable(parameters);
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -46,6 +52,7 @@ class GenerationSnapshot {
         'prompt': prompt,
         if (typeOverride != null) 'typeOverride': typeOverride,
         'parameters': parameters,
+        if (jobId.isNotEmpty) 'jobId': jobId,
       };
 
   factory GenerationSnapshot.fromJson(Object? raw) {
@@ -74,6 +81,7 @@ class GenerationSnapshot {
       prompt: stringValue('prompt'),
       typeOverride: rawOverride is String ? rawOverride : null,
       parameters: params,
+      jobId: stringValue('jobId'),
     );
   }
 }

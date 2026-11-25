@@ -168,6 +168,66 @@ class GenerationService {
     }
   }
 
+  /// Возобновляет ранее созданную задачу по её jobId. Если запись
+  /// отсутствует в ActiveJobsStore, используется переданный fallback.
+  Stream<GenerationEvent> resumeJob(
+    String jobId, {
+    String baseUrl = '',
+    String apiKey = '',
+    String model = '',
+    String prompt = '',
+  }) async* {
+    final id = jobId.trim();
+    if (id.isEmpty) {
+      yield const GenerationFailure(
+        UnknownGenError(details: 'Не указан идентификатор задачи.'),
+      );
+      return;
+    }
+    AsyncJobRecord? record;
+    try {
+      final jobs = await ActiveJobsStore.instance.loadAll();
+      for (final r in jobs) {
+        if (r.jobId == id) {
+          record = r;
+          break;
+        }
+      }
+    } catch (_) {}
+    final rec = record ??
+        AsyncJobRecord(
+          jobId: id,
+          baseUrl: baseUrl,
+          apiKey: apiKey,
+          model: model,
+          prompt: prompt,
+        );
+    if (rec.baseUrl.trim().isEmpty || rec.apiKey.trim().isEmpty) {
+      yield const GenerationFailure(
+        UnknownGenError(
+          details: 'Не удалось восстановить данные задачи. '
+              'Отправьте запрос заново.',
+        ),
+      );
+      return;
+    }
+    final executor = AsyncJobExecutor();
+    _running.add(executor);
+    try {
+      await for (final ev in executor.resume(rec)) {
+        if (ev is GenerationFailure && ev.jobId.isEmpty) {
+          yield GenerationFailure(ev.error, jobId: rec.jobId);
+        } else {
+          yield ev;
+        }
+      }
+    } catch (_) {
+      // Запись остаётся в хранилище для следующего восстановления.
+    } finally {
+      _running.remove(executor);
+    }
+  }
+
   /// Прерывает текущие исполнители, включая запросы до получения jobId.
   void cancel() {
     _cancelEpoch++;

@@ -120,6 +120,25 @@ class NetworkError extends GenError {
       : 'Ошибка соединения. $details';
 }
 
+/// Задача уже создана, но получить её статус не удалось из-за сети.
+/// Запись задачи сохранена и может быть возобновлена без новой оплаты.
+class JobStatusUnknown extends GenError {
+  const JobStatusUnknown({this.jobId = '', this.details = ''});
+
+  final String jobId;
+  final String details;
+
+  @override
+  String get code => 'status_unknown';
+
+  @override
+  String get message {
+    final base = 'Задача создана, но статус неизвестен. '
+        'Нажмите «Повторить», чтобы продолжить ожидание без новой оплаты.';
+    return details.trim().isEmpty ? base : '$base $details';
+  }
+}
+
 /// Запрос отклонён провайдером по содержимому либо неверным параметрам (400/422).
 class BadRequestError extends GenError {
   const BadRequestError({this.details = ''});

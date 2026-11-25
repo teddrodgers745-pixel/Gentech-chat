@@ -312,6 +312,7 @@ class _ChatScreenState extends State<ChatScreen> {
   /// PendingPart, замена её на VideoPart при успехе, снятие при ошибке.
   void _onRestoredEvent(GenerationEvent ev) {
     if (ev is GenCompleted) {
+      _clearJobIdInSnapshot(ev.jobId);
       _applyToJobParts(ev.jobId, (m, idx, part) {
         final path = ev.localPath.trim();
         m.parts[idx] = path.isNotEmpty
@@ -359,6 +360,22 @@ class _ChatScreenState extends State<ChatScreen> {
             apply(m, i, part);
             return;
           }
+        }
+      }
+    }
+  }
+
+  /// Сбрасывает jobId в снимке запроса после успешного завершения:
+  /// повтор завершённой задачи должен создавать новую, а не
+  /// возобновлять уже готовую.
+  void _clearJobIdInSnapshot(String jobId) {
+    final id = jobId.trim();
+    if (id.isEmpty) return;
+    for (final chat in store.chats) {
+      for (final m in chat.messages) {
+        final snap = m.generationSnapshot;
+        if (snap != null && snap.jobId == id) {
+          snap.jobId = '';
         }
       }
     }
@@ -809,6 +826,7 @@ class _ChatScreenState extends State<ChatScreen> {
         model: modelId,
       ),
       parameters: params,
+      snapshot: snap,
     );
   }
 
@@ -819,6 +837,7 @@ class _ChatScreenState extends State<ChatScreen> {
     required String prompt,
     required _RetryConn conn,
     required Map<String, dynamic> parameters,
+    GenerationSnapshot? snapshot,
   }) async {
     final reply = ChatMessage(id: newId(), role: 'assistant');
     chat.messages.add(reply);
@@ -833,7 +852,11 @@ class _ChatScreenState extends State<ChatScreen> {
       modelId: model,
       prompt: prompt,
     );
-    final executor = ImagesApiExecutor(aspectRatio: aspectRatio);
+    final resumeJobId = snapshot?.jobId.trim() ?? '';
+    final executor = ImagesApiExecutor(
+      aspectRatio: aspectRatio,
+      resumeJobId: resumeJobId.isEmpty ? null : resumeJobId,
+    );
     _imageExecutor = executor;
     final request = GenerationRequest(
       baseUrl: conn.baseUrl,
@@ -845,13 +868,22 @@ class _ChatScreenState extends State<ChatScreen> {
       stream: false,
       parameters: parameters,
       estimatedUsd: estimate.estimatedUsd,
+      routeHint: ModelTypes.image,
     );
     GenError? genError;
     try {
       await for (final ev in executor.run(request)) {
         if (ev is GenerationDelta) {
           reply.content += ev.content;
+          if (snapshot != null) snapshot.jobId = '';
+        } else if (ev is GenProgress) {
+          if (ev.jobId.isNotEmpty && snapshot != null) {
+            snapshot.jobId = ev.jobId;
+          }
         } else if (ev is GenerationFailure) {
+          if (ev.jobId.isNotEmpty && snapshot != null) {
+            snapshot.jobId = ev.jobId;
+          }
           genError = ev.error;
         }
         _scheduleUi();
@@ -937,6 +969,7 @@ class _ChatScreenState extends State<ChatScreen> {
         model: modelId,
       ),
       parameters: params,
+      snapshot: snap,
     );
   }
 
@@ -947,12 +980,16 @@ class _ChatScreenState extends State<ChatScreen> {
     required String prompt,
     required _RetryConn conn,
     required Map<String, dynamic> parameters,
+    GenerationSnapshot? snapshot,
   }) async {
     final reply = ChatMessage(
       id: newId(),
       role: 'assistant',
       parts: <MessagePart>[
-        const PendingPart(name: 'Генерация видео'),
+        PendingPart(
+          name: 'Генерация видео',
+          jobId: snapshot?.jobId ?? '',
+        ),
       ],
     );
     chat.messages.add(reply);
@@ -961,29 +998,46 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final model = conn.model.trim();
-    final request = GenerationRequest(
-      baseUrl: conn.baseUrl,
-      apiKey: conn.apiKey,
-      model: model,
-      messages: <Map<String, dynamic>>[
-        <String, dynamic>{'role': 'user', 'content': prompt},
-      ],
-      stream: false,
-      parameters: parameters,
-      estimatedUsd: CostEstimator.estimate(
-        modelId: model,
-        prompt: prompt,
-      ).estimatedUsd,
-      // Гарантируем видео-маршрут: повтор не должен уйти в текстовый чат.
-      routeHint: ModelTypes.video,
-    );
+    final resumeJobId = snapshot?.jobId.trim() ?? '';
     GenError? genError;
     var cancelled = false;
     try {
-      await for (final ev in _genService.generate(request)) {
+      final Stream<GenerationEvent> events;
+      if (resumeJobId.isNotEmpty) {
+        events = _genService.resumeJob(
+          resumeJobId,
+          baseUrl: conn.baseUrl,
+          apiKey: conn.apiKey,
+          model: model,
+          prompt: prompt,
+        );
+      } else {
+        final request = GenerationRequest(
+          baseUrl: conn.baseUrl,
+          apiKey: conn.apiKey,
+          model: model,
+          messages: <Map<String, dynamic>>[
+            <String, dynamic>{'role': 'user', 'content': prompt},
+          ],
+          stream: false,
+          parameters: parameters,
+          estimatedUsd: CostEstimator.estimate(
+            modelId: model,
+            prompt: prompt,
+          ).estimatedUsd,
+          routeHint: ModelTypes.video,
+        );
+        events = _genService.generate(request);
+      }
+
+      await for (final ev in events) {
         if (ev is GenProgress) {
+          if (ev.jobId.isNotEmpty && snapshot != null) {
+            snapshot.jobId = ev.jobId;
+          }
           _updateVideoPending(reply, jobId: ev.jobId, progress: ev.percent);
         } else if (ev is GenCompleted) {
+          if (snapshot != null) snapshot.jobId = '';
           final path = ev.localPath.trim();
           reply.parts
             ..clear()
@@ -993,6 +1047,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   : VideoPart.fromUrl(ev.remoteUrl),
             );
         } else if (ev is GenerationFailure) {
+          if (ev.jobId.isNotEmpty && snapshot != null) {
+            snapshot.jobId = ev.jobId;
+          }
           if (ev.error.message.contains('отменена')) {
             cancelled = true;
           } else {
@@ -1217,6 +1274,7 @@ class _ChatScreenState extends State<ChatScreen> {
         prompt: snap.prompt,
         conn: conn,
         parameters: params,
+        snapshot: snap,
       );
     } else {
       await _generateImage(
@@ -1224,6 +1282,7 @@ class _ChatScreenState extends State<ChatScreen> {
         prompt: snap.prompt,
         conn: conn,
         parameters: params,
+        snapshot: snap,
       );
     }
   }

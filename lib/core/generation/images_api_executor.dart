@@ -49,15 +49,23 @@ class ImagesApiExecutor extends GenerationExecutor {
   /// Выбранная пропорция изображения ('1:1', '16:9', '9:16').
   final String aspectRatio;
 
+  /// Идентификатор уже созданной media-задачи. При непустом значении
+  /// POST не выполняется, исполнитель сразу переходит к опросу.
+  final String? resumeJobId;
+
   static const Duration _timeout = Duration(seconds: 180);
   static const Duration _pollInterval = Duration(seconds: 4);
   static const int _maxPollAttempts = 90;
+
+  /// Сколько раз повторить опрос при транзиентной сетевой ошибке.
+  static const int _maxTransientRetries = 3;
+  static const Duration _transientBackoffBase = Duration(seconds: 2);
 
   Dio? _dio;
   CancelToken? _cancelToken;
   bool _cancelled = false;
 
-  ImagesApiExecutor({this.aspectRatio = '1:1'});
+  ImagesApiExecutor({this.aspectRatio = '1:1', this.resumeJobId});
 
   /// Размер холста для пропорции; неизвестные значения -> квадрат.
   static String sizeForRatio(String ratio) {
@@ -99,30 +107,42 @@ class ImagesApiExecutor extends GenerationExecutor {
     _dio = dio;
     final token = CancelToken();
     _cancelToken = token;
+    final resumeId = (resumeJobId ?? '').trim();
     try {
-      final resp = await _requestImage(
-        dio,
-        token,
-        base,
-        providerId,
-        dialect,
-        request,
-        prompt,
-      );
-      if (_cancelled) return;
-      final status = resp.statusCode ?? 0;
-      final body = resp.data ?? '';
-      if (status < 200 || status >= 300) {
-        yield GenerationFailure(_mapError(status, body));
-        return;
+      String? asyncJobId;
+      List<String> sources = <String>[];
+      if (resumeId.isNotEmpty) {
+        asyncJobId = resumeId;
+        yield GenProgress(jobId: asyncJobId, percent: 10);
+      } else {
+        final resp = await _requestImage(
+          dio,
+          token,
+          base,
+          providerId,
+          dialect,
+          request,
+          prompt,
+        );
+        if (_cancelled) return;
+        final status = resp.statusCode ?? 0;
+        final body = resp.data ?? '';
+        if (status < 200 || status >= 300) {
+          yield GenerationFailure(_mapError(status, body));
+          return;
+        }
+        _learnWarnings(body, request.model);
+        sources = _extractImageSourcesFromResponse(body);
+        if (sources.isEmpty) {
+          asyncJobId = _extractAsyncJobId(body);
+          if (asyncJobId != null && asyncJobId.isNotEmpty) {
+            yield GenProgress(jobId: asyncJobId, percent: 10);
+          }
+        }
       }
-      _learnWarnings(body, request.model);
-      var sources = _extractImageSourcesFromResponse(body);
 
-      if (sources.isEmpty) {
-        final asyncJobId = _extractAsyncJobId(body);
-        if (asyncJobId != null && asyncJobId.isNotEmpty) {
-          yield GenProgress(jobId: asyncJobId, percent: 10);
+      if (sources.isEmpty && asyncJobId != null && asyncJobId.isNotEmpty) {
+        try {
           await for (final st in _pollMediaStatus(
             dio: dio,
             token: token,
@@ -138,6 +158,9 @@ class ImagesApiExecutor extends GenerationExecutor {
             }
             yield GenProgress(jobId: asyncJobId, percent: st.percent);
           }
+        } on GenError catch (e) {
+          yield GenerationFailure(e, jobId: asyncJobId);
+          return;
         }
       }
 
@@ -152,7 +175,12 @@ class ImagesApiExecutor extends GenerationExecutor {
       if (_cancelled) return;
       yield GenerationDelta(content: '![изображение]($display)');
     } on GenError catch (g) {
-      if (!_cancelled) yield GenerationFailure(g);
+      if (!_cancelled) {
+        yield GenerationFailure(
+          g,
+          jobId: g is JobStatusUnknown ? g.jobId : '',
+        );
+      }
     } on DioException catch (e) {
       if (_cancelled || e.type == DioExceptionType.cancel) return;
       final t = e.type;
@@ -201,11 +229,32 @@ class ImagesApiExecutor extends GenerationExecutor {
     for (int attempt = 1; attempt <= _maxPollAttempts; attempt++) {
       await Future<void>.delayed(_pollInterval);
       if (_cancelled) return;
-      final resp = await dio.get<String>(
-        '$base/media/$jobId',
-        options: Options(headers: headers),
-        cancelToken: token,
-      );
+      Response<String> resp;
+      var transientFailures = 0;
+      while (true) {
+        try {
+          resp = await dio.get<String>(
+            '$base/media/$jobId',
+            options: Options(headers: headers),
+            cancelToken: token,
+          );
+          break;
+        } on DioException catch (e) {
+          if (e.type == DioExceptionType.cancel) rethrow;
+          transientFailures++;
+          if (transientFailures > _maxTransientRetries) {
+            throw JobStatusUnknown(
+              jobId: jobId,
+              details: 'Не удалось получить статус: ${e.message ?? e}',
+            );
+          }
+          final delay = Duration(
+            seconds: _transientBackoffBase.inSeconds * transientFailures,
+          );
+          await Future<void>.delayed(delay);
+          if (_cancelled) return;
+        }
+      }
       if (_cancelled) return;
       final code = resp.statusCode ?? 0;
       final body = resp.data ?? '';

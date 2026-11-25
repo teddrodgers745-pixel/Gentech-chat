@@ -185,6 +185,7 @@ abstract final class GenErrorMapper {
         ContentFiltered(:final details) => details,
         JobTimeout(:final details) => details,
         NetworkError(:final details) => details,
+        JobStatusUnknown(:final details) => details,
         BadRequestError(:final details) => details,
         UnknownGenError(:final details) => details,
       };
@@ -209,6 +210,8 @@ abstract final class GenErrorMapper {
         return JobTimeout(details: details);
       case 'network':
         return NetworkError(details: details);
+      case 'status_unknown':
+        return JobStatusUnknown(details: details);
       case 'bad_request':
         return BadRequestError(details: details);
       default:

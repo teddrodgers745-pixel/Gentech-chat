@@ -21,6 +21,14 @@ import 'generation_request.dart';
 import 'parameter_translator.dart';
 import 'parameter_validation_exception.dart';
 
+/// Транзиентный сбой опроса (сеть, таймаут, DNS). Не убивает наблюдение
+/// сразу: цикл опроса повторит запрос несколько раз с backoff.
+class _TransientPollFailure implements Exception {
+  final String message;
+
+  const _TransientPollFailure(this.message);
+}
+
 /// Результат одного опроса состояния задачи.
 class _PollResult {
   final String videoUrl;
@@ -62,6 +70,11 @@ class AsyncJobExecutor extends GenerationExecutor {
   static const Duration _pollInterval = Duration(seconds: 5);
   static const int _maxAttempts = 150;
   static const Duration _requestTimeout = Duration(seconds: 60);
+
+  /// Сколько раз повторить опрос при транзиентной сетевой ошибке,
+  /// прежде чем признать статус задачи неизвестным.
+  static const int _maxTransientRetries = 3;
+  static const Duration _transientBackoffBase = Duration(seconds: 2);
 
   /// Пути создания задачи для провайдеров, отличных от Polza.
   static const List<String> _createPaths = <String>[
@@ -283,14 +296,57 @@ class AsyncJobExecutor extends GenerationExecutor {
         );
         return;
       }
-      final res = await _pollOnce(
-        client,
-        base,
-        record.jobId,
-        record.apiKey,
-        record.createdAt,
-        attempt,
-      );
+      _PollResult res;
+      var transientFailures = 0;
+      while (true) {
+        try {
+          res = await _pollOnce(
+            client,
+            base,
+            record.jobId,
+            record.apiKey,
+            record.createdAt,
+            attempt,
+          );
+          break;
+        } on _TransientPollFailure catch (e) {
+          transientFailures++;
+          await _logJson(<String, dynamic>{
+            'phase': 'poll_transient',
+            'n': attempt,
+            'retry': transientFailures,
+            'error': e.message,
+          });
+          if (transientFailures > _maxTransientRetries) {
+            await _logJson(<String, dynamic>{
+              'phase': 'poll_give_up',
+              'n': attempt,
+              'jobId': record.jobId,
+            });
+            // Задача уже создана: не удаляем запись, чтобы её можно было
+            // возобновить без повторной оплаты.
+            yield GenerationFailure(
+              JobStatusUnknown(
+                jobId: record.jobId,
+                details: 'Не удалось получить статус задачи: ${e.message}',
+              ),
+              jobId: record.jobId,
+            );
+            return;
+          }
+          final delay = Duration(
+            seconds: _transientBackoffBase.inSeconds * transientFailures,
+          );
+          await Future<void>.delayed(delay);
+          if (_cancelled) {
+            await ActiveJobsStore.instance.remove(record.jobId);
+            yield const GenerationFailure(
+              UnknownGenError(details: 'Задача отменена.'),
+            );
+            return;
+          }
+        }
+      }
       if (_cancelled) {
         await ActiveJobsStore.instance.remove(record.jobId);
         yield const GenerationFailure(
@@ -300,7 +356,7 @@ class AsyncJobExecutor extends GenerationExecutor {
       }
       if (res.isFatal) {
         await ActiveJobsStore.instance.remove(record.jobId);
-        yield GenerationFailure(res.fatal!);
+        yield GenerationFailure(res.fatal!, jobId: record.jobId);
         return;
       }
       if (res.isDone) {
@@ -343,8 +399,9 @@ class AsyncJobExecutor extends GenerationExecutor {
       );
     }
     await ActiveJobsStore.instance.remove(record.jobId);
-    yield const GenerationFailure(
-      JobTimeout(details: 'Задача не завершилась за отведённое время.'),
+    yield GenerationFailure(
+      const JobTimeout(details: 'Задача не завершилась за отведённое время.'),
+      jobId: record.jobId,
     );
   }
 
@@ -498,11 +555,11 @@ class AsyncJobExecutor extends GenerationExecutor {
       } on TimeoutException catch (e) {
         await _logPollError(attempt, queryUrl, 'timeout: $e');
         _addSnippet('poll $attempt (ошибка): timeout');
-        return _PollResult(percent: _defaultPercent(attempt));
+        throw _TransientPollFailure('timeout: $e');
       } catch (e) {
         await _logPollError(attempt, queryUrl, '$e');
         _addSnippet('poll $attempt (ошибка): $e');
-        return _PollResult(percent: _defaultPercent(attempt));
+        throw _TransientPollFailure('$e');
       }
       final String rawPollBody = resp.body;
       debugPrint(
