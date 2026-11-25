@@ -22,13 +22,14 @@ List<CatalogEntry> parseModelsList(Map<String, dynamic> json, String baseUrl) {
 
 /// Дополняет результат парсера Polza исходным типом и схемой параметров.
 ///
-/// Пустой тип остаётся пустым: определение запасного типа относится к
-/// вызывающей стороне. Полная карта параметров сохраняется в кэше через
-/// mediaParams['parameters'].
+/// Сырые блоки цен сохраняются как есть (Map/List/другое) — в
+/// `model_pricing_raw` и `top_provider_pricing_raw`. Это позволяет
+/// `CostEstimator` учитывать условия тиров (resolution, has_video,
+/// unitParam: duration) и не терять их при плоском кэше `pricing_tiers`.
 ///
-/// Сырые блоки цен сохраняются отдельно от плоской карты pricing_tiers:
-/// условия, валюта и единицы не должны теряться при сериализации кэша.
-/// Само сохранение не означает, что оценщик уже умеет рассчитывать цену.
+/// Дополнительно в `mediaParams` сохраняется `resolution_default` из
+/// параметра `resolution`/`image_resolution` — он нужен оценщику, когда
+/// пользователь не передал явный разрешение.
 CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
   CatalogEntry? parsed;
   try {
@@ -59,20 +60,16 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
       : CatalogTypeSources.catalog;
   final mediaParams = <String, dynamic>{...entry.mediaParams};
 
+  // Сырые блоки цен — сохраняем как есть, чтобы не потерять условия тиров,
+  // валюту и единицы (форма Map/List/др. не должна обрезаться).
   final modelPricing = raw['pricing'];
-  if (modelPricing is Map) {
-    mediaParams['model_pricing_raw'] = <String, dynamic>{
-      for (final item in modelPricing.entries)
-        if (item.key is String) item.key as String: item.value,
-    };
+  if (modelPricing != null) {
+    mediaParams['model_pricing_raw'] = modelPricing;
   }
   final topProvider = raw['top_provider'];
   final topPricing = topProvider is Map ? topProvider['pricing'] : null;
-  if (topPricing is Map) {
-    mediaParams['top_provider_pricing_raw'] = <String, dynamic>{
-      for (final item in topPricing.entries)
-        if (item.key is String) item.key as String: item.value,
-    };
+  if (topPricing != null) {
+    mediaParams['top_provider_pricing_raw'] = topPricing;
   }
 
   final rawParameters = raw['parameters'];
@@ -90,6 +87,16 @@ CatalogEntry? _parsePolzaEntry(Map<String, dynamic> raw) {
       if (item.key is String) item.key as String: item.value,
   };
   mediaParams['parameters'] = parameters;
+
+  // `resolution_default` (для оценщика стоимости).
+  final resolutionKey = type == 'image' ? 'image_resolution' : 'resolution';
+  final resolutionSpec = parameters[resolutionKey];
+  if (resolutionSpec is Map) {
+    final def = resolutionSpec['default'];
+    if (def is String && def.trim().isNotEmpty) {
+      mediaParams['resolution_default'] = def.trim();
+    }
+  }
 
   if (type != 'image' && type != 'video') {
     return entry.copyWith(
