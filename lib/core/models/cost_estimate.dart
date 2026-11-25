@@ -14,11 +14,15 @@ class CostEstimate {
   final bool isKnown;
   final String formatted;
 
+  /// Валюта суммы [estimatedUsd] ('USD', 'RUB').
+  final String currency;
+
   const CostEstimate({
     required this.estimatedUsd,
     required this.unitLabel,
     required this.isKnown,
     required this.formatted,
+    this.currency = 'USD',
   });
 
   /// Оценка неизвестна: бейдж стоимости не показывается.
@@ -27,6 +31,7 @@ class CostEstimate {
     unitLabel: '',
     isKnown: false,
     formatted: '',
+    currency: '',
   );
 }
 
@@ -219,14 +224,16 @@ abstract final class CostEstimator {
     }
 
     // Плоская карта unit→price (например, {'image': '1.875', 'currency': 'RUB'}).
+    // Цены текстовых моделей за токены (prompt/completion/input/output/
+    // cache_* и т.п.) сюда не должны попадать как тир «за запрос».
     if (m.containsKey('currency')) {
       final currency = _asString(m['currency']) ?? 'USD';
       var added = false;
       for (final e in m.entries) {
-        if (e.key == 'currency') continue;
+        final key = e.key.toString().toLowerCase();
+        if (key == 'currency' || _isTokenPriceKey(key)) continue;
         final v = _asDouble(e.value);
         if (v == null) continue;
-        final key = e.key.toLowerCase();
         final isSecond = key == 'second' ||
             key == 'seconds' ||
             key == 'per_second' ||
@@ -255,6 +262,50 @@ abstract final class CostEstimator {
         _collectTiers(e.value, out);
       }
     }
+  }
+
+  /// Ключ плоской карты цен относится к токенной тарификации текстовой
+  /// модели, а не к цене за изображение/секунду/запрос.
+  static bool _isTokenPriceKey(String key) {
+    final k = key.trim().toLowerCase();
+    if (k.isEmpty) return false;
+    final compact = k.replaceAll(RegExp(r'[^a-z0-9]'), '');
+    if (compact.isEmpty) return false;
+
+    const exact = <String>{
+      'prompt',
+      'completion',
+      'input',
+      'output',
+      'cacheread',
+      'cachewrite',
+      'cachecreation',
+      'cached',
+      'inputtokens',
+      'outputtokens',
+      'prompttokens',
+      'completiontokens',
+      'cachedtokens',
+      'cachecreationinputtokens',
+      'cachereadinputtokens',
+      'reasoning',
+      'reasoningtokens',
+      'audiotokens',
+      'imagetokens',
+      'texttokens',
+    };
+    if (exact.contains(compact)) return true;
+    if (compact.contains('permillion') ||
+        compact.contains('permtok') ||
+        compact.contains('pertoken') ||
+        compact.contains('token')) {
+      return true;
+    }
+    return compact.startsWith('prompt') ||
+        compact.startsWith('completion') ||
+        compact.startsWith('input') ||
+        compact.startsWith('output') ||
+        compact.startsWith('cache');
   }
 
   static _PriceTier? _pickTier(
@@ -396,6 +447,7 @@ abstract final class CostEstimator {
       unitLabel: 'за запрос',
       isKnown: true,
       formatted: '≈ ${_fmtMoney(usd, symbol)} за запрос',
+      currency: isRub ? 'RUB' : 'USD',
     );
   }
 
@@ -412,11 +464,14 @@ abstract final class CostEstimator {
     String currency,
     String unitLabel,
   ) {
+    final normalized = currency.trim().toUpperCase();
+    final c = normalized.isEmpty ? 'USD' : normalized;
     return CostEstimate(
       estimatedUsd: amount,
       unitLabel: unitLabel,
       isKnown: true,
-      formatted: '≈ ${_formatMoney(amount, currency)} $unitLabel',
+      formatted: '≈ ${_formatMoney(amount, c)} $unitLabel',
+      currency: c,
     );
   }
 

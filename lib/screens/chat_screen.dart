@@ -10,6 +10,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../app_state.dart';
+import '../core/catalog/provider_catalog_service.dart';
 import '../core/auth/polza_auth_service.dart';
 import '../core/models/active_model_capabilities.dart';
 import '../core/storage.dart';
@@ -851,6 +852,66 @@ class _ChatScreenState extends State<ChatScreen> {
         'Выберите его в настройках и повторите.';
   }
 
+  /// Идентификатор подключения для поиска записи каталога по [baseUrl].
+  /// Для Polza достаточно адреса; для остальных — текущее подключение.
+  String _catalogConnectionIdFor(String baseUrl) {
+    final url = baseUrl.trim().toLowerCase();
+    if (url.contains('polza.ai')) return 'polza';
+    return _snapshotConnectionId() ?? 'global';
+  }
+
+  /// `mediaParams` записи каталога для модели: сырые цены и условия
+  /// тиров (resolution, has_video, duration и т.п.).
+  Future<Map<String, dynamic>?> _mediaParamsForModel(
+    String modelId, {
+    String baseUrl = '',
+  }) async {
+    final id = modelId.trim();
+    if (id.isEmpty) return null;
+    try {
+      final entry = await providerCatalog.lookup(
+        _catalogConnectionIdFor(baseUrl),
+        id,
+      );
+      final media = entry.mediaParams;
+      if (media.isEmpty) return null;
+      return <String, dynamic>{...media};
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Оценка с учётом сырых цен каталога и фактического выбора пользователя
+  /// (resolution/duration/hasVideo), а не дефолта «наугад».
+  Future<CostEstimate> _estimateWithCatalog({
+    required String modelId,
+    required String prompt,
+    required Map<String, dynamic> parameters,
+    required bool isVideo,
+    String baseUrl = '',
+  }) async {
+    final media = await _mediaParamsForModel(modelId, baseUrl: baseUrl);
+    final rawResolution = parameters[ParamKeys.resolution];
+    final resolution = rawResolution?.toString().trim() ?? '';
+    final rawDuration = parameters[ParamKeys.duration];
+    int? duration;
+    if (rawDuration is int) {
+      duration = rawDuration;
+    } else if (rawDuration is num) {
+      duration = rawDuration.round();
+    } else if (rawDuration is String) {
+      duration = int.tryParse(rawDuration.trim());
+    }
+    return CostEstimator.estimate(
+      modelId: modelId,
+      prompt: prompt,
+      mediaParams: media,
+      resolution: resolution.isEmpty ? null : resolution,
+      durationSeconds: duration,
+      hasVideo: isVideo,
+    );
+  }
+
   /// Генерация изображения: результат попадает в чат как сообщение
   /// ассистента с markdown-ссылкой на изображение.
   Future<void> _sendImage(String txt) async {
@@ -920,9 +981,12 @@ class _ChatScreenState extends State<ChatScreen> {
     final model = conn.model.trim();
     final rawRatio = parameters[ParamKeys.aspectRatio]?.toString().trim() ?? '';
     final aspectRatio = rawRatio.isNotEmpty ? rawRatio : '1:1';
-    final estimate = CostEstimator.estimate(
+    final estimate = await _estimateWithCatalog(
       modelId: model,
       prompt: prompt,
+      parameters: parameters,
+      isVideo: false,
+      baseUrl: conn.baseUrl,
     );
     final resumeJobId = snapshot?.jobId.trim() ?? '';
     final executor = ImagesApiExecutor(
@@ -977,8 +1041,12 @@ class _ChatScreenState extends State<ChatScreen> {
     } else if (reply.content.isEmpty) {
       chat.messages.remove(reply);
     } else {
-      final usd = estimate.estimatedUsd ?? 0.0;
-      final costRub = usd > 0 ? usd * 95.0 : 1.5;
+      final amount = estimate.estimatedUsd ?? 0.0;
+      final costRub = amount > 0
+          ? (estimate.currency.toUpperCase() == 'RUB'
+              ? amount
+              : amount * 95.0)
+          : 1.5;
       final tokens = (prompt.length / 4).ceil().clamp(1, 100000);
       final imgCost = MessageCost(
         promptTokens: tokens,
@@ -1079,6 +1147,13 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final model = conn.model.trim();
     final resumeJobId = snapshot?.jobId.trim() ?? '';
+    final estimate = await _estimateWithCatalog(
+      modelId: model,
+      prompt: prompt,
+      parameters: parameters,
+      isVideo: true,
+      baseUrl: conn.baseUrl,
+    );
     GenError? genError;
     var cancelled = false;
     final sources = <String>[];
@@ -1102,10 +1177,7 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
           stream: false,
           parameters: parameters,
-          estimatedUsd: CostEstimator.estimate(
-            modelId: model,
-            prompt: prompt,
-          ).estimatedUsd,
+          estimatedUsd: estimate.estimatedUsd,
           routeHint: ModelTypes.video,
         );
         events = _genService.generate(request);
