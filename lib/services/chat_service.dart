@@ -1185,7 +1185,7 @@ class ChatService {
     return SearchSourceParser.extractFromMap(raw);
   }
 
-  /// Дедупликация списка источников (без сохранения порядка).
+  /// Дедупликация списка источников с сохранением порядка первого появления.
   static List<String> _dedupSources(List<String> raw) {
     final out = <String>[];
     for (final s in raw) {
