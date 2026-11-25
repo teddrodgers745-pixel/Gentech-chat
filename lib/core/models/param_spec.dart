@@ -19,6 +19,10 @@ enum ParamKind {
 
 /// Диапазон длительности видео: либо непрерывный диапазон (min..max),
 /// либо дискретный список допустимых значений ([discrete]).
+///
+/// [defaultValue] — значение по умолчанию из каталога (например, у
+/// Seedance это 15 с при min 4 и max 15). Используется транслятором
+/// как дефолт и предпочтительнее первого элемента списка или min.
 class DurationRange {
   /// Минимальная длительность в секундах; null — диапазон не задан.
   int? min;
@@ -26,12 +30,19 @@ class DurationRange {
   /// Максимальная длительность в секундах; null — диапазон не задан.
   int? max;
 
+  /// Значение по умолчанию из каталога (duration_default); null — не задан.
+  int? defaultValue;
+
   /// Дискретный список длительностей (4, 8, 12 ...); null либо пусто —
   /// длительность задаётся диапазоном min..max, если он известен.
   List<int>? discrete;
 
-  DurationRange({this.min, this.max, List<int>? discrete})
-      : discrete = discrete == null ? null : List<int>.of(discrete);
+  DurationRange({
+    this.min,
+    this.max,
+    this.defaultValue,
+    List<int>? discrete,
+  }) : discrete = discrete == null ? null : List<int>.of(discrete);
 
   /// Есть ли хоть какие-то данные о длительности.
   bool get isEmpty =>
@@ -40,6 +51,7 @@ class DurationRange {
   Map<String, dynamic> toJson() => <String, dynamic>{
         if (min != null) 'min': min,
         if (max != null) 'max': max,
+        if (defaultValue != null) 'defaultValue': defaultValue,
         if (discrete != null) 'discrete': <int>[...?discrete],
       };
 
@@ -56,6 +68,7 @@ class DurationRange {
     return DurationRange(
       min: (j['min'] as num?)?.toInt(),
       max: (j['max'] as num?)?.toInt(),
+      defaultValue: (j['defaultValue'] as num?)?.toInt(),
       discrete: discrete,
     );
   }
@@ -107,6 +120,7 @@ class ModelParameters {
             : DurationRange(
                 min: durations.min,
                 max: durations.max,
+                defaultValue: durations.defaultValue,
                 discrete: durations.discrete,
               ),
         resolutions = List<String>.of(resolutions ?? const <String>[]),

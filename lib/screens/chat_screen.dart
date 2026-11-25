@@ -100,8 +100,10 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _userScrolledUp = false;
   Timer? _uiTimer;
 
-  /// Выбранная пропорция изображения/видео.
-  String _aspectRatio = '1:1';
+  /// Выбранная пропорция изображения/видео. Пустая строка — дефолт
+  /// определит каталог модели; панель ввода сразу перезапишет
+  /// выбранным значением из каталога.
+  String _aspectRatio = '';
 
   /// Выбранная длительность видео в секундах (режим генерации видео).
   int? _videoDuration;
@@ -220,11 +222,10 @@ class _ChatScreenState extends State<ChatScreen> {
   void _onConfigChanged() {
     final modelId = effectiveConfig().model.trim();
     if (_typeFor != modelId) {
-      _aspectRatio =
-          ActiveModelController.isHeuristicVideo(modelId) ? '16:9' : '1:1';
-      // Смена модели: длительность, разрешение и качество предыдущей
-      // модели не должны утекать в запрос новой. Панель ввода заново
-      // сообщит значения из каталога уже выбранной модели.
+      // Смена модели: все выбранные медиа-параметры не должны переживать
+      // смену модели. Панель ввода заново сообщит дефолты из каталога.
+      // Пустая строка означает «пусть тело запроса возьмёт дефолт модели».
+      _aspectRatio = '';
       _videoDuration = null;
       _mediaResolution = null;
       _mediaQuality = null;
@@ -771,8 +772,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final chat = store.current ?? store.createChat();
     final cfg = effectiveConfig();
     final modelId = cfg.model.trim();
+    final ratio = _aspectRatio.trim();
     final params = <String, dynamic>{
-      ParamKeys.aspectRatio: _aspectRatio,
+      if (ratio.isNotEmpty) ParamKeys.aspectRatio: ratio,
       if ((_mediaResolution ?? '').trim().isNotEmpty)
         ParamKeys.resolution: _mediaResolution!.trim(),
       if ((_mediaQuality ?? '').trim().isNotEmpty)
@@ -897,8 +899,9 @@ class _ChatScreenState extends State<ChatScreen> {
     final chat = store.current ?? store.createChat();
     final cfg = effectiveConfig();
     final modelId = cfg.model.trim();
+    final ratio = _aspectRatio.trim();
     final params = <String, dynamic>{
-      ParamKeys.aspectRatio: _aspectRatio,
+      if (ratio.isNotEmpty) ParamKeys.aspectRatio: ratio,
       if (_videoDuration != null) ParamKeys.duration: _videoDuration!,
       if ((_mediaResolution ?? '').trim().isNotEmpty)
         ParamKeys.resolution: _mediaResolution!.trim(),

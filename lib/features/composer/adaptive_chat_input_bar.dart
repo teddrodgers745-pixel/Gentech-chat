@@ -93,7 +93,9 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
   void initState() {
     super.initState();
     _focus.addListener(_onFocusChange);
-    _syncDefaultParams();
+    // `key` содержит normalizedId + тип, поэтому initState срабатывает
+    // при смене модели/типа — форсируем сброс на дефолты новой модели.
+    _syncDefaultParams(forceReset: true);
   }
 
   @override
@@ -106,7 +108,7 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
         oldWidget.capabilities.params != widget.capabilities.params ||
         oldWidget.modelType != widget.modelType ||
         oldWidget.config != widget.config) {
-      _syncDefaultParams();
+      _syncDefaultParams(forceReset: modelChanged);
     }
   }
 
@@ -179,12 +181,23 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
     return widget.capabilities.params?.qualities ?? const <String>[];
   }
 
-  void _syncDefaultParams() {
+  /// [forceReset] — жёсткий сброс на дефолты новой модели (при смене
+  /// модели): все выбранные значения (ratio, duration, resolution,
+  /// quality) заменяются на первый элемент каталога/дефолт контроллера.
+  /// Без флага — только «подтягиваем» невалидные значения.
+  void _syncDefaultParams({bool forceReset = false}) {
     final ratios = _availableAspectRatios();
+    if (forceReset) {
+      _selectedRatio = '';
+    }
     if (ratios.isNotEmpty && !ratios.contains(_selectedRatio)) {
       _selectedRatio = ratios.first;
     }
+
     final durations = _availableDurations();
+    if (forceReset) {
+      _selectedDuration = null;
+    }
     if (durations.isNotEmpty) {
       if (_selectedDuration == null ||
           !durations.contains(_selectedDuration)) {
@@ -195,6 +208,11 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
       // сохраняем дефолт из каталога (например, 15 с у Seedance),
       // а не стираем выбор и не подставляем первый элемент списка.
       _selectedDuration = ActiveModelController.selectedDuration;
+    }
+
+    if (forceReset) {
+      _selectedResolution = null;
+      _selectedQuality = null;
     }
     final resolutions = _availableResolutions();
     if (resolutions.isNotEmpty) {
@@ -224,7 +242,9 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      widget.onAspectRatioChanged?.call(_selectedRatio);
+      if (_selectedRatio.isNotEmpty) {
+        widget.onAspectRatioChanged?.call(_selectedRatio);
+      }
       if (_selectedDuration != null) {
         widget.onDurationChanged?.call(_selectedDuration!);
       }

@@ -205,72 +205,125 @@ abstract final class ParameterTranslator {
   }
 
   /// Тело параметров REST-запроса генерации изображения.
+  ///
+  /// Поля, которых нет в схеме модели ([spec]), не отправляются.
+  /// Значения, которых нет в списке допустимых, заменяются на дефолт
+  /// (первый элемент каталога) — не первое попавшееся значение контроллера.
   static Map<String, dynamic> toImageBody(
     UniversalParams p,
     ModelParameters spec,
   ) {
     _validateCombination(p, spec);
     final out = <String, dynamic>{};
-    if (_hasConstraint(spec, 'no aspect_ratio')) {
-      final size = _sizeFor(p);
-      if (size != null) out[ParamKeys.size] = size;
-      if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
-      _addQuality(out, p, spec);
-      return out;
+
+    final acceptsAspectRatio = !_hasConstraint(spec, 'no aspect_ratio');
+    final acceptsSize = !_hasConstraint(spec, 'width/height rejected');
+
+    if (acceptsAspectRatio && spec.aspectRatios.isNotEmpty) {
+      final raw = p.aspectRatio;
+      final chosen = (raw != null && spec.aspectRatios.contains(raw))
+          ? raw
+          : spec.aspectRatios.first;
+      out[ParamKeys.aspectRatio] = chosen;
     }
-    if (_hasConstraint(spec, 'width/height rejected')) {
-      final r = p.aspectRatio;
-      if (r != null) out[ParamKeys.aspectRatio] = r;
-      if (p.resolution != null) out[ParamKeys.resolution] = p.resolution!;
-      _addQuality(out, p, spec);
-      return out;
+
+    if (acceptsSize && spec.sizes.isNotEmpty) {
+      final raw = p.size;
+      final chosen = (raw != null && spec.sizes.contains(raw))
+          ? raw
+          : spec.sizes.first;
+      out[ParamKeys.size] = chosen;
     }
-    final ratio = p.aspectRatio ??
-        (spec.aspectRatios.isNotEmpty ? spec.aspectRatios.first : null);
-    if (ratio != null) out[ParamKeys.aspectRatio] = ratio;
-    if (p.size != null) out[ParamKeys.size] = p.size!;
-    final res = p.resolution ??
-        (spec.resolutions.isNotEmpty ? spec.resolutions.first : null);
-    if (res != null) out[ParamKeys.resolution] = res;
+
+    if (spec.resolutions.isNotEmpty) {
+      final raw = p.resolution;
+      final chosen = (raw != null && spec.resolutions.contains(raw))
+          ? raw
+          : spec.resolutions.first;
+      out[ParamKeys.resolution] = chosen;
+    }
+
     _addQuality(out, p, spec);
     return out;
   }
 
   /// Тело параметров запроса генерации видео:
   /// `aspect_ratio` — String ("16:9"), `duration` — int, `resolution` — String.
+  ///
+  /// Поля, которых нет в схеме модели, не отправляются; duration берётся
+  /// из `defaultValue` каталога (у Seedance это 15), а не из первого
+  /// элемента списка.
   static Map<String, dynamic> toVideoBody(
     UniversalParams p,
     ModelParameters spec,
   ) {
     _validateCombination(p, spec);
     final out = <String, dynamic>{};
-    final defaultRatio =
-        spec.aspectRatios.isNotEmpty ? spec.aspectRatios.first : null;
-    if (_hasConstraint(spec, 'no aspect_ratio')) {
-      final size = _sizeFor(p);
-      if (size != null) out[ParamKeys.size] = size;
-    } else if (_hasConstraint(spec, 'width/height rejected')) {
-      final r = p.aspectRatio ?? defaultRatio;
-      if (r != null) out[ParamKeys.aspectRatio] = r;
-    } else {
-      final r = p.aspectRatio ?? defaultRatio;
-      if (r != null) out[ParamKeys.aspectRatio] = r;
-      if (p.size != null) out[ParamKeys.size] = p.size!;
-    }
-    final discDurations = spec.durations?.discrete;
-    final defaultDuration = (discDurations != null && discDurations.isNotEmpty)
-        ? discDurations.first
-        : spec.durations?.min;
-    final duration = p.duration ?? defaultDuration;
-    if (duration != null) out[ParamKeys.duration] = duration;
 
-    final defaultResolution =
-        spec.resolutions.isNotEmpty ? spec.resolutions.first : null;
-    final resolution = p.resolution ?? defaultResolution;
-    if (resolution != null) out[ParamKeys.resolution] = resolution;
+    final acceptsAspectRatio = !_hasConstraint(spec, 'no aspect_ratio');
+    final acceptsSize = !_hasConstraint(spec, 'width/height rejected');
+
+    if (acceptsAspectRatio && spec.aspectRatios.isNotEmpty) {
+      final raw = p.aspectRatio;
+      final chosen = (raw != null && spec.aspectRatios.contains(raw))
+          ? raw
+          : spec.aspectRatios.first;
+      out[ParamKeys.aspectRatio] = chosen;
+    }
+
+    if (acceptsSize && spec.sizes.isNotEmpty) {
+      final raw = p.size;
+      final chosen = (raw != null && spec.sizes.contains(raw))
+          ? raw
+          : spec.sizes.first;
+      out[ParamKeys.size] = chosen;
+    }
+
+    final durationRange = spec.durations;
+    final defaultDuration = _defaultDuration(durationRange);
+    final current = p.duration;
+    final durationChoice =
+        (current != null && _isDurationValid(current, durationRange))
+            ? current
+            : defaultDuration;
+    if (durationChoice != null) {
+      out[ParamKeys.duration] = durationChoice;
+    }
+
+    if (spec.resolutions.isNotEmpty) {
+      final raw = p.resolution;
+      final chosen = (raw != null && spec.resolutions.contains(raw))
+          ? raw
+          : spec.resolutions.first;
+      out[ParamKeys.resolution] = chosen;
+    }
 
     _addQuality(out, p, spec);
     return out;
+  }
+
+  /// Дефолт длительности из каталога: `defaultValue` (Seedance = 15),
+  /// иначе первый дискретный элемент, иначе min/max.
+  static int? _defaultDuration(DurationRange? range) {
+    if (range == null) return null;
+    final dv = range.defaultValue;
+    if (dv != null) return dv;
+    final disc = range.discrete;
+    if (disc != null && disc.isNotEmpty) return disc.first;
+    return range.min ?? range.max;
+  }
+
+  /// Допустима ли длительность [value] в диапазоне [range].
+  /// `range == null` — ограничения нет, значение допустимо.
+  static bool _isDurationValid(int value, DurationRange? range) {
+    if (range == null) return true;
+    final disc = range.discrete;
+    if (disc != null && disc.isNotEmpty) return disc.contains(value);
+    final min = range.min;
+    final max = range.max;
+    if (min != null && value < min) return false;
+    if (max != null && value > max) return false;
+    return true;
   }
 
   /// Точка входа для исполнителей: собирает и приводит параметры
@@ -340,7 +393,8 @@ abstract final class ParameterTranslator {
   /// Тело `input` для Polza Media API (POST /v1/media).
   ///
   /// Параметры генерации лежат внутри объекта `input`. Этот метод
-  /// нормализует имена и типы, но не фильтрует поля по схеме модели.
+  /// нормализует имена и типы, но не фильтрует поля по схеме модели —
+  /// фильтрация выполняется в [toImageBody]/[toVideoBody] до вызова.
   static Map<String, dynamic> toPolzaMediaInput(
     String prompt,
     Map<String, dynamic> translated, {
@@ -442,35 +496,20 @@ abstract final class ParameterTranslator {
     }
   }
 
-  static String? _sizeFor(UniversalParams p) {
-    final s = p.size;
-    if (s != null && s.isNotEmpty) return s;
-    final r = p.aspectRatio;
-    if (r == null || r.isEmpty) return null;
-    return _sizeForRatio(r);
-  }
-
-  static String _sizeForRatio(String ratio) {
-    switch (ratio.trim()) {
-      case '16:9':
-        return '1792x1024';
-      case '9:16':
-        return '1024x1792';
-      default:
-        return '1024x1024';
-    }
-  }
-
+  /// Качество: только если модель его перечисляет.
+  /// Если `p.quality` не входит в список — берём первый допустимый
+  /// (дефолт определяется значением каталога, а не контроллером).
   static void _addQuality(
     Map<String, dynamic> out,
     UniversalParams p,
     ModelParameters spec,
   ) {
-    final q = p.quality ??
-        (spec.qualities.isNotEmpty ? spec.qualities.first : null);
-    if (q == null) return;
-    if (spec.qualities.isNotEmpty && !spec.qualities.contains(q)) return;
-    out[ParamKeys.quality] = q;
+    if (spec.qualities.isEmpty) return;
+    final raw = p.quality;
+    final chosen = (raw != null && spec.qualities.contains(raw))
+        ? raw
+        : spec.qualities.first;
+    out[ParamKeys.quality] = chosen;
   }
 
   // ---------- стили payload (прежний путь по GenerationSchema) ----------

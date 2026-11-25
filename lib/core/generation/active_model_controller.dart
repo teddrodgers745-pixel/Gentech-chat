@@ -82,6 +82,11 @@ class ActiveModelController extends ChangeNotifier {
   bool _resolving = false;
   int _resolveToken = 0;
 
+  /// Модель, для которой в последний раз выполнился [_resolve].
+  /// Нужна, чтобы отличить «смену модели» (сброс пресетов на дефолты
+  /// новой модели) от повторного резолва той же модели (сохранить выбор).
+  String? _lastResolvedModelId;
+
   ActiveModelCapabilities get current => _current;
 
   /// Stage 2c-3: реестр итоговых merged-параметров (field-level:
@@ -194,6 +199,7 @@ class ActiveModelController extends ChangeNotifier {
           : DurationRange(
               min: d.min,
               max: d.max,
+              defaultValue: d.defaultValue,
               discrete:
                   d.discrete == null ? null : List<int>.of(d.discrete!),
             ),
@@ -494,6 +500,7 @@ class ActiveModelController extends ChangeNotifier {
         out.durations = DurationRange(
           min: d.min,
           max: d.max,
+          defaultValue: d.defaultValue,
           discrete: d.discrete == null ? null : List<int>.of(d.discrete!),
         );
         claim();
@@ -704,6 +711,8 @@ class ActiveModelController extends ChangeNotifier {
   }) async {
     final token = ++_resolveToken;
     final norm = ModelIdNormalizer.normalize(modelId);
+    final modelChanged = _lastResolvedModelId != norm;
+    _lastResolvedModelId = norm;
 
     // ---- Приоритет 0: каталог подключения (ProviderCatalogService) ----
     String? cid;
@@ -875,13 +884,20 @@ class ActiveModelController extends ChangeNotifier {
     );
 
     // Синхронизируем дефолты выбранных медиа-параметров для активной модели.
+    // Смена модели (modelChanged) — жёсткий сброс на дефолты новой модели,
+    // даже если застоявшееся значение попадает в её диапазон.
     if (kind == ActiveModelKind.video || kind == ActiveModelKind.image) {
       final ratios = params?.aspectRatios ?? const <String>[];
-      if (ratios.isNotEmpty &&
-          (_selectedAspectRatio == null ||
-              !ratios.contains(_selectedAspectRatio))) {
-        _selectedAspectRatio = ratios.first;
+      if (ratios.isNotEmpty) {
+        if (modelChanged ||
+            _selectedAspectRatio == null ||
+            !ratios.contains(_selectedAspectRatio)) {
+          _selectedAspectRatio = ratios.first;
+        }
+      } else {
+        _selectedAspectRatio = null;
       }
+
       if (kind == ActiveModelKind.video) {
         final range = params?.durations;
         final disc = range?.discrete ?? const <int>[];
@@ -890,10 +906,11 @@ class ActiveModelController extends ChangeNotifier {
             (disc.isNotEmpty
                 ? disc.contains(current)
                 : _inDurationRange(current, range));
-        if (!valid) {
+        if (modelChanged || !valid) {
           // Дефолт из каталога (duration_default) важнее первого элемента
           // списка: у Seedance это 15 с при диапазоне 4..15.
-          final catalogDefault = _catalogDurationDefault(entry);
+          final catalogDefault = _catalogDurationDefault(entry) ??
+              (range?.defaultValue);
           if (catalogDefault != null) {
             _selectedDuration = catalogDefault;
           } else if (disc.isNotEmpty) {
@@ -907,18 +924,23 @@ class ActiveModelController extends ChangeNotifier {
       } else {
         _selectedDuration = null;
       }
+
       final resList = params?.resolutions ?? const <String>[];
       if (resList.isNotEmpty) {
-        if (_selectedResolution == null ||
+        if (modelChanged ||
+            _selectedResolution == null ||
             !resList.contains(_selectedResolution)) {
           _selectedResolution = resList.first;
         }
       } else {
         _selectedResolution = null;
       }
+
       final qList = params?.qualities ?? const <String>[];
       if (qList.isNotEmpty) {
-        if (_selectedQuality == null || !qList.contains(_selectedQuality)) {
+        if (modelChanged ||
+            _selectedQuality == null ||
+            !qList.contains(_selectedQuality)) {
           _selectedQuality = qList.first;
         }
       } else {
@@ -973,8 +995,12 @@ class ActiveModelController extends ChangeNotifier {
     // Длительность: сначала дискретные значения каталога, затем — только
     // диапазон min..max (mediaParams duration_min/duration_max). Диапазон
     // НЕ разворачивается в выдуманный список секунд.
+    final defaultValue = _catalogDurationDefault(en);
     final durationRange = durs.isNotEmpty
-        ? DurationRange(discrete: List<int>.of(durs))
+        ? DurationRange(
+            discrete: List<int>.of(durs),
+            defaultValue: defaultValue,
+          )
         : _durationRangeFromCatalog(en);
     final sizes = _entrySizes(en);
     final hasAny = en.aspectRatios.isNotEmpty ||
@@ -1013,8 +1039,9 @@ class ActiveModelController extends ChangeNotifier {
   static DurationRange? _durationRangeFromCatalog(CatalogEntry e) {
     final min = _intFromCatalog(e.mediaParams['duration_min']);
     final max = _intFromCatalog(e.mediaParams['duration_max']);
-    if (min == null && max == null) return null;
-    return DurationRange(min: min, max: max);
+    final def = _intFromCatalog(e.mediaParams['duration_default']);
+    if (min == null && max == null && def == null) return null;
+    return DurationRange(min: min, max: max, defaultValue: def);
   }
 
   /// Значение duration по умолчанию из каталога (duration_default).
