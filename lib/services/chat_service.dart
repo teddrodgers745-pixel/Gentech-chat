@@ -13,6 +13,8 @@ import '../core/generation/search_capability_resolver.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../core/providers/model_catalog_adapter.dart';
 import '../core/search/search_controller.dart';
+import '../core/search/search_strategy.dart';
+import '../core/storage.dart';
 import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
 import '../models/chat_message.dart';
@@ -124,6 +126,17 @@ class _RoundResult {
 
 class _RoundHolder {
   _RoundResult? result;
+}
+
+/// Результат предзапроса к поисковой модели (modelAsTool).
+class _SearchModelResult {
+  final String text;
+  final List<String> sources;
+
+  const _SearchModelResult({
+    this.text = '',
+    this.sources = const <String>[],
+  });
 }
 
 class ChatService {
@@ -461,6 +474,19 @@ class ChatService {
       ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'polza' ||
       baseUrl.trim().toLowerCase().contains('polza.ai');
 
+  /// Есть ли у модели нативный фетчинг (встроенный в саму модель).
+  ///
+  /// Отдельного поля «нативный фетчинг» в каталоге нет; в качестве
+  /// признака используем каталог нативного поиска (SearchCapabilityResolver):
+  /// модели вроде Perplexity Sonar умеют и искать, и фетчить сами.
+  static bool _hasNativeFetch(String model) {
+    try {
+      return SearchCapabilityResolver.supportsNativeSearch(model);
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Признак «reasoning обязателен» (mandatory: true) из каталога Polza.
   ///
   /// Задача 2б прокидывает сюда поле из ActiveModelCapabilities
@@ -616,7 +642,58 @@ class ChatService {
     try {
       final base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
       final uri = Uri.parse('$base/chat/completions');
-      final builtin = _builtinToolsPayload();
+      final isPolza = _isPolza(base);
+      final searchMode = SearchModes.fromId(settings.searchMode);
+      final searchEnabled = chatSearch.enabled;
+      final firstRound = _searchPending;
+      _searchPending = false;
+
+      // ---- Режим «Модель-инструмент»: предварительный запрос к поисковой
+      // модели. Результат встраиваем в контекст (system-сообщение) и
+      // отдаём источники отдельными чанками. Никакой отдельной функции
+      // modelAsTool в теле не остаётся — единая точка входа.
+      if (firstRound &&
+          searchEnabled &&
+          searchMode == SearchMode.modelAsTool) {
+        final sm = settings.searchToolModel.trim();
+        final q = _lastUserText(history);
+        if (sm.isNotEmpty && q.isNotEmpty) {
+          final res = await _preQuerySearchModel(
+            baseUrl: baseUrl,
+            apiKey: apiKey,
+            searchModelId: sm,
+            query: q,
+          );
+          if (res.sources.isNotEmpty) {
+            yield StreamChunk('', '', sources: List<String>.of(res.sources));
+          }
+          if (res.text.trim().isNotEmpty) {
+            final ctx =
+                'Результаты поиска по запросу пользователя:\n${res.text}';
+            var injected = false;
+            for (int i = 0; i < history.length; i++) {
+              if (history[i]['role'] == 'system') {
+                final existing = history[i]['content']?.toString() ?? '';
+                history[i] = <String, dynamic>{
+                  'role': 'system',
+                  'content': '$existing\n\n$ctx',
+                };
+                injected = true;
+                break;
+              }
+            }
+            if (!injected) {
+              history.insert(0, <String, dynamic>{
+                'role': 'system',
+                'content': ctx,
+              });
+            }
+          }
+        }
+      }
+
+      // ---- Built-in tools: Polza server-side инструменты.
+      final builtin = _builtinToolsPayload(base, model);
       final reasoningPayload = _buildReasoningPayload(
         baseUrl: base,
         model: model,
@@ -636,33 +713,24 @@ class ChatService {
             if (tools.isNotEmpty) ..._toolsPayload(tools),
           ],
       };
-      if (_searchPending) {
-        _searchPending = false;
+
+      // ---- Legacy provider mode (не-Polza): тело web_search = true.
+      // Для Polza оставлен единственный путь — server-side polza:web_search
+      // в _builtinToolsPayload, чтобы не было двух реализаций.
+      if (firstRound &&
+          searchEnabled &&
+          searchMode == SearchMode.provider &&
+          !isPolza) {
         try {
           bodyMap = await enhanceRequestWithSearch(
             bodyMap,
             _lastUserText(history),
-            settings.searchMode,
+            searchMode.id,
             settings.searchToolModel,
           );
         } catch (_) {}
       }
-      final nativeSearchActive = chatSearch.enabled &&
-          SearchCapabilityResolver.supportsNativeSearch(model);
-      if (settings.webSearchSupported || nativeSearchActive) {
-        final existing = bodyMap['tools'];
-        final list = <Map<String, dynamic>>[
-          if (existing is List)
-            for (final t in existing)
-              if (t is Map) Map<String, dynamic>.from(t),
-        ];
-        var hasSearch = false;
-        for (final t in list) {
-          if ((t['type'] ?? '').toString() == 'web_search') hasSearch = true;
-        }
-        if (!hasSearch) list.add(<String, dynamic>{'type': 'web_search'});
-        bodyMap['tools'] = list;
-      }
+
       final droppedParams = <String>{};
       final cleanKey = apiKey
           .trim()
@@ -736,17 +804,21 @@ class ChatService {
             }
             reasoning = rc.isNotEmpty ? rc : rs;
             calls = _parseToolCalls(msg?['tool_calls'] as List?);
+            // Источники Polza: citations/annotations на верхнем уровне
+            // ответа и в message (OpenAI/Perplexity-совместимо).
+            sources.addAll(_sourcesFrom(j['citations']));
+            sources.addAll(_sourcesFrom(j['annotations']));
+            sources.addAll(_sourcesFrom(msg?['citations']));
+            sources.addAll(_sourcesFrom(msg?['annotations']));
           }
           usage = _usageOf(j['usage']);
-          sources.addAll(_sourcesFrom(j['citations']));
-          sources.addAll(_sourcesFrom(j['annotations']));
         } catch (_) {}
         holder.result = _RoundResult(
           content,
           reasoning,
           calls,
           usage: usage,
-          sources: sources,
+          sources: _dedupSources(sources),
         );
         return;
       }
@@ -778,6 +850,12 @@ class ChatService {
           if (choices == null || choices.isEmpty) continue;
           final delta = (choices[0] as Map)['delta'] as Map?;
           if (delta == null) continue;
+
+          // Polza присылает источники в delta: разбираем и копим.
+          if (delta['citations'] != null || delta['annotations'] != null) {
+            sources.addAll(_sourcesFrom(delta['citations']));
+            sources.addAll(_sourcesFrom(delta['annotations']));
+          }
 
           final c = (delta['content'] as String?) ?? '';
           final rc = (delta['reasoning_content'] as String?) ?? '';
@@ -826,10 +904,11 @@ class ChatService {
             if (b.isMeaningful) b.build(),
         ],
         usage: usage,
-        sources: sources,
+        sources: _dedupSources(sources),
       );
-      if (sources.isNotEmpty) {
-        yield StreamChunk('', '', sources: sources);
+      final deduped = _dedupSources(sources);
+      if (deduped.isNotEmpty) {
+        yield StreamChunk('', '', sources: deduped);
       }
     } finally {
       client.close();
@@ -837,19 +916,121 @@ class ChatService {
     }
   }
 
-  List<Map<String, dynamic>> _builtinToolsPayload() {
-    try {
-      final pr = presets.active;
-      if (pr == null) return const <Map<String, dynamic>>[];
-      if (pr.providerId.trim().toLowerCase() != 'polza') {
-        return const <Map<String, dynamic>>[];
+  /// Собирает серверные инструменты для /chat/completions:
+  ///  - Polza + режим «провайдер»  -> polza:web_search (0,50 ₽/вызов);
+  ///  - Polza без нативного фетчинга -> polza:web_fetch (по умолчанию);
+  ///  - все остальные провайдеры — прежний web_search (если модель
+  ///    поддерживает).
+  List<Map<String, dynamic>> _builtinToolsPayload(
+    String baseUrl,
+    String model,
+  ) {
+    final out = <Map<String, dynamic>>[];
+    if (!chatSearch.enabled) return out;
+    final mode = SearchModes.fromId(settings.searchMode);
+    if (_isPolza(baseUrl)) {
+      if (mode == SearchMode.provider) {
+        out.add(<String, dynamic>{'type': 'polza:web_search'});
       }
-      if (!settings.webSearchEnabled) return const <Map<String, dynamic>>[];
-      return const <Map<String, dynamic>>[
-        <String, dynamic>{'type': 'polza:web_search'},
-      ];
+      if (!_hasNativeFetch(model)) {
+        out.add(<String, dynamic>{'type': 'polza:web_fetch'});
+      }
+    } else {
+      if (SearchCapabilityResolver.supportsNativeSearch(model) ||
+          settings.webSearchSupported) {
+        out.add(<String, dynamic>{'type': 'web_search'});
+      }
+    }
+    return out;
+  }
+
+  /// Предзапрос к поисковой модели (режим «Модель-инструмент»).
+  /// Сначала ищет настроенный инструмент с таким modelId (свой baseUrl,
+  /// заголовки/ключ), иначе использует текущее подключение.
+  Future<_SearchModelResult> _preQuerySearchModel({
+    required String baseUrl,
+    required String apiKey,
+    required String searchModelId,
+    required String query,
+  }) async {
+    var model = searchModelId;
+    var base = baseUrl;
+    var key = apiKey;
+    try {
+      final all = await storage.getTools();
+      for (final t in all) {
+        if (!t.isModel) continue;
+        if (t.modelId.trim() != searchModelId) continue;
+        if (t.baseUrl.trim().isNotEmpty) base = t.baseUrl.trim();
+        if (t.modelId.trim().isNotEmpty) model = t.modelId.trim();
+        for (final e in t.headers.entries) {
+          if (e.key.toLowerCase() == 'authorization') {
+            var v = e.value.trim();
+            if (v.toLowerCase().startsWith('bearer ')) {
+              v = v.substring(7).trim();
+            }
+            if (v.isNotEmpty) key = v;
+          }
+        }
+        break;
+      }
     } catch (_) {
-      return const <Map<String, dynamic>>[];
+      // Хранилище недоступно — используем текущее подключение.
+    }
+
+    final client = http.Client();
+    try {
+      final normalized = base.replaceAll(RegExp(r'/+$'), '');
+      final uri = Uri.parse('$normalized/chat/completions');
+      final resp = await client
+          .post(
+            uri,
+            headers: <String, String>{
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $key',
+            },
+            body: jsonEncode(<String, dynamic>{
+              'model': model,
+              'messages': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'role': 'user',
+                  'content': 'Выполни поиск в интернете и кратко изложи '
+                      'самое важное. Запрос: $query',
+                },
+              ],
+              'stream': false,
+            }),
+          )
+          .timeout(_toolTimeout);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        return const _SearchModelResult();
+      }
+      final j = jsonDecode(resp.body);
+      if (j is! Map) return const _SearchModelResult();
+      var text = '';
+      final sources = <String>[];
+      final choices = j['choices'];
+      if (choices is List && choices.isNotEmpty) {
+        final m = (choices[0] as Map)['message'];
+        if (m is Map) {
+          final c = m['content'];
+          if (c is String) text = c;
+          sources.addAll(_sourcesFrom(m['citations']));
+          sources.addAll(_sourcesFrom(m['annotations']));
+        }
+      }
+      sources.addAll(_sourcesFrom(j['citations']));
+      sources.addAll(_sourcesFrom(j['annotations']));
+      return _SearchModelResult(
+        text: text,
+        sources: _dedupSources(sources),
+      );
+    } on TimeoutException {
+      return const _SearchModelResult();
+    } catch (_) {
+      return const _SearchModelResult();
+    } finally {
+      client.close();
     }
   }
 
@@ -997,21 +1178,20 @@ class ChatService {
     return '';
   }
 
+  /// Разбор citations/annotations (плоских и вложенных url_citation).
+  /// Делегируем в [SearchSourceParser] — единая логика для
+  /// Polza (provider/modelAsTool) и для обычных ответов.
   static List<String> _sourcesFrom(Object? raw) {
+    return SearchSourceParser.extractFromMap(raw);
+  }
+
+  /// Дедупликация списка источников (без сохранения порядка).
+  static List<String> _dedupSources(List<String> raw) {
     final out = <String>[];
-    if (raw is! List) return out;
-    for (final e in raw) {
-      String? url;
-      if (e is String) {
-        url = e;
-      } else if (e is Map) {
-        final v = e['url'] ?? e['uri'] ?? e['link'];
-        if (v is String) url = v;
-      }
-      final t = (url ?? '').trim();
-      if (t.startsWith('http://') || t.startsWith('https://')) {
-        if (!out.contains(t)) out.add(t);
-      }
+    for (final s in raw) {
+      final t = s.trim();
+      if (t.isEmpty) continue;
+      if (!out.contains(t)) out.add(t);
     }
     return out;
   }

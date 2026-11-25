@@ -4,7 +4,8 @@
 ///
 ///  - [off] — поиск выключен, поле настроек скрыто;
 ///  - [native] — встроенный (нативный) поиск самой модели;
-///  - [provider] — серверный поиск, предоставляемый провайдером;
+///  - [provider] — серверный поиск, предоставляемый провайдером
+///    (для Polza — серверный инструмент polza:web_search);
 ///  - [modelAsTool] — поиск выполняет отдельная модель-инструмент;
 ///  - [customApi] — пользовательский поисковый API со своим ключом.
 enum SearchMode { off, native, provider, modelAsTool, customApi }
@@ -97,4 +98,44 @@ abstract class SearchStrategy {
   /// Выполняет поиск по [query]. Никогда не бросает исключений наружу:
   /// любая ошибка возвращается внутри [SearchResult.error].
   Future<SearchResult> search(String query);
+}
+
+/// Разбор источников (citations/annotations) из ответа провайдера.
+///
+/// Поддерживаются как плоские записи ({'url': ...}), так и вложенные
+/// url_citation в стиле OpenAI/Perplexity:
+/// [{'type': 'url_citation', 'url_citation': {'url': '...'}}].
+/// Используется и для серверных инструментов Polza (polza:web_search /
+/// polza:web_fetch), и для поиска моделью-инструментом.
+abstract final class SearchSourceParser {
+  /// Достаёт список URL из произвольного списка записей.
+  /// Возвращает только http/https-ссылки, без дублей.
+  static List<String> extractFromMap(Object? raw) {
+    final out = <String>[];
+    if (raw is! List) return out;
+    for (final e in raw) {
+      final url = _extractUrl(e);
+      if (url == null) continue;
+      final t = url.trim();
+      if (t.isEmpty) continue;
+      if (!t.startsWith('http://') && !t.startsWith('https://')) continue;
+      if (!out.contains(t)) out.add(t);
+    }
+    return out;
+  }
+
+  /// Достаёт URL из одной записи-citation. Ладит и со строками,
+  /// и с плоскими объектами, и с вложенными `url_citation`.
+  static String? _extractUrl(Object? e) {
+    if (e is String) return e;
+    if (e is! Map) return null;
+    final direct = e['url'] ?? e['uri'] ?? e['link'] ?? e['source'];
+    if (direct is String && direct.isNotEmpty) return direct;
+    final nested = e['url_citation'];
+    if (nested is Map) {
+      final u = nested['url'] ?? nested['uri'] ?? nested['link'];
+      if (u is String && u.isNotEmpty) return u;
+    }
+    return null;
+  }
 }

@@ -13,6 +13,7 @@ import 'generation_request.dart';
 ///  - куски текста/размышлений -> [GenerationDelta];
 ///  - начало вызова инструмента -> [ToolCallStarted];
 ///  - завершение вызова -> [ToolCallFinished];
+///  - источники (citations/annotations) -> [SourcesReceived];
 ///  - любая ошибка -> [GenerationFailure] (последнее событие).
 /// Сам ChatService и экран чата не меняются: исполнитель — только
 /// адаптер над работающим кодом.
@@ -54,6 +55,11 @@ class ChatCompletionsExecutor extends GenerationExecutor {
             );
           }
           continue;
+        }
+        // Источники — отдельное событие: чат-сцена собирает их
+        // в TextPart.sources для отображения в интерфейсе.
+        if (chunk.sources.isNotEmpty) {
+          yield SourcesReceived(sources: List<String>.of(chunk.sources));
         }
         final delta = GenerationDelta(
           content: chunk.content,

@@ -42,6 +42,20 @@ class ToolCallFinished extends GenerationEvent {
   });
 }
 
+/// Пришли источники ответа (citations/annotations) — URL, найденные
+/// серверным инструментом провайдера (polza:web_search / polza:web_fetch),
+/// нативной моделью или моделью-инструментом. Список уже дедуплицирован;
+/// порядок сохраняется. Потребитель (чат-сцена) складывает их в
+/// TextPart.sources и показывает в блоке «Источники».
+class SourcesReceived extends GenerationEvent {
+  final List<String> sources;
+
+  const SourcesReceived({required this.sources});
+
+  @override
+  String toString() => 'SourcesReceived(${sources.length})';
+}
+
 /// Генерация завершена ошибкой; текст готов для показа пользователю.
 /// Прилетает последним событием, после него поток закрывается.
 class GenerationFailure extends GenerationEvent {
@@ -94,4 +108,3 @@ class GenCompleted extends GenerationEvent {
     this.remoteUrl = '',
   });
 }
-
