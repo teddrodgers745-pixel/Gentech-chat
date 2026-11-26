@@ -485,16 +485,16 @@ class _TextChatInputState extends State<TextChatInput> {
             borderRadius: BorderRadius.circular(_radius),
             border: Border.all(color: p.border),
           ),
-          child: Row(
+          child: const Row(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              const Icon(
+              Icon(
                 Icons.psychology_outlined,
                 size: 24,
                 color: Colors.grey,
               ),
-              const SizedBox(width: 6),
+              SizedBox(width: 6),
               Text(
                 'Мышление',
                 maxLines: 1,

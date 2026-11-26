@@ -276,7 +276,7 @@ class ProviderCatalogService extends ChangeNotifier {
       if (knownIdentity != null && knownIdentity != identity) continue;
       if (_byConnection[id]?.isNotEmpty != true) continue;
       final at = _syncedAt[id];
-      if (at != null && (latest == null || at.isAfter(latestAt ?? at))) {
+      if (at != null && (latest == null || at.isAfter(latest))) {
         latest = at;
       }
     }
@@ -624,7 +624,7 @@ class ProviderCatalogService extends ChangeNotifier {
         aspectRatios =
             _asStringList(_asMap(params['aspect_ratio'])?['values']);
         resolutions = _asStringList(_asMap(params['resolution'])?['values']);
-        durations = _asIntList(_asMap(params['duration'])?['values']);
+        durations = _intListSafe(_asMap(params['duration'])?['values']);
         qualities = _asStringList(_asMap(params['quality'])?['values']);
         maxRefImages = _asInt(_asMap(params['images'])?['max']);
       }
@@ -635,7 +635,7 @@ class ProviderCatalogService extends ChangeNotifier {
         resolutions = _asStringList(m['supported_resolutions']);
       }
       if (durations.isEmpty) {
-        durations = _asIntList(m['supported_durations']);
+        durations = _intListSafe(m['supported_durations']);
       }
     } catch (_) {}
 
@@ -727,12 +727,12 @@ class ProviderCatalogService extends ChangeNotifier {
     if (sawMarker) {
       // reasoning: true без списка уровней: размышления заявлены,
       // уровней нет — не подставляем дефолтный список.
-      return (CatalogReasoning(levels: const <String>[]), false);
+      return (const CatalogReasoning(levels: <String>[]), false);
     }
     if (supportedParams.contains('reasoning') ||
         supportedParams.contains('reasoning_effort')) {
       // Имя параметра — не перечень уровней: уровни не создаются.
-      return (CatalogReasoning(levels: const <String>[]), false);
+      return (const CatalogReasoning(levels: <String>[]), false);
     }
     if (supportedParams.isNotEmpty) return (null, false);
     return (null, true);

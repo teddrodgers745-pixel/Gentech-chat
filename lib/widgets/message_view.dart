@@ -423,7 +423,6 @@ class RichMarkdown extends StatelessWidget {
         return MarkdownBody(
           data: data,
           fitContent: false,
-          softWrapLineBreaks: true,
           styleSheet: _sheet(p, body, mono, size),
           builders: <String, MarkdownElementBuilder>{
             'code': _CodeBuilder(p, mono),
