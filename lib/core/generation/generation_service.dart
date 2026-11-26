@@ -1,10 +1,8 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import '../../app_state.dart';
-import '../auth/polza_auth_service.dart';
 import '../catalog/provider_catalog_service.dart';
 import '../models/gen_error.dart';
-import '../providers/heuristic_rules.dart';
 import 'active_jobs_store.dart';
 import 'async_job_executor.dart';
 import 'chat_completions_executor.dart';
@@ -25,35 +23,10 @@ class GenerationService {
       : _customExecutor = executor;
 
   String? _connectionIdFor(GenerationRequest request) {
-    final url = request.baseUrl.trim().toLowerCase();
-    final key = request.apiKey.trim();
-
-    // Сначала проверяем фактический адрес запроса: при OAuth активный
-    // пресет может содержать адрес или ключ другого подключения.
-    if (url.contains('polza.ai')) return 'polza';
-
-    final pr = presets.active;
-    if (pr != null &&
-        pr.id != PresetStore.defaultPresetId &&
-        pr.baseUrl.trim().isNotEmpty &&
-        pr.apiKey.trim().isNotEmpty) {
-      return 'preset:${pr.id}';
-    }
-
-    if (url.isEmpty || key.isEmpty) {
-      if (polzaAuth.isAuthenticated &&
-          polzaAuth.accessToken.trim().isNotEmpty) {
-        return 'polza';
-      }
-      return null;
-    }
-    if (url.contains('routerai')) return 'routerai';
-    if (pr != null &&
-        pr.baseUrl.trim().isNotEmpty &&
-        pr.apiKey.trim().isNotEmpty) {
-      return 'preset:${pr.id}';
-    }
-    return 'global';
+    return ModelTypeOverrideStore.resolveConnectionId(
+      baseUrl: request.baseUrl,
+      apiKey: request.apiKey,
+    );
   }
 
   Future<GenerationExecutor?> _executorFor(
@@ -74,42 +47,19 @@ class GenerationService {
     if (hint == ModelTypes.video) return AsyncJobExecutor();
     if (hint == ModelTypes.text) return ChatCompletionsExecutor();
 
-    // Как и в effectiveType, ручной выбор побеждает тип каталога.
-    final overrides = ModelTypeOverrideStore.instance;
-    final norm = HeuristicRules.normalize(modelId);
-    final override = await overrides.loadOverride(modelId) ??
-        (norm.isNotEmpty && norm != modelId
-            ? await overrides.loadOverride(norm)
-            : null);
-    switch (override) {
+    final connectionId = _connectionIdFor(request);
+    if (connectionId == null) return null;
+
+    final type = await ModelTypeOverrideStore.instance.resolveType(
+      modelId,
+      connectionId: connectionId,
+    );
+    switch (type) {
       case ModelTypes.image:
         return ImagesApiExecutor();
       case ModelTypes.video:
         return AsyncJobExecutor();
       case ModelTypes.text:
-        return ChatCompletionsExecutor();
-    }
-
-    final connectionId = _connectionIdFor(request);
-    if (connectionId == null) return null;
-
-    final entry = await providerCatalog.lookup(connectionId, modelId);
-    final isPolza = request.baseUrl.toLowerCase().contains('polza.ai') ||
-        connectionId == 'polza';
-    if (isPolza && entry.capabilitiesSource != CatalogSources.connection) {
-      return null;
-    }
-
-    // В текущем API lookup может дозаполнить type для записи подключения.
-    // Проверку происхождения самого поля необходимо добавить в каталог.
-    final type = entry.type.trim().toLowerCase();
-    switch (type) {
-      case 'image':
-        return ImagesApiExecutor();
-      case 'video':
-        return AsyncJobExecutor();
-      case 'chat':
-      case 'text':
         return ChatCompletionsExecutor();
       default:
         return null;

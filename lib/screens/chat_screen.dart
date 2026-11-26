@@ -135,9 +135,7 @@ class _ChatScreenState extends State<ChatScreen> {
         caps.kind == ActiveModelKind.live) {
       return const LiveVoiceModelConfig();
     }
-    if (_effectiveModelType == ModelTypes.image ||
-        caps.kind == ActiveModelKind.image ||
-        _isImageModel(modelId)) {
+    if (_effectiveModelType == ModelTypes.image) {
       final catalogRatios = caps.params?.aspectRatios ?? const <String>[];
       return ImageGenModelConfig(
         availableAspectRatios: catalogRatios.isNotEmpty
@@ -154,10 +152,13 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  /// Эффективный тип модели: ручной override пользователя, затем вид
-  /// из [ActiveModelController] (каталог параметров и эвристики), затем авто.
+  /// Эффективный тип модели для панели ввода: override/каталог из
+  /// [_modelType], затем вид из [ActiveModelController]. Ручной «текст»
+  /// больше не проигрывает каталожному video/image.
   String get _effectiveModelType {
-    if (_modelType == ModelTypes.video || _modelType == ModelTypes.image) {
+    if (_modelType == ModelTypes.image ||
+        _modelType == ModelTypes.video ||
+        _modelType == ModelTypes.text) {
       return _modelType;
     }
     switch (_activeModel.current.kind) {
@@ -166,25 +167,9 @@ class _ChatScreenState extends State<ChatScreen> {
       case ActiveModelKind.image:
         return ModelTypes.image;
       default:
-        break;
+        return ModelTypes.text;
     }
-    final rawId = effectiveConfig().model.trim();
-    if (ActiveModelController.isHeuristicVideo(rawId)) {
-      return ModelTypes.video;
-    }
-    if (ActiveModelController.isHeuristicImage(rawId)) {
-      return ModelTypes.image;
-    }
-    return _modelType.isNotEmpty ? _modelType : ModelTypes.text;
   }
-
-  /// Модель-картинка: маршрут генерации изображений по эвристике
-  /// (dall-e, flux, imagen и т.п.). Каталог провайдера имеет приоритет,
-  /// но здесь он недоступен — эвристика консервативна и безопасна.
-  static bool _isImageModel(String modelId) =>
-      ActiveModelController.isHeuristicImage(modelId) ||
-      HeuristicRules.inferRoute(HeuristicRules.normalize(modelId)) ==
-          GenerationRoute.imageGeneration;
 
   /// Эффективный тип активной модели ('text'/'image'/'video') для панели
   /// ввода; '' — ещё не разрешён. Обновляется при смене модели и override.
@@ -244,36 +229,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// (aspectRatios, durations) именно модели выбранного пресета.
   Future<void> _syncActiveModel(String modelId) async {
     final id = modelId.trim();
-    var reasoning = _heuristicReasoning(id);
-    if (!reasoning) {
-      try {
-        final ps = await ModelPresets.load();
-        reasoning = ps.forModel(id)?.reasoning ?? false;
-      } catch (_) {
-        // Пресеты недоступны — остаётся эвристика.
-      }
-    }
     try {
-      await _activeModel.syncModel(
-        id,
-        vision: _heuristicVision(id),
-        reasoning: reasoning,
-      );
+      await _activeModel.syncModel(id);
     } catch (_) {
       // Каталог недоступен — контроллер останется с пустыми параметрами.
     }
     if (mounted) setState(() {});
   }
-
-  /// Принимает ли модель изображения на вход (по эвристике).
-  static bool _heuristicVision(String modelId) {
-    final id = HeuristicRules.normalize(modelId);
-    return HeuristicRules.inferInputModalities(id).contains(Modality.image);
-  }
-
-  /// Умеет ли модель размышлять (по эвристике).
-  static bool _heuristicReasoning(String modelId) =>
-      HeuristicRules.inferSupportsReasoning(HeuristicRules.normalize(modelId));
 
   /// Эффективный тип активной модели для панели ввода.
   Future<void> _resolveType(String modelId, {bool force = false}) async {
@@ -282,9 +244,9 @@ class _ChatScreenState extends State<ChatScreen> {
     _typeFor = id;
     String t;
     try {
-      t = await ModelTypeOverrideStore.instance.effectiveType(id);
+      t = await ModelTypeOverrideStore.instance.resolveType(id);
     } catch (_) {
-      t = ModelTypes.text;
+      t = ModelTypes.unknown;
     }
     if (!mounted || _typeFor != id) return;
     setState(() => _modelType = t);
@@ -689,7 +651,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final modelId = effectiveConfig().model.trim();
     String genType;
     try {
-      genType = await ModelTypeOverrideStore.instance.effectiveType(modelId);
+      genType = await ModelTypeOverrideStore.instance.resolveType(modelId);
     } catch (_) {
       if (!mounted) return;
       await _addGenErrorBubble(
@@ -700,8 +662,6 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     if (!mounted) return;
 
-    // Не пересматриваем текстовый тип через _effectiveModelType:
-    // ручной «Текст» и каталожный chat не должны уходить в медиа.
     if (genType == ModelTypes.image) {
       if (!await _validateGenParams(
         modelId,
@@ -733,9 +693,6 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    // Ограничение текущего effectiveType: он возвращает text и для
-    // неизвестной модели. Без отдельного признака исходного type в
-    // CatalogEntry этот случай здесь нельзя надёжно отличить от chat.
     final picked = <PickedFileRef>[
       for (final a in _attachments)
         if (a.status == AttachmentStatus.ready)
@@ -778,30 +735,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// сравнивается при повторе.
   String? _snapshotConnectionId() {
     final cfg = effectiveConfig();
-    final url = cfg.baseUrl.trim().toLowerCase();
-    final key = cfg.apiKey.trim();
-    final pr = presets.active;
-    if (url.contains('polza.ai')) return 'polza';
-    if (pr != null &&
-        pr.id != PresetStore.defaultPresetId &&
-        pr.baseUrl.trim().isNotEmpty &&
-        pr.apiKey.trim().isNotEmpty) {
-      return 'preset:${pr.id}';
-    }
-    if (url.isEmpty || key.isEmpty) {
-      if (polzaAuth.isAuthenticated &&
-          polzaAuth.accessToken.trim().isNotEmpty) {
-        return 'polza';
-      }
-      return null;
-    }
-    if (url.contains('routerai')) return 'routerai';
-    if (pr != null &&
-        pr.baseUrl.trim().isNotEmpty &&
-        pr.apiKey.trim().isNotEmpty) {
-      return 'preset:${pr.id}';
-    }
-    return 'global';
+    return ModelTypeOverrideStore.resolveConnectionId(
+      baseUrl: cfg.baseUrl,
+      apiKey: cfg.apiKey,
+    );
   }
 
   /// Восстанавливает подключение из снимка. Возвращает null, если

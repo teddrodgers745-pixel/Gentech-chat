@@ -599,6 +599,12 @@ class ProviderCatalogService extends ChangeNotifier {
       m['supported_parameters'] ?? topProvider?['supported_parameters'],
     );
 
+    final modalities = _asStringList(_pick(m, const <String>[
+      'modalities',
+      'input_modalities',
+      'supported_modalities',
+    ]));
+
     CatalogReasoning? reasoning;
     var reasoningUnknown = false;
     try {
@@ -656,6 +662,11 @@ class ProviderCatalogService extends ChangeNotifier {
       id: id,
       name: name,
       type: type,
+      rawType: typeRaw,
+      typeSource: type.isNotEmpty
+          ? CatalogTypeSources.catalog
+          : CatalogTypeSources.unknown,
+      modalities: modalities,
       contextLength: contextLength,
       maxCompletionTokens: maxOut,
       reasoning: reasoning,
@@ -859,10 +870,6 @@ class ProviderCatalogService extends ChangeNotifier {
         }
       } catch (_) {}
     }
-    if (entry.type.isEmpty ||
-        (entry.reasoning == null && entry.reasoningUnknown)) {
-      entry = _applyFallback(entry, rawId);
-    }
     final rState = entry.reasoning != null
         ? 'задан'
         : (entry.reasoningUnknown ? 'неизвестен' : 'не заявлен');
@@ -964,7 +971,6 @@ class ProviderCatalogService extends ChangeNotifier {
       }
       return (
         e.copyWith(
-          type: (e.type.isEmpty && spec.type != null) ? spec.type : null,
           aspectRatios: e.aspectRatios.isEmpty ? spec.aspectRatios : null,
           resolutions: e.resolutions.isEmpty ? spec.resolutions : null,
           durations: e.durations.isEmpty ? durList : null,
@@ -975,36 +981,6 @@ class ProviderCatalogService extends ChangeNotifier {
     } catch (_) {
       return (e, false);
     }
-  }
-
-  static CatalogEntry _applyFallback(CatalogEntry e, String rawModelId) {
-    var type = e.type;
-    if (type.isEmpty) {
-      final route =
-          HeuristicRules.inferRoute(HeuristicRules.normalize(rawModelId));
-      type = switch (route) {
-        GenerationRoute.imageGeneration => 'image',
-        GenerationRoute.asyncJob => 'video',
-        GenerationRoute.textToSpeech => 'tts',
-        GenerationRoute.audioTranscription => 'stt',
-        GenerationRoute.embeddings => 'embedding',
-        _ => 'chat',
-      };
-    }
-    var reasoning = e.reasoning;
-    var unknown = e.reasoningUnknown;
-    if (reasoning == null && unknown) {
-      reasoning = const CatalogReasoning(
-        levels: _defaultReasoningLevels,
-      );
-      unknown = false;
-    }
-    return e.copyWith(
-      type: type,
-      reasoning: reasoning,
-      reasoningUnknown: unknown,
-      clearReasoningUnknown: !unknown,
-    );
   }
 }
 

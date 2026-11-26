@@ -7,6 +7,7 @@ import '../../services/chat_service.dart';
 import '../auth/polza_auth_service.dart';
 // ignore: unused_import
 import '../auth/routerai_auth_service.dart';
+import '../catalog/catalog_entry.dart';
 import '../catalog/provider_catalog_service.dart';
 import '../models/active_model_capabilities.dart';
 import '../models/model_id_normalizer.dart';
@@ -267,25 +268,15 @@ class ActiveModelController extends ChangeNotifier {
         notifyListeners();
       }
       final target = currentModelId.isNotEmpty ? currentModelId : incoming;
-      await _resolve(target, vision: vision, reasoning: reasoning);
+      await _resolve(target);
     } finally {
       _resolving = false;
     }
   }
 
-  Future<void> syncModel(
-    String modelId, {
-    bool? vision,
-    bool? reasoning,
-  }) async {
+  Future<void> syncModel(String modelId) async {
     final id = modelId.trim();
-    final inferredVision = vision ?? _inferVision(id);
-    final inferredReasoning = reasoning ?? await _inferReasoning(id);
-    await _resolve(
-      id,
-      vision: inferredVision,
-      reasoning: inferredReasoning,
-    );
+    await _resolve(id);
   }
 
   Future<void> _onPresetChanged() async {
@@ -294,9 +285,7 @@ class ActiveModelController extends ChangeNotifier {
     try {
       final presetModel = _presetController.active?.model.trim() ?? '';
       final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
-      final vision = _inferVision(id);
-      final reasoning = await _inferReasoning(id);
-      await _resolve(id, vision: vision, reasoning: reasoning);
+      await _resolve(id);
     } finally {
       _resolving = false;
     }
@@ -311,31 +300,10 @@ class ActiveModelController extends ChangeNotifier {
       final presetModel = _presetController.active?.model.trim() ?? '';
       final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
       if (id.isEmpty) return;
-      final vision = _inferVision(id);
-      final reasoning = await _inferReasoning(id);
-      await _resolve(id, vision: vision, reasoning: reasoning);
+      await _resolve(id);
     } finally {
       _resolving = false;
     }
-  }
-
-  static bool _inferVision(String modelId) {
-    if (modelId.isEmpty) return false;
-    final id = HeuristicRules.normalize(modelId);
-    return HeuristicRules.inferInputModalities(id).contains(Modality.image);
-  }
-
-  static Future<bool> _inferReasoning(String modelId) async {
-    if (modelId.isEmpty) return false;
-    final norm = HeuristicRules.normalize(modelId);
-    var reasoning = HeuristicRules.inferSupportsReasoning(norm);
-    if (!reasoning) {
-      try {
-        final ps = await ModelPresets.load();
-        reasoning = ps.forModel(modelId)?.reasoning ?? false;
-      } catch (_) {}
-    }
-    return reasoning;
   }
 
   static bool isHeuristicVideo(String rawId) {
@@ -739,11 +707,7 @@ class ActiveModelController extends ChangeNotifier {
     return 'off';
   }
 
-  Future<void> _resolve(
-    String modelId, {
-    bool vision = false,
-    bool reasoning = false,
-  }) async {
+  Future<void> _resolve(String modelId) async {
     final token = ++_resolveToken;
     final norm = ModelIdNormalizer.normalize(modelId);
     final modelChanged = _lastResolvedModelId != norm;
@@ -761,6 +725,24 @@ class ActiveModelController extends ChangeNotifier {
       entry = null;
     }
     if (token != _resolveToken) return;
+
+    String? typeOverride;
+    try {
+      typeOverride =
+          await ModelTypeOverrideStore.instance.loadOverride(modelId);
+      if (typeOverride == null && norm.isNotEmpty && norm != modelId.trim()) {
+        typeOverride =
+            await ModelTypeOverrideStore.instance.loadOverride(norm);
+      }
+    } catch (_) {
+      typeOverride = null;
+    }
+    if (token != _resolveToken) return;
+
+    final (kind, kindSource) = _kindWithCatalog(entry, typeOverride);
+
+    final isPolzaMedia = cid == 'polza' &&
+        (kind == ActiveModelKind.image || kind == ActiveModelKind.video);
 
     // ---- Параметры генерации (Stage 2b (c): merge по каждому полю) ----
     ModelParameters? params;
@@ -781,8 +763,11 @@ class ActiveModelController extends ChangeNotifier {
       }
     }
 
-    final curatedParams = await _loadCuratedParams(modelId, norm);
-    if (token != _resolveToken) return;
+    ModelParameters? curatedParams;
+    if (!isPolzaMedia) {
+      curatedParams = await _loadCuratedParams(modelId, norm);
+      if (token != _resolveToken) return;
+    }
 
     final merged = _mergeFieldLevel(
       user: userOverride,
@@ -796,32 +781,14 @@ class ActiveModelController extends ChangeNotifier {
     }
     if (token != _resolveToken) return;
 
-    String? typeOverride;
-    try {
-      typeOverride =
-          await ModelTypeOverrideStore.instance.loadOverride(modelId);
-      if (typeOverride == null && norm.isNotEmpty && norm != modelId.trim()) {
-        typeOverride =
-            await ModelTypeOverrideStore.instance.loadOverride(norm);
-      }
-    } catch (_) {
-      typeOverride = null;
-    }
-    if (token != _resolveToken) return;
-
-    final (kind, kindSource) = _kindWithCatalog(
-      entry,
-      norm,
-      params,
-      typeOverride,
-    );
-
     if (kind == ActiveModelKind.video || kind == ActiveModelKind.image) {
       if (params == null ||
           !params.hasAny ||
           (kind == ActiveModelKind.video &&
               (params.durations == null || params.durations!.isEmpty))) {
-        final catalogFallback = await _lookupCatalogParams(modelId, norm);
+        final catalogFallback = isPolzaMedia
+            ? null
+            : await _lookupCatalogParams(modelId, norm);
         if (catalogFallback != null &&
             catalogFallback.hasAny &&
             !(kind == ActiveModelKind.video &&
@@ -860,19 +827,13 @@ class ActiveModelController extends ChangeNotifier {
 
     // ---- Reasoning ----
     final isText = kind == ActiveModelKind.text;
-    var supportsReasoning = isText && reasoning;
+    var supportsReasoning = false;
     var reasoningLevels = <String>['off'];
     var reasoningDefault = 'off';
     var reasoningNoneAllowed = true;
     var reasoningSource = 'прежние резолверы';
 
     if (isText) {
-      if (supportsReasoning) {
-        final (levels, def, none) = await _reasoningLevelsFor(norm);
-        reasoningLevels = levels;
-        reasoningDefault = def;
-        reasoningNoneAllowed = none;
-      }
       if (entry != null) {
         final r = entry.reasoning;
         if (r != null) {
@@ -909,8 +870,10 @@ class ActiveModelController extends ChangeNotifier {
     }
     if (token != _resolveToken) return;
 
-    // Согласование выбора: сохранённое остаётся, если модель его поддерживает;
-    // иначе default_effort каталога; иначе первый допустимый.
+    // Vision только из каталога.
+    final vision = entry != null &&
+        entry.modalities.any((m) => m.toLowerCase() == 'image');
+
     final savedReasoning = settings.reasoningForModel(modelId);
     final resolvedReasoningLevel = _resolveReasoningLevel(
       levels: reasoningLevels,
@@ -1000,7 +963,7 @@ class ActiveModelController extends ChangeNotifier {
       normalizedId: norm,
       kind: kind,
       params: params,
-      vision: vision || isText,
+      vision: vision,
       reasoning: supportsReasoning,
       reasoningLevels: reasoningLevels,
       reasoningDefault: reasoningDefault,
@@ -1105,15 +1068,10 @@ class ActiveModelController extends ChangeNotifier {
     return true;
   }
 
-  /// Вид модели: по типу из каталога подключения (приоритет после
-  /// ручного override пользователя), иначе прежняя эвристика.
-  ///  - image -> image, video -> video, chat -> text;
-  ///  - tts/stt/embedding/music/classification и неизвестный тип ->
-  ///    text, ничего не прячем.
+  /// Вид модели: ручной override, затем каталог с
+  /// [CatalogTypeSources.catalog]. Эвристики и параметры не используются.
   (ActiveModelKind, String) _kindWithCatalog(
     CatalogEntry? entry,
-    String norm,
-    ModelParameters? params,
     String? typeOverride,
   ) {
     if (typeOverride != null) {
@@ -1127,46 +1085,26 @@ class ActiveModelController extends ChangeNotifier {
       );
     }
     final e = entry;
-    final type = e?.type ?? '';
-    switch (type) {
-      case 'image':
-        return (ActiveModelKind.image, 'каталог (${e!.capabilitiesSource})');
-      case 'video':
-        return (ActiveModelKind.video, 'каталог (${e!.capabilitiesSource})');
-      case 'chat':
-        return (ActiveModelKind.text, 'каталог (${e!.capabilitiesSource})');
-      case 'tts':
-      case 'stt':
-      case 'embedding':
-      case 'music':
-      case 'classification':
-        return (ActiveModelKind.text, 'каталог: служебный тип $type');
+    if (e != null && e.typeSource == CatalogTypeSources.catalog) {
+      final type = e.type.trim().toLowerCase();
+      switch (type) {
+        case 'image':
+          return (ActiveModelKind.image, 'каталог (${e.capabilitiesSource})');
+        case 'video':
+          return (ActiveModelKind.video, 'каталог (${e.capabilitiesSource})');
+        case 'chat':
+          return (ActiveModelKind.text, 'каталог (${e.capabilitiesSource})');
+        case 'tts':
+        case 'stt':
+        case 'embedding':
+        case 'music':
+        case 'classification':
+          return (ActiveModelKind.text, 'каталог: служебный тип $type');
+        default:
+          return (ActiveModelKind.text, 'каталог: неизвестный тип $type');
+      }
     }
-    return (_resolveKind(norm, params, typeOverride), 'эвристика/параметры');
-  }
-
-  /// Точные уровни размышлений активной модели из
-  /// [ReasoningCapabilityResolver] (кэш каталога OpenRouter).
-  /// Возвращает (доступные уровни, default_effort, noneAllowed).
-  Future<(List<String>, String, bool)> _reasoningLevelsFor(
-    String normId,
-  ) async {
-    try {
-      await ReasoningCapabilityResolver.loadCache();
-      final cap = ReasoningCapabilityResolver.getCapability(normId);
-      final levels = <String>[...cap.supportedEfforts];
-      if (cap.mandatory) {
-        levels.removeWhere((l) => l == 'none' || l == 'off');
-      }
-      if (levels.isNotEmpty) {
-        return (levels, cap.defaultEffort, cap.allowsNone);
-      }
-      final def = cap.defaultEffort.trim();
-      if (def.isNotEmpty) {
-        return (<String>[def], def, cap.allowsNone);
-      }
-    } catch (_) {}
-    return (const <String>['off', 'low', 'medium', 'high'], 'off', true);
+    return (ActiveModelKind.text, 'тип неизвестен');
   }
 
   /// Копия [ModelParameters] с заменённой достоверностью данных.
@@ -1195,73 +1133,6 @@ class ActiveModelController extends ChangeNotifier {
     } catch (_) {
       return null;
     }
-  }
-
-  ActiveModelKind _resolveKind(
-    String normalizedId,
-    ModelParameters? p,
-    String? typeOverride,
-  ) {
-    if (p != null && p.confidence == 'skip') return ActiveModelKind.skip;
-    switch (typeOverride) {
-      case 'image':
-        return ActiveModelKind.image;
-      case 'video':
-        return ActiveModelKind.video;
-      case 'text':
-        return ActiveModelKind.text;
-    }
-    final genCap = _genCapabilityQuietly(normalizedId);
-    if (genCap != null) {
-      final d = genCap.durations;
-      if (d != null && !d.isEmpty) return ActiveModelKind.video;
-    }
-    if (p != null) {
-      switch (p.type) {
-        case 'image':
-          return ActiveModelKind.image;
-        case 'video':
-          return ActiveModelKind.video;
-        case 'live':
-          return ActiveModelKind.live;
-        case 'text':
-          if (!isHeuristicVideo(normalizedId) &&
-              !isHeuristicImage(normalizedId)) {
-            return ActiveModelKind.text;
-          }
-      }
-      final hasMedia = p.aspectRatios.isNotEmpty ||
-          p.durations != null ||
-          p.resolutions.isNotEmpty;
-      if (hasMedia) {
-        return (p.durations != null && !p.durations!.isEmpty) ||
-                isHeuristicVideo(normalizedId)
-            ? ActiveModelKind.video
-            : ActiveModelKind.image;
-      }
-    }
-    if (normalizedId.isNotEmpty) {
-      final lower = normalizedId.toLowerCase();
-      if (lower.contains('live') || lower.contains('native-audio')) {
-        return ActiveModelKind.live;
-      }
-      if (isHeuristicVideo(lower)) {
-        return ActiveModelKind.video;
-      }
-      if (isHeuristicImage(lower)) {
-        return ActiveModelKind.image;
-      }
-      final route = HeuristicRules.inferRoute(
-        HeuristicRules.normalize(normalizedId),
-      );
-      if (route == GenerationRoute.asyncJob) {
-        return ActiveModelKind.video;
-      }
-      if (route == GenerationRoute.imageGeneration) {
-        return ActiveModelKind.image;
-      }
-    }
-    return ActiveModelKind.text;
   }
 
   @override

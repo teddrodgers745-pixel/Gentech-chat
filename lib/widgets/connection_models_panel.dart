@@ -133,26 +133,26 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     }
   }
 
-  /// Сохраняем модель вместе с адресом и ключом её подключения.
-  void _pickModel(String v) {
+  /// Выбор модели принадлежит активному пресету: панель не пишет
+  /// settings.model в обход PresetStore. Подключение (адрес/ключ)
+  /// обновляется в глобальных настройках, чтобы системный дефолтный
+  /// пресет использовал именно эту панель.
+  Future<void> _pickModel(String v) async {
     final base = _base;
     final key = _key;
     if (base.isEmpty || key.isEmpty) return;
-    settings.setConnection(
-      url: base,
-      key: key,
-      mdl: v,
-    );
+    settings.setConnection(url: base, key: key);
+    await presets.updateActivePresetModel(v);
     if (mounted) setState(() {});
   }
 
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: settings,
+      listenable: Listenable.merge(<Listenable>[settings, presets]),
       builder: (context, _) {
         final p = settings.palette;
-        final current = settings.model.trim();
+        final current = settings.currentModelId.trim();
         final dropdownValue = _models.contains(current) ? current : null;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
