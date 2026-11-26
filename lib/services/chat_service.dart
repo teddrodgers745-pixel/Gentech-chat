@@ -266,6 +266,19 @@ class ChatService {
         return;
       }
 
+      // В непотоковом ответе промежуточный раунд не отдаётся целиком:
+      // его текст принадлежит вызову инструмента, а не итоговому ответу.
+      // Но usage и источники этого раунда нельзя терять.
+      if (!effectiveStream &&
+          (res.usage != null || res.sources.isNotEmpty)) {
+        yield StreamChunk(
+          '',
+          '',
+          usage: res.usage,
+          sources: res.sources,
+        );
+      }
+
       final callsPayload = <Map<String, dynamic>>[];
       final resolved = <_ToolCall>[];
       for (int i = 0; i < res.toolCalls.length; i++) {
@@ -1244,7 +1257,11 @@ class ChatService {
     }
     switch (code) {
       case 402:
-        return 'Недостаточно средств на балансе (402).';
+        // 402 может означать лимит ключа, а не недостаток баланса.
+        // Сохраняем причину провайдера для mapper и карточки ошибки.
+        final details = _extractError(body).trim();
+        if (details.isEmpty) return 'Ошибка оплаты или лимита (402).';
+        return 'Ошибка оплаты или лимита (402): $details';
       case 429:
         return 'Слишком много запросов (429). Подождите немного.';
     }
