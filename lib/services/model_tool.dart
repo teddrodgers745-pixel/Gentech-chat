@@ -51,15 +51,62 @@ class ModelToolRunner {
       );
     }
 
+    final baseUri = Uri.tryParse(base);
+    if (baseUri == null ||
+        (baseUri.scheme != 'http' && baseUri.scheme != 'https') ||
+        !baseUri.hasAuthority ||
+        baseUri.host.isEmpty ||
+        baseUri.userInfo.isNotEmpty ||
+        baseUri.hasQuery ||
+        baseUri.hasFragment) {
+      return const ToolOutcome(
+        false,
+        'Ошибка: Base URL инструмента должен быть абсолютным HTTP(S)-адресом '
+            'без учётных данных, параметров запроса и фрагмента.',
+      );
+    }
+
     final isResponses = tool.apiType == Tool.apiResponses;
     final uri = Uri.tryParse(
       '$base/${isResponses ? 'responses' : 'chat/completions'}',
     );
-    if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
+    if (uri == null ||
+        uri.scheme != baseUri.scheme ||
+        uri.host != baseUri.host ||
+        uri.port != baseUri.port) {
       return const ToolOutcome(
         false,
-        'Ошибка: Base URL должен начинаться с http:// или https://.',
+        'Ошибка: не удалось сформировать адрес модели-инструмента.',
       );
+    }
+
+    // Заголовки принадлежат самому инструменту, а не текущему подключению.
+    // Не допускаем неоднозначных заголовков и подмены HTTP-адресата.
+    final headers = <String, String>{};
+    final headerNames = <String>{};
+    for (final entry in tool.headers.entries) {
+      final name = entry.key.trim().toLowerCase();
+      if (name.isEmpty ||
+          !headerNames.add(name) ||
+          name == 'host' ||
+          name == 'content-length' ||
+          name == 'transfer-encoding') {
+        return const ToolOutcome(
+          false,
+          'Ошибка: некорректные или дублирующиеся заголовки инструмента.',
+        );
+      }
+      headers[entry.key.trim()] = entry.value;
+    }
+
+    if (!headerNames.contains('content-type')) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (!headerNames.contains('authorization')) {
+      final key = tool.apiKey
+          .trim()
+          .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
+      if (key.isNotEmpty) headers['Authorization'] = 'Bearer $key';
     }
 
     final client = http.Client();
@@ -77,21 +124,19 @@ class ModelToolRunner {
               ],
               'stream': false,
             };
+      final request = http.Request('POST', uri)
+        ..followRedirects = false
+        ..headers.addAll(headers)
+        ..body = jsonEncode(body);
       final resp = await client
-          .post(
-            uri,
-            headers: <String, String>{
-              'Content-Type': 'application/json',
-              'Authorization': 'Bearer ${tool.apiKey}',
-            },
-            body: jsonEncode(body),
-          )
+          .send(request)
+          .then(http.Response.fromStream)
           .timeout(_timeout);
       final text = resp.body;
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
         return ToolOutcome(
           false,
-          'Ошибка HTTP ${resp.statusCode}: ${_clip(text, 500)}',
+          'Ошибка HTTP ${resp.statusCode} при вызове модели-инструмента.',
         );
       }
       try {
@@ -112,8 +157,11 @@ class ModelToolRunner {
         false,
         'Ошибка: модель-инструмент не ответила за 60 секунд.',
       );
-    } catch (e) {
-      return ToolOutcome(false, 'Ошибка вызова модели-инструмента: $e');
+    } catch (_) {
+      return const ToolOutcome(
+        false,
+        'Ошибка вызова модели-инструмента.',
+      );
     } finally {
       client.close();
     }

@@ -25,6 +25,8 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
   late final TextEditingController _key;
   late final TextEditingController _model;
   late final TextEditingController _sys;
+  late final String _initialUrl;
+  bool _keyEditedAfterUrlChange = false;
   bool _stream = true;
   bool _showKey = false;
   List<Tool> _tools = [];
@@ -34,6 +36,7 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
   void initState() {
     super.initState();
     final e = widget.existing;
+    _initialUrl = e?.baseUrl.trim() ?? '';
     _name = TextEditingController(text: e?.name ?? '');
     _url = TextEditingController(text: e?.baseUrl ?? '');
     _key = TextEditingController(text: e?.apiKey ?? '');
@@ -69,18 +72,37 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
   }
 
+  bool _urlChanged(String newUrl) {
+    final oldUri = Uri.tryParse(_initialUrl);
+    final newUri = Uri.tryParse(newUrl);
+    if (oldUri == null || newUri == null) return _initialUrl != newUrl;
+    return oldUri != newUri;
+  }
+
   Future<void> _save() async {
     final name = _name.text.trim();
     if (name.isEmpty) {
       _snack('Введите название пресета');
       return;
     }
+    final url = _url.text.trim();
+    final key = _key.text.trim();
+    if (widget.existing != null &&
+        _urlChanged(url) &&
+        key.isNotEmpty &&
+        !_keyEditedAfterUrlChange) {
+      _snack(
+        'Адрес изменён. Введите ключ для нового адреса заново '
+        'или очистите поле ключа.',
+      );
+      return;
+    }
     final preset = Preset(
       id: widget.existing?.id ?? newId(),
       name: name,
       providerId: widget.existing?.providerId ?? '',
-      baseUrl: _url.text.trim(),
-      apiKey: _key.text.trim(),
+      baseUrl: url,
+      apiKey: key,
       model: _model.text.trim(),
       stream: _stream,
       temperature: widget.existing?.temperature ?? 1.0,
@@ -205,6 +227,7 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
               autocorrect: false,
               keyboardType: TextInputType.url,
               cursorColor: p.accent,
+              onChanged: (_) => _keyEditedAfterUrlChange = false,
               decoration: const InputDecoration(
                 labelText: 'Base URL',
                 hintText: 'https://api.example.com',
@@ -217,6 +240,7 @@ class _PresetEditScreenState extends State<PresetEditScreen> {
               autocorrect: false,
               enableSuggestions: false,
               cursorColor: p.accent,
+              onChanged: (_) => _keyEditedAfterUrlChange = true,
               decoration: InputDecoration(
                 labelText: 'API-ключ',
                 suffixIcon: IconButton(
