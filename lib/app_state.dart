@@ -73,7 +73,7 @@ EffectiveConfig effectiveConfig() {
         presetUrl.contains('routerai.ru') &&
         !presetUrl.contains('polza.ai');
     if (otherProvider) {
-      final activePreset = pr!;
+      final activePreset = pr;
       final presetKey = activePreset.apiKey.trim();
       final key = presetKey.isNotEmpty
           ? presetKey
@@ -107,9 +107,9 @@ EffectiveConfig effectiveConfig() {
       apiKey: polzaKey,
       model: (pr?.model ?? settings.model).trim(),
       systemPrompt:
-          isUserPreset ? pr!.systemPrompt : settings.systemPrompt,
+          isUserPreset ? pr.systemPrompt : settings.systemPrompt,
       stream: pr?.stream ?? true,
-      temperature: isUserPreset ? pr!.temperature : null,
+      temperature: isUserPreset ? pr.temperature : null,
     );
   }
   if (routerAiAuth.isAuthenticated) {
@@ -132,9 +132,9 @@ EffectiveConfig effectiveConfig() {
       apiKey: routerKey,
       model: (pr?.model ?? settings.model).trim(),
       systemPrompt:
-          isUserPreset ? pr!.systemPrompt : settings.systemPrompt,
+          isUserPreset ? pr.systemPrompt : settings.systemPrompt,
       stream: pr?.stream ?? true,
-      temperature: isUserPreset ? pr!.temperature : null,
+      temperature: isUserPreset ? pr.temperature : null,
     );
   }
   if (pr != null && pr.id != PresetStore.defaultPresetId) {
