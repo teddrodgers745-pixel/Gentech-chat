@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../app_state.dart' show settings;
 import '../models/gen_error.dart';
 import '../models/generation_schema.dart';
 import '../providers/model_catalog_adapter.dart';
@@ -77,6 +78,17 @@ class ImagesApiExecutor extends GenerationExecutor {
       default:
         return '1024x1024';
     }
+  }
+
+  /// Выбор провайдера Polza из настроек приложения: сортировка
+  /// (по умолчанию по цене — самый дешёвый), конкретный провайдер
+  /// не закрепляется. Для не-Polza провайдеров поле не добавляется.
+  static Map<String, dynamic> _providerSelectionBody() {
+    final sort = settings.providerSort.trim().toLowerCase();
+    if (sort.isEmpty) return const <String, dynamic>{};
+    return <String, dynamic>{
+      'provider': <String, dynamic>{'sort': sort},
+    };
   }
 
   @override
@@ -173,6 +185,20 @@ class ImagesApiExecutor extends GenerationExecutor {
       }
       final display = await _toDisplayUri(sources.first, request);
       if (_cancelled) return;
+      // Типизированное завершение: локальный путь и/или удалённая ссылка.
+      // Потребители, которым нужен только markdown (карточка в чате),
+      // событие свободно игнорируют; модели-инструменту оно даёт адрес
+      // результата для ToolMedia (медиа появляется в чате, а не «текст
+      // вместо картинки»).
+      yield GenCompleted(
+        jobId: (asyncJobId ?? '').trim().isEmpty
+            ? 'direct'
+            : asyncJobId!.trim(),
+        localPath: display.startsWith('file://')
+            ? display.substring('file://'.length)
+            : '',
+        remoteUrl: display.startsWith('file://') ? '' : display,
+      );
       yield GenerationDelta(content: '![изображение]($display)');
     } on GenError catch (g) {
       if (!_cancelled) {
@@ -375,6 +401,9 @@ class ImagesApiExecutor extends GenerationExecutor {
           isVideo: false,
         ),
         'async': true,
+        // Выбор провайдера из настроек (по умолчанию sort: price) —
+        // конкретный провайдер не закрепляется.
+        ..._providerSelectionBody(),
       };
       // Содержит промпт пользователя; ключ и заголовки не логируются.
       if (kDebugMode) {
@@ -488,7 +517,7 @@ class ImagesApiExecutor extends GenerationExecutor {
         final set =
             _unsupportedParamsByModel.putIfAbsent(modelId, () => <String>{});
         if (set.add(name)) {
-          debugPrint("[media] blacklist: '$name' for $modelId (warnings)");
+          debugPrint("[media] blacklist: '$name' for modelId (warnings)");
         }
       }
     }

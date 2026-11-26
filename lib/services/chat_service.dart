@@ -10,11 +10,13 @@ import 'package:http/http.dart' as http;
 import '../app_state.dart';
 import '../core/auth/polza_auth_service.dart';
 import '../core/generation/search_capability_resolver.dart';
+import '../core/models/message_part.dart' show ToolMedia;
 import '../core/providers/heuristic_rules.dart';
 import '../core/providers/model_catalog_adapter.dart';
 import '../core/search/search_controller.dart';
 import '../core/search/search_strategy.dart';
 import '../core/storage.dart';
+// ignore: unused_import
 import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
 import '../models/chat_message.dart';
@@ -29,6 +31,20 @@ class StreamChunk {
   final String? toolArgs;
   final String? toolStatus;
   final String? toolResult;
+
+  /// Идентификатор асинхронной задачи инструмента-модели (видео).
+  /// null/'' — чанк не о прогрессе задачи. Приходит вместе с
+  /// [toolProgress] и статусом running.
+  final String? toolJobId;
+
+  /// Прогресс задачи инструмента (0..100); null — не сообщён.
+  final double? toolProgress;
+
+  /// Медиа-результат инструмента (image/video): материализуется
+  /// в чате как ImagePart/VideoPart. null — инструмент текстовый
+  /// либо без результата.
+  final List<ToolMedia>? toolMedia;
+
   final Map<String, dynamic>? usage;
   final List<String> sources;
 
@@ -39,6 +55,9 @@ class StreamChunk {
     this.toolArgs,
     this.toolStatus,
     this.toolResult,
+    this.toolJobId,
+    this.toolProgress,
+    this.toolMedia,
     this.usage,
     this.sources = const <String>[],
   });
@@ -67,7 +86,13 @@ const String kFileBlockInstruction =
 class ToolOutcome {
   final bool ok;
   final String text;
-  const ToolOutcome(this.ok, this.text);
+
+  /// Медиа-результат модели-инструмента (image/video), если инструмент
+  /// настроен на медиа-модель каталога. Пустой список — текстовый
+  /// результат.
+  final List<ToolMedia> media;
+
+  const ToolOutcome(this.ok, this.text, {this.media = const <ToolMedia>[]});
 }
 
 class ChatServiceException implements Exception {
@@ -115,12 +140,19 @@ class _RoundResult {
   final Map<String, dynamic>? usage;
   final List<String> sources;
 
+  /// Причина неполного ответа ('' — ответ полный): оборванный SSE-поток
+  /// (нет [DONE]/finish_reason), finish_reason length/content_filter
+  /// либо пустой choices. Частичный текст ответа сохранён в
+  /// [content]/[reasoning] и показывается пользователю.
+  final String incompleteReason;
+
   const _RoundResult(
     this.content,
     this.reasoning,
     this.toolCalls, {
     this.usage,
     this.sources = const <String>[],
+    this.incompleteReason = '',
   });
 }
 
@@ -133,14 +165,26 @@ class _SearchModelResult {
   final String text;
   final List<String> sources;
 
+  /// Ошибка предзапроса (HTTP/сеть/таймаут). Не пустая — поиск не удался,
+  /// ошибка показывается пользователю, а не молчит.
+  final String error;
+
+  /// Usage предзапроса: стоимость поиска учитывается в итоговой.
+  final Map<String, dynamic>? usage;
+
   const _SearchModelResult({
     this.text = '',
     this.sources = const <String>[],
+    this.error = '',
+    this.usage,
   });
 }
 
 class ChatService {
   static const int _maxToolIterations = 4;
+
+  /// Имя карточки предзапроса поиска в чате (режим «Модель-инструмент»).
+  static const String preQueryToolName = 'Поиск (модель-инструмент)';
 
   static Future<dynamic> buildUserContent(
     String text,
@@ -254,6 +298,20 @@ class ChatService {
       final res = holder.result;
       if (res == null) return;
 
+      // Оборванный/неполный ответ не выглядит успешным: частичный текст
+      // показан, неполные tool calls НЕ исполняются.
+      if (res.incompleteReason.isNotEmpty) {
+        if (!effectiveStream) {
+          yield StreamChunk(
+            res.content,
+            res.reasoning,
+            usage: res.usage,
+            sources: res.sources,
+          );
+        }
+        throw ChatServiceException(res.incompleteReason);
+      }
+
       if (res.toolCalls.isEmpty) {
         if (!effectiveStream) {
           yield StreamChunk(
@@ -319,7 +377,29 @@ class ChatService {
             'Ошибка: инструмент не найден среди доступных.',
           );
         } else if (tool.isModel) {
-          outcome = await ModelToolRunner.run(tool, call.arguments);
+          // Модель-инструмент: через каталог может оказаться медиа-моделью.
+          // События (прогресс видео-задачи, медиа-результат) идут в чат.
+          ToolOutcome? collected;
+          await for (final ev
+              in ModelToolRunner.runStream(tool, call.arguments)) {
+            if (ev is ModelToolProgress) {
+              yield StreamChunk(
+                '',
+                '',
+                toolName: call.name,
+                toolStatus: toolStatusRunning,
+                toolJobId: ev.jobId,
+                toolProgress: ev.percent,
+              );
+            } else if (ev is ModelToolDone) {
+              collected = ev.outcome;
+            }
+          }
+          outcome = collected ??
+              const ToolOutcome(
+                false,
+                'Ошибка: пустой результат модели-инструмента.',
+              );
         } else {
           outcome = await _executeTool(tool, call.arguments);
         }
@@ -329,6 +409,8 @@ class ChatService {
           toolName: call.name,
           toolStatus: outcome.ok ? toolStatusDone : toolStatusError,
           toolResult: outcome.text,
+          toolMedia:
+              outcome.media.isEmpty ? null : List<ToolMedia>.of(outcome.media),
         );
         history.add({
           'role': 'tool',
@@ -353,7 +435,19 @@ class ChatService {
       holder: holder,
     );
     final res = holder.result;
-    if (res != null && !effectiveStream) {
+    if (res == null) return;
+    if (res.incompleteReason.isNotEmpty) {
+      if (!effectiveStream) {
+        yield StreamChunk(
+          res.content,
+          res.reasoning,
+          usage: res.usage,
+          sources: res.sources,
+        );
+      }
+      throw ChatServiceException(res.incompleteReason);
+    }
+    if (!effectiveStream) {
       yield StreamChunk(
         res.content,
         res.reasoning,
@@ -479,26 +573,9 @@ class ChatService {
     return null;
   }
 
-  static bool _isRouterAI(String baseUrl) =>
-      ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'routerai' ||
-      baseUrl.trim().toLowerCase().contains('routerai');
-
   static bool _isPolza(String baseUrl) =>
       ModelCatalogAdapter.providerIdFromBaseUrl(baseUrl) == 'polza' ||
       baseUrl.trim().toLowerCase().contains('polza.ai');
-
-  /// Есть ли у модели нативный фетчинг (встроенный в саму модель).
-  ///
-  /// Отдельного поля «нативный фетчинг» в каталоге нет; в качестве
-  /// признака используем каталог нативного поиска (SearchCapabilityResolver):
-  /// модели вроде Perplexity Sonar умеют и искать, и фетчить сами.
-  static bool _hasNativeFetch(String model) {
-    try {
-      return SearchCapabilityResolver.supportsNativeSearch(model);
-    } catch (_) {
-      return false;
-    }
-  }
 
   /// Признак «reasoning обязателен» (mandatory: true) из каталога Polza.
   ///
@@ -515,6 +592,21 @@ class ChatService {
     }
   }
 
+  /// Payload размышлений: выбранный уровень уходит провайдеру КАК ЕСТЬ,
+  /// без ремапа (low не превращается в medium, xhigh/max — в high).
+  ///
+  /// Выключенный уровень ('off') для Polza — ЯВНЫЙ effort: none, а не
+  /// отсутствие блока: отсутствие блока означает поведение модели по
+  /// умолчанию, не обязательно «выключено». Если каталог объявил
+  /// reasoning обязательным (mandatory), none запрещён — выбор молча не
+  /// подменяется, блок не отправляется и у провайдера срабатывает его
+  /// обязательное поведение по умолчанию. Для не-Polza провайдеров
+  /// контракта none у нас нет — выдумывать поле нельзя.
+  ///
+  /// Адаптивный reasoning (type: adaptive + effort_level) документация
+  /// разрешает только моделям с адаптивным мышлением; наш каталог этого
+  /// признака не выражает, поэтому type/effort_level не отправляются —
+  /// ничего не выдумываем.
   static Map<String, dynamic> _buildReasoningPayload({
     required String baseUrl,
     required String model,
@@ -524,14 +616,7 @@ class ChatService {
     if (effort.isEmpty) return const <String, dynamic>{};
 
     if (_isPolza(baseUrl)) {
-      // Polza принимает reasoning.effort как есть, без ремаппинга:
-      // low остаётся low, xhigh/max — как есть, неизвестное значение
-      // тоже не подменяется и не блокируется (провайдер решает сам).
-      // Верхнеуровневый reasoning_effort Polza игнорирует — отправляем
-      // объект {"reasoning": {"effort": ...}}.
       if (effort == 'off' || effort == 'none') {
-        // Если каталог объявил reasoning обязательным (mandatory: true),
-        // отключить его нельзя — блок не отправляется вовсе.
         if (_reasoningMandatoryFor(model)) {
           return const <String, dynamic>{};
         }
@@ -546,24 +631,93 @@ class ChatService {
     }
 
     if (effort == 'off' || effort == 'none') {
+      // Контракт не-Polza провайдеров неизвестен: не выдумываем.
       return const <String, dynamic>{};
     }
 
-    if (_isRouterAI(baseUrl)) {
-      var routerEffort = effort;
-      if (effort == 'max' || effort == 'xhigh') routerEffort = 'high';
-      if (effort == 'minimal' || effort == 'min') routerEffort = 'low';
-      return <String, dynamic>{
-        'reasoning_effort': routerEffort,
-      };
+    // Уровень как есть: нормализацию до ближайшего поддерживаемого
+    // выполняет провайдер (документация Polza), не клиент.
+    return <String, dynamic>{'reasoning_effort': effort};
+  }
+
+  /// Тестовый доступ к payload размышлений.
+  @visibleForTesting
+  static Map<String, dynamic> reasoningPayloadForTest({
+    required String baseUrl,
+    required String model,
+    String? reasoningEffort,
+  }) =>
+      _buildReasoningPayload(
+        baseUrl: baseUrl,
+        model: model,
+        reasoningEffort: reasoningEffort,
+      );
+
+  /// Payload выбора провайдера Polza: настройка из настроек приложения
+  /// (по умолчанию сортировка по цене — самый дешёвый). Конкретный
+  /// провайдер не закрепляется; автоматический автороутинг не считается
+  /// доказательством минимальной цены.
+  @visibleForTesting
+  static Map<String, dynamic> providerSelectionPayload(String baseUrl) {
+    if (!_isPolza(baseUrl)) return const <String, dynamic>{};
+    final sort = settings.providerSort.trim().toLowerCase();
+    if (sort.isEmpty) return const <String, dynamic>{};
+    return <String, dynamic>{
+      'provider': <String, dynamic>{'sort': sort},
+    };
+  }
+
+  /// Документированный параметр нативного поиска Polza для
+  /// Chat Completions: `web_search_options`. Поиск выполняет провайдер
+  /// модели, если умеет, иначе Polza — запрос не падает. Для не-Polza
+  /// провайдеров параметр не выдумывается.
+  @visibleForTesting
+  static Map<String, dynamic> nativeSearchBodyPayload(String baseUrl) {
+    if (!_isPolza(baseUrl)) return const <String, dynamic>{};
+    return <String, dynamic>{'web_search_options': <String, dynamic>{}};
+  }
+
+  /// Серверные инструменты поиска для тела запроса:
+  ///  - native — поиск выполняет сама модель: документированный параметр
+  ///    тела `web_search_options` (добавляется в _roundOnce). Серверный
+  ///    инструмент polza:web_fetch сюда НЕ добавляется: «нативный поиск
+  ///    означает нативный фетчинг» — недоказанное предположение, ни один
+  ///    режим поиска фетчинг не подразумевает;
+  ///  - provider — серверный поиск: для Polza polza:web_search,
+  ///    для остальных — web_search (legacy-контракт), если модель
+  ///    умеет искать;
+  ///  - off / modelAsTool / customApi — инструменты поиска
+  ///    не добавляются (modelAsTool ищет отдельной моделью до запроса).
+  @visibleForTesting
+  static List<Map<String, dynamic>> builtinSearchTools({
+    required String baseUrl,
+    required String model,
+    required bool searchEnabled,
+    required SearchMode mode,
+    required bool webSearchSupported,
+  }) {
+    final out = <Map<String, dynamic>>[];
+    if (!searchEnabled) return out;
+    if (_isPolza(baseUrl)) {
+      switch (mode) {
+        case SearchMode.native:
+          break;
+        case SearchMode.provider:
+          out.add(<String, dynamic>{'type': 'polza:web_search'});
+        case SearchMode.off:
+        case SearchMode.modelAsTool:
+        case SearchMode.customApi:
+          break;
+      }
+      return out;
     }
-    final mapped = ReasoningMapper.mapToApi(
-      ReasoningMapper.fromId(effort),
-      model,
-    );
-    return mapped.isNotEmpty
-        ? mapped
-        : <String, dynamic>{'reasoning_effort': effort};
+    final nativeSearch = SearchCapabilityResolver.supportsNativeSearch(model);
+    if (mode == SearchMode.native || mode == SearchMode.provider) {
+      if (nativeSearch || webSearchSupported) {
+        out.add(<String, dynamic>{'type': 'web_search'});
+      }
+    }
+    return out;
   }
 
   Stream<StreamChunk> _round({
@@ -577,11 +731,11 @@ class ChatService {
     required List<Tool> tools,
     required _RoundHolder holder,
   }) async* {
-    final normalizedEffort = (reasoningEffort ?? '').trim().toLowerCase();
-    final canRetry = _isRouterAI(baseUrl) &&
-        (normalizedEffort == 'high' || normalizedEffort == 'max');
+    // Автоматических повторов после 400 больше нет: распознанный
+    // параметр (в том числе tools или reasoning) не удаляется молча,
+    // ошибка 400 показывается пользователю как есть.
     try {
-      await for (final chunk in _roundOnce(
+      yield* _roundOnce(
         baseUrl: baseUrl,
         apiKey: apiKey,
         model: model,
@@ -591,24 +745,8 @@ class ChatService {
         reasoningEffort: reasoningEffort,
         tools: tools,
         holder: holder,
-      )) {
-        yield chunk;
-      }
+      );
     } on ChatServiceException catch (e) {
-      if (canRetry && e.statusCode == 400 && !_wasCancelled) {
-        yield* _roundOnce(
-          baseUrl: baseUrl,
-          apiKey: apiKey,
-          model: model,
-          history: history,
-          stream: stream,
-          temperature: temperature,
-          reasoningEffort: 'high',
-          tools: tools,
-          holder: holder,
-        );
-        return;
-      }
       if (e.statusCode == 401 &&
           !_wasCancelled &&
           baseUrl.trim().toLowerCase().contains('polza.ai')) {
@@ -619,24 +757,28 @@ class ChatService {
       }
       rethrow;
     }
-    if (!canRetry || _wasCancelled) return;
-    final res = holder.result;
-    if (res == null) return;
-    final isEmpty = res.content.trim().isEmpty &&
-        res.reasoning.trim().isEmpty &&
-        res.toolCalls.isEmpty;
-    if (!isEmpty) return;
-    yield* _roundOnce(
-      baseUrl: baseUrl,
-      apiKey: apiKey,
-      model: model,
-      history: history,
-      stream: stream,
-      temperature: temperature,
-      reasoningEffort: 'high',
-      tools: tools,
-      holder: holder,
-    );
+  }
+
+  /// Причина неполного ответа; '' — ответ полный.
+  ///
+  /// Полный ответ: [DONE] получен ИЛИ finish_reason == 'stop'.
+  /// Неполный: finish_reason != 'stop' (length, content_filter ...)
+  /// либо поток оборван — ни [DONE], ни finish_reason.
+  @visibleForTesting
+  static String incompleteReasonOf({
+    required bool sawDone,
+    required String finishReason,
+  }) {
+    final fr = finishReason.trim().toLowerCase();
+    if (fr.isNotEmpty && fr != 'stop') {
+      return 'Ответ модели неполный: провайдер завершил поток '
+          'с finish_reason «$finishReason».';
+    }
+    if (!sawDone && fr.isEmpty) {
+      return 'Ответ модели неполный: поток оборван — ни [DONE], '
+          'ни finish_reason не получены.';
+    }
+    return '';
   }
 
   Stream<StreamChunk> _roundOnce({
@@ -661,10 +803,11 @@ class ChatService {
       final firstRound = _searchPending;
       _searchPending = false;
 
-      // ---- Режим «Модель-инструмент»: предварительный запрос к поисковой
-      // модели. Результат встраиваем в контекст (system-сообщение) и
-      // отдаём источники отдельными чанками. Никакой отдельной функции
-      // modelAsTool в теле не остаётся — единая точка входа.
+      // ---- Режим «Модель-инструмент»: предварительный запрос к
+      // поисковой модели. Поиск ВКЛЮЧАЕТСЯ В API (плагин web Polza /
+      // серверный web_search), а не просьба текстом. Результат
+      // встраивается в контекст, источники и usage предзапроса
+      // доходят до чата, ошибки ПОКАЗЫВАЮТСЯ, а не молчат.
       if (firstRound &&
           searchEnabled &&
           searchMode == SearchMode.modelAsTool) {
@@ -677,8 +820,28 @@ class ChatService {
             searchModelId: sm,
             query: q,
           );
+          if (res.usage != null) {
+            yield StreamChunk('', '', usage: res.usage);
+          }
           if (res.sources.isNotEmpty) {
             yield StreamChunk('', '', sources: List<String>.of(res.sources));
+          }
+          final preError = res.error.trim();
+          if (preError.isNotEmpty) {
+            yield StreamChunk(
+              '',
+              '',
+              toolName: preQueryToolName,
+              toolArgs: q,
+              toolStatus: toolStatusRunning,
+            );
+            yield StreamChunk(
+              '',
+              '',
+              toolName: preQueryToolName,
+              toolStatus: toolStatusError,
+              toolResult: preError,
+            );
           }
           if (res.text.trim().isNotEmpty) {
             final ctx =
@@ -706,7 +869,13 @@ class ChatService {
       }
 
       // ---- Built-in tools: Polza server-side инструменты.
-      final builtin = _builtinToolsPayload(base, model);
+      final builtin = builtinSearchTools(
+        baseUrl: base,
+        model: model,
+        searchEnabled: searchEnabled,
+        mode: searchMode,
+        webSearchSupported: settings.webSearchSupported,
+      );
       final reasoningPayload = _buildReasoningPayload(
         baseUrl: base,
         model: model,
@@ -720,6 +889,9 @@ class ChatService {
           'stream_options': <String, dynamic>{'include_usage': true},
         if (temperature != null) 'temperature': temperature,
         ...reasoningPayload,
+        ...providerSelectionPayload(base),
+        if (searchEnabled && searchMode == SearchMode.native)
+          ...nativeSearchBodyPayload(base),
         if (tools.isNotEmpty || builtin.isNotEmpty)
           'tools': <Map<String, dynamic>>[
             ...builtin,
@@ -729,7 +901,7 @@ class ChatService {
 
       // ---- Legacy provider mode (не-Polza): тело web_search = true.
       // Для Polza оставлен единственный путь — server-side polza:web_search
-      // в _builtinToolsPayload, чтобы не было двух реализаций.
+      // в builtinSearchTools, чтобы не было двух реализаций.
       if (firstRound &&
           searchEnabled &&
           searchMode == SearchMode.provider &&
@@ -744,7 +916,6 @@ class ChatService {
         } catch (_) {}
       }
 
-      final droppedParams = <String>{};
       final cleanKey = apiKey
           .trim()
           .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
@@ -756,25 +927,11 @@ class ChatService {
       final firstReq = http.Request('POST', uri)
         ..headers.addAll(requestHeaders);
       firstReq.body = jsonEncode(bodyMap);
-      var resp = await client.send(firstReq).timeout(_apiTimeout);
-      String? resp400Body;
-      if (resp.statusCode == 400) {
-        final errBody = await resp.stream.bytesToString();
-        final param = _invalidParamFrom400(errBody);
-        if (param != null && droppedParams.add(param)) {
-          debugPrint("[retry] dropped param '$param' after 400");
-          bodyMap.remove(param);
-          final retryReq = http.Request('POST', uri)
-            ..headers.addAll(requestHeaders);
-          retryReq.body = jsonEncode(bodyMap);
-          resp = await client.send(retryReq).timeout(_apiTimeout);
-        } else {
-          resp400Body = errBody;
-        }
-      }
+      final resp = await client.send(firstReq).timeout(_apiTimeout);
       if (resp.statusCode != 200) {
-        final body = resp400Body ??
-            await resp.stream.bytesToString();
+        // Тело ошибки (в том числе 402) сохраняется в сообщении
+        // исключения — терять его нельзя.
+        final body = await resp.stream.bytesToString();
         final cond = cleanKey.length > 8;
         final tokenPrefix = cond
             ? '${cleanKey.substring(0, 8)}'
@@ -800,10 +957,16 @@ class ChatService {
         List<_ToolCall> calls = const <_ToolCall>[];
         Map<String, dynamic>? usage;
         final sources = <String>[];
+        var finishReason = '';
+        var incompleteReason = '';
         try {
           final j = jsonDecode(body) as Map<String, dynamic>;
           final choices = j['choices'] as List?;
           if (choices != null && choices.isNotEmpty) {
+            final fr = (choices[0] as Map)['finish_reason'];
+            if (fr is String && fr.trim().isNotEmpty) {
+              finishReason = fr.trim();
+            }
             final msg = (choices[0] as Map)['message'] as Map?;
             content = (msg?['content'] as String?) ?? '';
             final rc = (msg?['reasoning_content'] as String?) ?? '';
@@ -823,15 +986,25 @@ class ChatService {
             sources.addAll(_sourcesFrom(j['annotations']));
             sources.addAll(_sourcesFrom(msg?['citations']));
             sources.addAll(_sourcesFrom(msg?['annotations']));
+          } else {
+            incompleteReason =
+                'Ответ модели неполный: провайдер не вернул выбор (choices).';
           }
           usage = _usageOf(j['usage']);
         } catch (_) {}
+        if (incompleteReason.isEmpty) {
+          incompleteReason = incompleteReasonOf(
+            sawDone: true,
+            finishReason: finishReason,
+          );
+        }
         holder.result = _RoundResult(
           content,
           reasoning,
           calls,
           usage: usage,
           sources: _dedupSources(sources),
+          incompleteReason: incompleteReason,
         );
         return;
       }
@@ -843,11 +1016,16 @@ class ChatService {
       Map<String, dynamic>? usage;
       final sources = <String>[];
       final builders = <int, _ToolCallBuilder>{};
+      var sawDone = false;
+      var finishReason = '';
       await for (final line in lines) {
         if (!line.startsWith('data:')) continue;
         final data = line.substring(5).trim();
         if (data.isEmpty) continue;
-        if (data == '[DONE]') break;
+        if (data == '[DONE]') {
+          sawDone = true;
+          break;
+        }
         try {
           final json = jsonDecode(data) as Map<String, dynamic>;
           final rawUsage = json['usage'];
@@ -861,7 +1039,11 @@ class ChatService {
           }
           final choices = json['choices'] as List?;
           if (choices == null || choices.isEmpty) continue;
-          final delta = (choices[0] as Map)['delta'] as Map?;
+          final choice0 = choices[0];
+          if (choice0 is! Map) continue;
+          final fr = choice0['finish_reason'];
+          if (fr is String && fr.trim().isNotEmpty) finishReason = fr.trim();
+          final delta = choice0['delta'] as Map?;
           if (delta == null) continue;
 
           // Polza присылает источники в delta: разбираем и копим.
@@ -906,9 +1088,15 @@ class ChatService {
             }
           }
         } catch (_) {
-          // Битая строка потока: пропускаем.
+          // Битая строка потока: пропускаем. Полноту ответа проверяем
+          // по [DONE]/finish_reason после цикла — оборванный поток
+          // не выглядит успешным.
         }
       }
+      final incompleteReason = incompleteReasonOf(
+        sawDone: sawDone,
+        finishReason: finishReason,
+      );
       holder.result = _RoundResult(
         content,
         reasoning,
@@ -918,6 +1106,7 @@ class ChatService {
         ],
         usage: usage,
         sources: _dedupSources(sources),
+        incompleteReason: incompleteReason,
       );
       final deduped = _dedupSources(sources);
       if (deduped.isNotEmpty) {
@@ -929,37 +1118,12 @@ class ChatService {
     }
   }
 
-  /// Собирает серверные инструменты для /chat/completions:
-  ///  - Polza + режим «провайдер»  -> polza:web_search (0,50 ₽/вызов);
-  ///  - Polza без нативного фетчинга -> polza:web_fetch (по умолчанию);
-  ///  - все остальные провайдеры — прежний web_search (если модель
-  ///    поддерживает).
-  List<Map<String, dynamic>> _builtinToolsPayload(
-    String baseUrl,
-    String model,
-  ) {
-    final out = <Map<String, dynamic>>[];
-    if (!chatSearch.enabled) return out;
-    final mode = SearchModes.fromId(settings.searchMode);
-    if (_isPolza(baseUrl)) {
-      if (mode == SearchMode.provider) {
-        out.add(<String, dynamic>{'type': 'polza:web_search'});
-      }
-      if (!_hasNativeFetch(model)) {
-        out.add(<String, dynamic>{'type': 'polza:web_fetch'});
-      }
-    } else {
-      if (SearchCapabilityResolver.supportsNativeSearch(model) ||
-          settings.webSearchSupported) {
-        out.add(<String, dynamic>{'type': 'web_search'});
-      }
-    }
-    return out;
-  }
-
   /// Предзапрос к поисковой модели (режим «Модель-инструмент»).
-  /// Сначала ищет настроенный инструмент с таким modelId (свой baseUrl,
-  /// заголовки/ключ), иначе использует текущее подключение.
+  /// Поиск реально включается в тело API: для Polza — плагин `web`
+  /// (Polza ищет один раз до вызова модели, работает с любой моделью),
+  /// для остальных провайдеров — серверный инструмент web_search, если
+  /// поисковая модель его поддерживает. Ошибки возвращаются в [error]
+  /// и показываются пользователю; usage предзапроса доходит до чата.
   Future<_SearchModelResult> _preQuerySearchModel({
     required String baseUrl,
     required String apiKey,
@@ -991,32 +1155,54 @@ class ChatService {
       // Хранилище недоступно — используем текущее подключение.
     }
 
+    final normalized = base.trim().replaceAll(RegExp(r'/+$'), '');
+    final uri = Uri.tryParse('$normalized/chat/completions');
+    if (uri == null) {
+      return const _SearchModelResult(
+        error: 'Предзапрос поиска не удался: некорректный адрес модели.',
+      );
+    }
+    final isPolza = _isPolza(normalized);
+    final body = <String, dynamic>{
+      'model': model,
+      'messages': <Map<String, dynamic>>[
+        <String, dynamic>{
+          'role': 'user',
+          'content': 'Выполни поиск в интернете по запросу «$query» '
+              'и кратко изложи самое важное со ссылками на источники.',
+        },
+      ],
+      'stream': false,
+      if (isPolza)
+        'plugins': <Map<String, dynamic>>[
+          <String, dynamic>{'id': 'web'},
+        ],
+      if (!isPolza && SearchCapabilityResolver.supportsNativeSearch(model))
+        'tools': <Map<String, dynamic>>[
+          <String, dynamic>{'type': 'web_search'},
+        ],
+    };
+
     final client = http.Client();
     try {
-      final normalized = base.replaceAll(RegExp(r'/+$'), '');
-      final uri = Uri.parse('$normalized/chat/completions');
+      final cleanKey = key
+          .trim()
+          .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
       final resp = await client
           .post(
             uri,
             headers: <String, String>{
               'Content-Type': 'application/json',
-              'Authorization': 'Bearer $key',
+              'Authorization': 'Bearer $cleanKey',
             },
-            body: jsonEncode(<String, dynamic>{
-              'model': model,
-              'messages': <Map<String, dynamic>>[
-                <String, dynamic>{
-                  'role': 'user',
-                  'content': 'Выполни поиск в интернете и кратко изложи '
-                      'самое важное. Запрос: $query',
-                },
-              ],
-              'stream': false,
-            }),
+            body: jsonEncode(body),
           )
           .timeout(_toolTimeout);
       if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        return const _SearchModelResult();
+        return _SearchModelResult(
+          error: 'Предзапрос поиска не удался: HTTP ${resp.statusCode}: '
+              '${_extractError(resp.body)}',
+        );
       }
       final j = jsonDecode(resp.body);
       if (j is! Map) return const _SearchModelResult();
@@ -1037,11 +1223,17 @@ class ChatService {
       return _SearchModelResult(
         text: text,
         sources: _dedupSources(sources),
+        usage: _usageOf(j['usage']),
       );
     } on TimeoutException {
-      return const _SearchModelResult();
-    } catch (_) {
-      return const _SearchModelResult();
+      return const _SearchModelResult(
+        error: 'Предзапрос поиска не удался: модель не ответила '
+            'за 30 секунд.',
+      );
+    } catch (e) {
+      return _SearchModelResult(
+        error: 'Предзапрос поиска не удался: $e',
+      );
     } finally {
       client.close();
     }
@@ -1211,40 +1403,6 @@ class ChatService {
 
   String _scalar(Object? v) => v?.toString() ?? '';
 
-  static String? _invalidParamFrom400(String body) {
-    var raw = body;
-    try {
-      final j = jsonDecode(body);
-      if (j is Map) {
-        final err = j['error'];
-        if (err is Map) {
-          final md = err['metadata'];
-          final mdRaw = md is Map ? md['raw'] : null;
-          if (mdRaw is String && mdRaw.trim().isNotEmpty) {
-            raw = mdRaw;
-          } else if (err['message'] is String) {
-            raw = err['message'] as String;
-          }
-        } else if (j['message'] is String) {
-          raw = j['message'] as String;
-        }
-      }
-    } catch (_) {}
-    final s = raw.trim();
-    if (s.isEmpty) return null;
-    final patterns = <RegExp>[
-      RegExp(r'The parameter `(\w+)` specified'),
-      RegExp(r'''invalid.*parameter.*['"](\w+)['"]''', caseSensitive: false),
-      RegExp(r'''Unknown.*parameter:?\s*['"]?(\w+)''', caseSensitive: false),
-    ];
-    for (final re in patterns) {
-      final m = re.firstMatch(s);
-      final name = m?.group(1);
-      if (name != null && name.isNotEmpty) return name;
-    }
-    return null;
-  }
-
   String _describeError(
     int code,
     String body, {
@@ -1257,8 +1415,10 @@ class ChatService {
     }
     switch (code) {
       case 402:
-        // 402 может означать лимит ключа, а не недостаток баланса.
-        // Сохраняем причину провайдера для mapper и карточки ошибки.
+        // 402 может означать и лимит ключа, а не только недостаток
+        // баланса: причина провайдера сохраняется в сообщении
+        // (тело ответа не теряется), баланс/лимит различает
+        // только подтверждённый текст провайдера.
         final details = _extractError(body).trim();
         if (details.isEmpty) return 'Ошибка оплаты или лимита (402).';
         return 'Ошибка оплаты или лимита (402): $details';

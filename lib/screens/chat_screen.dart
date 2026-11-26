@@ -1416,6 +1416,142 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
+  /// История диалога для API: полная упорядоченная цепочка вызовов
+  /// инструментов сохраняется и в следующих ходах — assistant-сообщение
+  /// получает `tool_calls`, следом идёт tool-ответ с `tool_call_id`.
+  /// Карточки предзапроса поиска (это только UI: результат уже был
+  /// встроен в system-контекст того запроса) и карточки без результата
+  /// в историю не попадают.
+  List<Map<String, dynamic>> _buildHistoryMessages(
+    Chat chat,
+    ChatMessage reply,
+    EffectiveConfig cfg,
+  ) {
+    final msgs = <Map<String, dynamic>>[
+      if (cfg.systemPrompt.trim().isNotEmpty)
+        <String, dynamic>{
+          'role': 'system',
+          'content': '${cfg.systemPrompt.trim()}\n\n$kFileBlockInstruction',
+        },
+    ];
+    for (final m in chat.messages) {
+      if (identical(m, reply)) continue;
+      if (m.isToolCall) {
+        // Карточка предзапроса поиска: сам предзапрос уже встроил
+        // результаты в system-контекст того запроса; tool-сообщение
+        // без соответствующих tool_calls было бы некорректной историей.
+        if (m.toolName == ChatService.preQueryToolName) continue;
+        final result = m.toolResult.trim();
+        if (m.toolName.trim().isEmpty || result.isEmpty) continue;
+        final assistantIdx =
+            msgs.lastIndexWhere((x) => x['role'] == 'assistant');
+        if (assistantIdx < 0) continue;
+        final callId = 'call_${m.id}';
+        final assistant = msgs[assistantIdx];
+        final rawCalls = assistant['tool_calls'];
+        final calls = rawCalls is List<Map<String, dynamic>>
+            ? rawCalls
+            : <Map<String, dynamic>>[];
+        calls.add(<String, dynamic>{
+          'id': callId,
+          'type': 'function',
+          'function': <String, dynamic>{
+            'name': m.toolName.trim(),
+            'arguments':
+                m.toolArgs.trim().isEmpty ? '{}' : m.toolArgs.trim(),
+          },
+        });
+        assistant['tool_calls'] = calls;
+        msgs.add(<String, dynamic>{
+          'role': 'tool',
+          'tool_call_id': callId,
+          'content': result,
+        });
+        continue;
+      }
+      if (m.content.isEmpty) continue;
+      msgs.add(<String, dynamic>{'role': m.role, 'content': m.content});
+    }
+    return msgs;
+  }
+
+  /// Добавляет/обновляет ожидающую медиа-часть инструмента (jobId
+  /// виден для восстановления задачи после перезапуска без новой оплаты).
+  void _upsertPendingToolMedia(
+    ChatMessage reply,
+    String jobId,
+    double progress,
+  ) {
+    for (int i = 0; i < reply.parts.length; i++) {
+      final p = reply.parts[i];
+      if (p is PendingPart && p.jobId == jobId) {
+        reply.parts[i] = PendingPart(
+          name: p.name,
+          localPath: p.localPath,
+          jobId: jobId,
+          progress: progress,
+          debugSnippets: p.debugSnippets,
+          debugLogPath: p.debugLogPath,
+        );
+        return;
+      }
+    }
+    reply.parts.add(PendingPart(
+      name: 'Медиа инструмента',
+      jobId: jobId,
+      progress: progress,
+    ));
+  }
+
+  /// Убирает ожидающую медиа-часть [jobId] — инструмент завершился ошибкой.
+  void _removePendingToolMedia(ChatMessage reply, String jobId) {
+    for (int i = 0; i < reply.parts.length; i++) {
+      final p = reply.parts[i];
+      if (p is PendingPart && p.jobId == jobId) {
+        reply.parts.removeAt(i);
+        return;
+      }
+    }
+  }
+
+  /// Материализует медиа-результат инструмента в ImagePart/VideoPart
+  /// в том же ответе [reply]: локальный путь — как файл, http(s)/data —
+  /// как ссылка. Ожидающая часть с [pendingJobId] замещается результатом.
+  void _attachToolMedia(
+    ChatMessage reply,
+    List<ToolMedia> media,
+    String? pendingJobId,
+  ) {
+    final pending = pendingJobId?.trim() ?? '';
+    for (final m in media) {
+      final url = m.url.trim();
+      if (url.isEmpty) continue;
+      final kind = m.kind.trim().toLowerCase();
+      final clean = url.startsWith('file://')
+          ? url.substring('file://'.length)
+          : url;
+      final isLocal = clean.startsWith('/');
+      final MessagePart part;
+      if (kind == 'video') {
+        part = isLocal ? VideoPart.fromPath(clean) : VideoPart.fromUrl(url);
+      } else {
+        part = isLocal ? ImagePart.fromPath(clean) : ImagePart.fromUrl(url);
+      }
+      var replaced = false;
+      if (pending.isNotEmpty) {
+        for (int i = 0; i < reply.parts.length; i++) {
+          final p = reply.parts[i];
+          if (p is PendingPart && p.jobId == pending) {
+            reply.parts[i] = part;
+            replaced = true;
+            break;
+          }
+        }
+      }
+      if (!replaced) reply.parts.add(part);
+    }
+  }
+
   Future<void> _runCompletion(Chat chat, {dynamic userApiContent}) async {
     final reply = ChatMessage(id: newId(), role: 'assistant');
     chat.messages.add(reply);
@@ -1424,30 +1560,20 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
-    final rawLvl = ReasoningMapper.fromId(settings.reasoningLevel);
-    // Уровни размышлений перечисляет только каталог: если он их не
-    // перечисляет (в том числе reasoning: true без списка), размышления
-    // не запрашиваются вовсе — капсула «Мышление» в UI неактивна.
-    final lvl = (!_activeModel.current.reasoning ||
-                _activeModel.current.reasoningLevels.isEmpty)
-        ? ReasoningLevel.off
-        : (rawLvl == ReasoningLevel.low
-            ? ReasoningLevel.medium
-            : (rawLvl == ReasoningLevel.xhigh || rawLvl == ReasoningLevel.max)
-                ? ReasoningLevel.high
-                : rawLvl);
-    final String? reasoningEffort =
-        lvl == ReasoningLevel.off ? null : lvl.name;
-    final msgs = <Map<String, dynamic>>[
-      if (cfg.systemPrompt.trim().isNotEmpty)
-        <String, dynamic>{
-          'role': 'system',
-          'content': '${cfg.systemPrompt.trim()}\n\n$kFileBlockInstruction',
-        },
-      for (final m in chat.messages)
-        if (!identical(m, reply) && !m.isToolCall && m.content.isNotEmpty)
-          <String, dynamic>{'role': m.role, 'content': m.content},
-    ];
+    // Уровень размышлений перечисляет только каталог активной модели:
+    // выбранный уровень уходит провайдеру КАК ЕСТЬ, без ремапа (low не
+    // превращается в medium, xhigh/max — в high). Выключенный уровень
+    // ('off') для Polza — ЯВНЫЙ effort: none, а не отсутствие блока
+    // (отсутствие блока означает поведение модели по умолчанию, не
+    // обязательно «выключено»). Модель без заявленных размышлений —
+    // блок не отправляется вовсе. Адаптивный reasoning (type/
+    // effort_level) каталог не выражает — ничего не выдумываем.
+    final caps = _activeModel.current;
+    final supportsReasoning = caps.reasoning && caps.reasoningLevels.isNotEmpty;
+    final String? reasoningEffort = supportsReasoning
+        ? ReasoningMapper.fromId(settings.reasoningLevel).name
+        : null;
+    final msgs = _buildHistoryMessages(chat, reply, cfg);
     if (userApiContent != null) {
       for (int i = msgs.length - 1; i >= 0; i--) {
         if (msgs[i]['role'] == 'user') {
@@ -1459,6 +1585,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     ChatMessage? toolMsg;
     GenError? genError;
+    /// jobId последнего прогресса медиа-инструмента: по нему ожидающая
+    /// часть замещается результатом (или снимается при ошибке).
+    String? pendingMediaJobId;
     // Стоимость каждого раунда (usage провайдера): раундов может быть
     // несколько (вызовы инструментов), итог собирается из всех.
     final roundCosts = <MessageCost>[];
@@ -1490,19 +1619,42 @@ class _ChatScreenState extends State<ChatScreen> {
           pacer?.displayed.addListener(onPaced);
         }
         if (ch.toolName != null) {
+          final jobId = (ch.toolJobId ?? '').trim();
           if (ch.toolStatus == toolStatusRunning) {
-            toolMsg = ChatMessage(
-              id: newId(),
-              role: 'tool_call',
-              toolName: ch.toolName ?? '',
-              toolArgs: ch.toolArgs ?? '',
-              toolStatus: toolStatusRunning,
-            );
-            chat.messages.add(toolMsg);
-          } else if (toolMsg != null) {
-            toolMsg
-              ..toolResult = ch.toolResult ?? ''
-              ..toolStatus = ch.toolStatus ?? toolStatusDone;
+            if (jobId.isNotEmpty) {
+              // Прогресс медиа-задачи инструмента: карточка ожидания
+              // в том же ответе; jobId сохраняется в PendingPart для
+              // возобновления после перезапуска (не новая платная задача).
+              pendingMediaJobId = jobId;
+              _upsertPendingToolMedia(reply, jobId, ch.toolProgress ?? 0);
+            } else {
+              // Начало вызова инструмента: карточка в чате.
+              toolMsg = ChatMessage(
+                id: newId(),
+                role: 'tool_call',
+                toolName: ch.toolName ?? '',
+                toolArgs: ch.toolArgs ?? '',
+                toolStatus: toolStatusRunning,
+              );
+              chat.messages.add(toolMsg);
+            }
+          } else {
+            if (toolMsg != null) {
+              toolMsg
+                ..toolResult = ch.toolResult ?? ''
+                ..toolStatus = ch.toolStatus ?? toolStatusDone;
+            }
+            // Типизированный медиа-результат инструмента: материализация
+            // в ImagePart/VideoPart в том же ответе; при ошибке инструмента
+            // ожидающая часть снимается, а не висит вечно.
+            final media = ch.toolMedia;
+            final pending = pendingMediaJobId;
+            if (media != null && media.isNotEmpty) {
+              _attachToolMedia(reply, media, pending);
+            } else if (pending != null && pending.isNotEmpty) {
+              _removePendingToolMedia(reply, pending);
+            }
+            pendingMediaJobId = null;
           }
           _scheduleUi();
           continue;
@@ -1528,7 +1680,9 @@ class _ChatScreenState extends State<ChatScreen> {
       reply
         ..errorCode = err.code
         ..errorText = GenErrorMapper.detailsOf(err);
-    } else if (reply.content.isEmpty && reply.reasoning.isEmpty) {
+    } else if (reply.content.isEmpty &&
+        reply.reasoning.isEmpty &&
+        reply.parts.isEmpty) {
       chat.messages.remove(reply);
     }
     if (err == null && chat.messages.contains(reply)) {
