@@ -52,7 +52,8 @@ class ErrorBubble extends StatelessWidget {
 
   String get _title => switch (error) {
         AuthError() => 'Ошибка авторизации',
-        InsufficientFunds() => 'Недостаточно средств',
+        // HTTP 402 может означать и лимит ключа, а не только баланс.
+        InsufficientFunds() => 'Ошибка оплаты или лимита',
         RateLimited() => 'Слишком много запросов',
         ModelNotFoundError() => 'Модель недоступна',
         ServerError() => 'Сервер недоступен',

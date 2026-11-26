@@ -2,6 +2,7 @@
 
 import '../../models/chat_message.dart' show toolStatusDone, toolStatusError, toolStatusRunning;
 import '../models/gen_error.dart';
+import '../models/gen_error_mapper.dart';
 import '../../services/chat_service.dart';
 import 'generation_event.dart';
 import 'generation_executor.dart';
@@ -15,8 +16,6 @@ import 'generation_request.dart';
 ///  - завершение вызова -> [ToolCallFinished];
 ///  - источники (citations/annotations) -> [SourcesReceived];
 ///  - любая ошибка -> [GenerationFailure] (последнее событие).
-/// Сам ChatService и экран чата не меняются: исполнитель — только
-/// адаптер над работающим кодом.
 class ChatCompletionsExecutor extends GenerationExecutor {
   final ChatService _service;
 
@@ -89,29 +88,15 @@ class ChatCompletionsExecutor extends GenerationExecutor {
   void cancel() => _service.cancel();
 
   /// Перевод исключений сервиса в типизированные [GenError].
-  /// ChatServiceException несёт готовый текст с кодом ответа провайдера
-  /// ('Неверный API-ключ (401)...'), распознаём код по подстроке;
-  /// сетевые сбои и всё прочее относятся к сетевой/неизвестной ошибке.
+  ///
+  /// Для ChatServiceException используется общий mapper, который отдаёт
+  /// приоритет HTTP-статусу, а не цифрам в произвольном тексте провайдера.
   static GenError _mapError(Object error) {
     if (error is GenerationFailureHolder) {
       return error.error;
     }
     if (error is ChatServiceException) {
-      final m = error.message;
-      if (m.contains('401')) return AuthError(details: m);
-      if (m.contains('402')) return InsufficientFunds(details: m);
-      if (m.contains('429')) return RateLimited(details: m);
-      if (m.contains('404')) {
-        return ModelNotFoundError(details: m);
-      }
-      if (m.contains('400') || m.contains('422')) {
-        return BadRequestError(details: m);
-      }
-      if (m.contains('Ошибка 5') || m.contains('502') ||
-          m.contains('503') || m.contains('504')) {
-        return ServerError(details: m);
-      }
-      return UnknownGenError(details: m);
+      return GenErrorMapper.fromException(error);
     }
     return NetworkError(details: 'Ошибка соединения: $error');
   }

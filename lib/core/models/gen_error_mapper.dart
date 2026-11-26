@@ -48,7 +48,13 @@ abstract final class GenErrorMapper {
   static GenError fromException(Object error) {
     if (error is GenError) return error;
     if (error is DioException) return _fromDio(error);
-    if (error is ChatServiceException) return _fromText(error.message);
+    if (error is ChatServiceException) {
+      final status = error.statusCode;
+      if (status != null && status > 0) {
+        return _fromStatusCode(status, error.message);
+      }
+      return _fromText(error.message);
+    }
     if (error is TimeoutException) {
       return const JobTimeout(details: 'Превышено время ожидания ответа.');
     }
@@ -108,8 +114,7 @@ abstract final class GenErrorMapper {
     return UnknownGenError(details: 'Ошибка $code. ${_clip(details)}');
   }
 
-  /// Разбор текста ошибки: ChatServiceException уже содержит код ответа
-  /// провайдера в сообщении ('Неверный API-ключ (401)...').
+  /// Запасной разбор текста, когда HTTP-статус исключения отсутствует.
   static GenError _fromText(String message) {
     final m = message.trim();
     if (m.contains('401') || m.contains('403')) return AuthError(details: m);
