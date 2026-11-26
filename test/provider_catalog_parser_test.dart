@@ -147,6 +147,48 @@ void main() {
     expect(entry.capabilitiesSource, CatalogSources.connection);
   });
 
+  test(
+    'T-R4-REASONING-CATALOG-NO-LEVELS: каталог без списка уровней '
+    'не создаёт уровней',
+    () {
+      // reasoning: true без списка: размышления заявлены, уровней нет.
+      final marker = ProviderCatalogService.parseEntry(
+        <String, dynamic>{
+          'id': 'vendor/flag-only',
+          'reasoning': true,
+        },
+        connection,
+      );
+      expect(marker.reasoning, isNotNull);
+      expect(marker.reasoning!.levels, isEmpty);
+      expect(marker.reasoningUnknown, isFalse);
+
+      // reasoning-карта без supported_efforts: уровней тоже нет.
+      final emptyMap = ProviderCatalogService.parseEntry(
+        <String, dynamic>{
+          'id': 'vendor/map-no-efforts',
+          'reasoning': <String, dynamic>{'mandatory': false},
+        },
+        connection,
+      );
+      expect(emptyMap.reasoning, isNotNull);
+      expect(emptyMap.reasoning!.levels, isEmpty);
+      expect(emptyMap.reasoningUnknown, isFalse);
+
+      // Имя параметра в supported_parameters — не перечень уровней.
+      final paramsOnly = ProviderCatalogService.parseEntry(
+        <String, dynamic>{
+          'id': 'vendor/params-only',
+          'supported_parameters': <String>['reasoning'],
+        },
+        connection,
+      );
+      expect(paramsOnly.reasoning, isNotNull);
+      expect(paramsOnly.reasoning!.levels, isEmpty);
+      expect(paramsOnly.reasoningUnknown, isFalse);
+    },
+  );
+
   test('неожиданные типы значений не роняют разбор', () {
     final entry = ProviderCatalogService.parseEntry(
       <String, dynamic>{
@@ -161,9 +203,10 @@ void main() {
     );
 
     expect(entry.contextLength, 128000);
-    // reasoning: true -> базовые уровни ['none','low','medium','high'].
+    // reasoning: true без списка: размышления заявлены, уровней нет —
+    // дефолтный список больше не подставляется.
     expect(entry.reasoning, isNotNull);
-    expect(entry.reasoning!.levels, hasLength(4));
+    expect(entry.reasoning!.levels, isEmpty);
     expect(entry.priceIn, isNull);
     expect(entry.priceSource, isNull);
   });

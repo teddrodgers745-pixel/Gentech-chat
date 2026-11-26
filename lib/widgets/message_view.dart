@@ -19,6 +19,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../app_state.dart';
 import '../core/generation/async_job_executor.dart';
+// ignore: unused_import
 import '../core/utils/currency_format.dart';
 import '../core/utils/reasoning_mapper.dart';
 import '../core/models/gen_error_mapper.dart';
@@ -189,24 +190,39 @@ class MessageView extends StatelessWidget {
     return out.isEmpty ? <Widget>[RichMarkdown(content)] : out;
   }
 
-  /// Строка стоимости под ответом: мелкая серая подпись вида
-  /// '≈ 0,42 ₽ · 1240 ток.' — только если в частях сообщения есть
-  /// TextPart с MessageCost (приходит из usage провайдера) и генерация
-  /// уже завершена.
+  /// Строка стоимости под ответом: мелкая серая подпись — только если
+  /// в частях сообщения есть TextPart с MessageCost (приходит из usage
+  /// провайдера) и генерация уже завершена. Известная сумма показывается
+  /// с её фактической валютой (MessageCost.formatted, без округления);
+  /// сумма без валюты и валюта без суммы не подменяются — остаются
+  /// только счётчики токенов, без выдуманной суммы.
   List<Widget> _costWidgets(Palette p) {
     if (streaming) return const <Widget>[];
-    // Экономика: стоимость показывается только если включено в настройках;
-    // базовая сумма (в рублях) конвертируется в выбранную валюту.
+    // Экономика: стоимость показывается только если включено в настройках.
     if (!settings.showCost) return const <Widget>[];
     for (final part in message.parts) {
       if (part is TextPart && part.cost != null) {
         final c = part.cost!;
+        final amount = c.cost;
+        final currency = c.currency.trim();
+        final known = amount != null && currency.isNotEmpty;
+        final tokens = c.totalTokens;
+        final String text;
+        if (known) {
+          text = tokens > 0
+              ? '≈ ${c.formatted} · $tokens ток.'
+              : '≈ ${c.formatted}';
+        } else if (tokens > 0) {
+          // Токены без суммы: только счётчики, ничего не выдумываем.
+          text = '$tokens ток.';
+        } else {
+          return const <Widget>[];
+        }
         return <Widget>[
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
-              '≈ ${CurrencyFormat.format(c.cost, settings.currency)} '
-              '· ${c.totalTokens} ток.',
+              text,
               style: TextStyle(fontSize: 12, color: p.muted),
             ),
           ),
@@ -407,7 +423,7 @@ class RichMarkdown extends StatelessWidget {
         return MarkdownBody(
           data: data,
           fitContent: false,
-          softLineBreak: true,
+          softWrapLineBreaks: true,
           styleSheet: _sheet(p, body, mono, size),
           builders: <String, MarkdownElementBuilder>{
             'code': _CodeBuilder(p, mono),

@@ -151,7 +151,7 @@ class _TextChatInputState extends State<TextChatInput> {
 
   /// Форматирование идентификатора уровня для текста капсулы:
   /// 'off'/'none' -> 'Off', 'xhigh' -> 'X-High', 'max' -> 'Max';
-  /// неизвестные значения — с заглавной первой буквы.
+  /// неизвестные значения — с заглавной первой буквой.
   static String formatReasoningLabel(String id) {
     switch (id.trim().toLowerCase()) {
       case 'off':
@@ -174,26 +174,29 @@ class _TextChatInputState extends State<TextChatInput> {
   }
 
   /// Долгое нажатие по капсуле: шторка со слайдером уровней размышлений.
-  /// Список позиций — уровни, которые разрешает активная модель
-  /// ([ActiveModelCapabilities.reasoningLevels]); выбор сохраняется
-  /// в настройках (settings.reasoningLevel).
+  /// Список позиций — только уровни, которые перечислил каталог активной
+  /// модели ([ActiveModelCapabilities.reasoningLevels]), в исходном
+  /// порядке каталога; выбор сохраняется в настройках
+  /// (settings.reasoningLevel). Если каталог уровни не перечислил —
+  /// шторка с выдуманными уровнями не открывается, показывается
+  /// уведомление.
   void _openReasoningSheet() {
     HapticFeedback.lightImpact();
-    final levels = ReasoningMapper.levelsFromNames(
-      widget.capabilities.reasoningLevels,
-    );
+    final levels = widget.capabilities.reasoningLevels;
+    if (levels.isEmpty) {
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.hideCurrentSnackBar();
+      messenger?.showSnackBar(
+        const SnackBar(
+          content: Text('У этой модели нет размышлений'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
     showReasoningSheet(
       context,
-      levels: levels.isEmpty
-          ? const <ReasoningLevel>[
-              ReasoningLevel.off,
-              ReasoningLevel.low,
-              ReasoningLevel.medium,
-              ReasoningLevel.high,
-              ReasoningLevel.xhigh,
-              ReasoningLevel.max,
-            ]
-          : levels,
+      levels: levels,
       currentId: settings.reasoningLevel,
     );
   }
@@ -449,11 +452,75 @@ class _TextChatInputState extends State<TextChatInput> {
     );
   }
 
+  /// Неактивная капсула «Мышление»: модель заявляет размышления, но
+  /// каталог не перечисляет уровни. Капсула остаётся видимой, тап
+  /// показывает короткое уведомление — уровень не меняется.
+  Widget _unavailableReasoningCapsule() {
+    final p = settings.palette;
+    return Tooltip(
+      message: 'У этой модели нет размышлений',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(_radius),
+        onTap: widget.streaming
+            ? null
+            : () {
+                final messenger = ScaffoldMessenger.maybeOf(context);
+                if (messenger == null) return;
+                messenger.hideCurrentSnackBar();
+                messenger.showSnackBar(
+                  const SnackBar(
+                    content: Text('У этой модели нет размышлений'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          height: 36,
+          constraints: const BoxConstraints(minWidth: 112),
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF3A3733).withValues(alpha: 0.25),
+            borderRadius: BorderRadius.circular(_radius),
+            border: Border.all(color: p.border),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.psychology_outlined,
+                size: 24,
+                color: Colors.grey,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                'Мышление',
+                maxLines: 1,
+                style: TextStyle(
+                  fontSize: 13,
+                  height: 1.2,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.grey,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _reasoningCapsule() {
-    // Модель не поддерживает reasoning (список уровней пуст):
-    // капсула «Мышление» полностью скрывается.
     final allowed = widget.capabilities.reasoningLevels;
-    if (allowed.isEmpty) return const SizedBox.shrink();
+    if (allowed.isEmpty) {
+      // Каталог не перечислил уровни размышлений: если модель вовсе
+      // без размышлений — капсула скрывается; если размышления заявлены,
+      // но уровней нет — капсула видна, но неактивна (уровни не выставляем).
+      if (!widget.capabilities.reasoning) return const SizedBox.shrink();
+      return _unavailableReasoningCapsule();
+    }
     final effectiveId = _effectiveReasoningId(allowed);
     final label = formatReasoningLabel(effectiveId);
     final level = ReasoningMapper.fromId(effectiveId);

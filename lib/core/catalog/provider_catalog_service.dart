@@ -276,7 +276,7 @@ class ProviderCatalogService extends ChangeNotifier {
       if (knownIdentity != null && knownIdentity != identity) continue;
       if (_byConnection[id]?.isNotEmpty != true) continue;
       final at = _syncedAt[id];
-      if (at != null && (latest == null || at.isAfter(latest))) {
+      if (at != null && (latest == null || at.isAfter(latestAt ?? at))) {
         latest = at;
       }
     }
@@ -685,14 +685,15 @@ class ProviderCatalogService extends ChangeNotifier {
     );
   }
 
-  static const List<String> _defaultReasoningLevels = <String>[
-    'off', 'low', 'medium', 'high',
-  ];
-
-  static const List<String> _supportedParamsReasoningLevels = <String>[
-    'off', 'high',
-  ];
-
+  /// Разбор заявленных размышлений модели.
+  ///
+  /// Уровни размышлений перечисляет ТОЛЬКО каталог: список
+  /// `supported_efforts` сохраняется как есть, в исходном порядке.
+  /// Если каталог уровней не перечислил (в том числе `reasoning: true`
+  /// без списка либо только имя параметра в supported_parameters) —
+  /// уровни НЕ создаются: запись остаётся «размышления заявлены,
+  /// уровней нет», капсула «Мышление» в UI показывается неактивной.
+  /// Дефолтных списков уровней больше нет — ничего не выдумываем.
   static (CatalogReasoning?, bool) _parseReasoning(
     Map<String, dynamic> m,
     Map<String, dynamic>? topProvider,
@@ -713,47 +714,25 @@ class ProviderCatalogService extends ChangeNotifier {
             mapCandidate['default_effort'] ?? mapCandidate['defaultEffort'],
           ) ??
           '';
-      if (efforts.isNotEmpty) {
-        final mandatory = mapCandidate['mandatory'] == true;
-        return (
-          CatalogReasoning(
-            levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
-            defaultEffort: normalizeReasoningEffort(def),
-            mandatory: mandatory,
-          ),
-          false,
-        );
-      }
+      final mandatory = mapCandidate['mandatory'] == true;
       return (
         CatalogReasoning(
-          levels: normalizeReasoningLevels(
-            List<String>.of(_defaultReasoningLevels),
-            mandatory: mapCandidate['mandatory'] == true,
-          ),
+          levels: normalizeReasoningLevels(efforts, mandatory: mandatory),
           defaultEffort: normalizeReasoningEffort(def),
-          mandatory: mapCandidate['mandatory'] == true,
+          mandatory: mandatory,
         ),
         false,
       );
     }
     if (sawMarker) {
-      return (
-        CatalogReasoning(
-          levels: normalizeReasoningLevels(
-            List<String>.of(_defaultReasoningLevels),
-          ),
-        ),
-        false,
-      );
+      // reasoning: true без списка уровней: размышления заявлены,
+      // уровней нет — не подставляем дефолтный список.
+      return (CatalogReasoning(levels: const <String>[]), false);
     }
     if (supportedParams.contains('reasoning') ||
         supportedParams.contains('reasoning_effort')) {
-      return (
-        CatalogReasoning(
-          levels: List<String>.of(_supportedParamsReasoningLevels),
-        ),
-        false,
-      );
+      // Имя параметра — не перечень уровней: уровни не создаются.
+      return (CatalogReasoning(levels: const <String>[]), false);
     }
     if (supportedParams.isNotEmpty) return (null, false);
     return (null, true);

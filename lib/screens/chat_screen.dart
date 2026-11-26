@@ -615,22 +615,37 @@ class _ChatScreenState extends State<ChatScreen> {
 
   // ---------- уровень размышлений ----------
 
-  /// Циклическая смена уровня размышлений только по поддерживаемым моделью
-  /// базовым уровням (off -> medium -> high -> off). Если модель не
-  /// поддерживает размышления, уровень принудительно остаётся off.
+  /// Циклическая смена уровня размышлений только по уровням, которые
+  /// перечислил каталог активной модели, в исходном порядке каталога.
+  /// Если модель заявляет размышления, но каталог не перечисляет уровни —
+  /// уровни не выставляются: уровень не меняется, показывается короткое
+  /// уведомление (капсула в панели ввода остаётся неактивной).
   void _cycleReasoning() {
     final caps = _activeModel.current;
     if (!caps.reasoning) {
       settings.setReasoningLevel(ReasoningLevel.off.id);
       return;
     }
+    final allowed = caps.reasoningLevels;
+    if (allowed.isEmpty) {
+      // Каталог заявил размышления, но не перечислил уровни:
+      // ничего не выдумываем.
+      _snack('У этой модели нет размышлений');
+      return;
+    }
     HapticFeedback.lightImpact();
-    final allowed = ReasoningMapper.levelsFromNames(caps.reasoningLevels);
-    final current = ReasoningMapper.fromId(settings.reasoningLevel);
-    final next = allowed.isNotEmpty
-        ? allowed[(allowed.indexOf(current) + 1) % allowed.length]
-        : current.next();
-    settings.setReasoningLevel(next.id);
+    final current = settings.reasoningLevel.trim().toLowerCase();
+    var idx = -1;
+    for (var i = 0; i < allowed.length; i++) {
+      if (allowed[i].trim().toLowerCase() == current) {
+        idx = i;
+        break;
+      }
+    }
+    final next = allowed[(idx + 1) % allowed.length];
+    // 'none' не является сохраняемым идентификатором настроек:
+    // приводим через ReasoningMapper.
+    settings.setReasoningLevel(ReasoningMapper.fromId(next).id);
   }
 
   // ---------- отправка ----------
@@ -976,20 +991,21 @@ class _ChatScreenState extends State<ChatScreen> {
     } else if (reply.content.isEmpty) {
       chat.messages.remove(reply);
     } else {
-      final amount = estimate.estimatedUsd ?? 0.0;
-      final costRub = amount > 0
-          ? (estimate.currency.toUpperCase() == 'RUB'
-              ? amount
-              : amount * 95.0)
-          : 1.5;
-      final tokens = (prompt.length / 4).ceil().clamp(1, 100000);
-      final imgCost = MessageCost(
-        promptTokens: tokens,
-        completionTokens: 0,
-        cost: costRub,
-      );
-      reply.parts.add(TextPart('', cost: imgCost));
-      chat.totalCost += imgCost.cost;
+      // Оценка по каталогу — это предварительная оценка, а не фактическое
+      // списание: в стоимость сообщения попадает только известная цена
+      // каталога в рублях. Неизвестная оценка не превращается в 1,5 ₽,
+      // USD не переводится фиксированным курсом — оценка и списание
+      // раздельны.
+      final amount = estimate.estimatedUsd;
+      final currency = estimate.currency.trim().toUpperCase();
+      if (estimate.isKnown &&
+          amount != null &&
+          amount.isFinite &&
+          currency == 'RUB') {
+        final imgCost = MessageCost(cost: amount, currency: 'RUB');
+        reply.parts.add(TextPart('', cost: imgCost));
+        _addKnownRub(chat, imgCost);
+      }
     }
     if (genError == null &&
         chat.messages.contains(reply) &&
@@ -1409,7 +1425,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
     final cfg = effectiveConfig();
     final rawLvl = ReasoningMapper.fromId(settings.reasoningLevel);
-    final lvl = !_activeModel.current.reasoning
+    // Уровни размышлений перечисляет только каталог: если он их не
+    // перечисляет (в том числе reasoning: true без списка), размышления
+    // не запрашиваются вовсе — капсула «Мышление» в UI неактивна.
+    final lvl = (!_activeModel.current.reasoning ||
+                _activeModel.current.reasoningLevels.isEmpty)
         ? ReasoningLevel.off
         : (rawLvl == ReasoningLevel.low
             ? ReasoningLevel.medium
@@ -1439,7 +1459,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
     ChatMessage? toolMsg;
     GenError? genError;
-    Map<String, dynamic>? lastUsage;
+    // Стоимость каждого раунда (usage провайдера): раундов может быть
+    // несколько (вызовы инструментов), итог собирается из всех.
+    final roundCosts = <MessageCost>[];
     final sources = <String>[];
     StreamPacer? pacer;
     void onPaced() {
@@ -1487,7 +1509,10 @@ class _ChatScreenState extends State<ChatScreen> {
         }
         reply.content += ch.content;
         reply.reasoning += ch.reasoning;
-        if (ch.usage != null) lastUsage = ch.usage;
+        if (ch.usage != null) {
+          final roundCost = MessageCost.fromUsage(ch.usage);
+          if (roundCost != null) roundCosts.add(roundCost);
+        }
         _mergeSources(sources, ch.sources);
         _scheduleUi();
       }
@@ -1507,14 +1532,16 @@ class _ChatScreenState extends State<ChatScreen> {
       chat.messages.remove(reply);
     }
     if (err == null && chat.messages.contains(reply)) {
-      final usageCost = MessageCost.fromUsage(lastUsage);
+      // Итоговая стоимость всех раундов: токены суммируются всегда,
+      // суммы — только при одной известной валюте у всех раундов.
+      final usageCost = _sumRoundCosts(roundCosts);
       if (usageCost != null) {
         reply.parts.add(TextPart(
           '',
           cost: usageCost,
           sources: List<String>.of(sources),
         ));
-        chat.totalCost += usageCost.cost;
+        _addKnownRub(chat, usageCost);
       } else if (sources.isNotEmpty) {
         reply.parts.add(TextPart('', sources: List<String>.of(sources)));
       }
@@ -1536,6 +1563,58 @@ class _ChatScreenState extends State<ChatScreen> {
         reply.content.trim().isNotEmpty) {
       ttsService.speakAuto(reply.id, reply.content);
     }
+  }
+
+  /// Прибавляет к суммарной стоимости чата только известную рублёвую
+  /// сумму: неизвестная сумма или сумма в чужой валюте не прибавляется
+  /// и не переводится наугад фиксированным курсом.
+  static void _addKnownRub(Chat chat, MessageCost cost) {
+    final amount = cost.cost;
+    if (amount == null || !amount.isFinite) return;
+    if (cost.currency.trim().toUpperCase() != 'RUB') return;
+    chat.totalCost += amount;
+  }
+
+  /// Итоговая стоимость раундов одного ответа: счётчики токенов
+  /// складываются всегда; суммы — только когда все раунды с суммой
+  /// сообщили одну и ту же известную валюту. Разные валюты и суммы без
+  /// валюты в итоговую сумму не складываются.
+  static MessageCost? _sumRoundCosts(List<MessageCost> rounds) {
+    if (rounds.isEmpty) return null;
+    var prompt = 0;
+    var completion = 0;
+    double? amount;
+    var currency = '';
+    var conflicting = false;
+    for (final c in rounds) {
+      prompt += c.promptTokens;
+      completion += c.completionTokens;
+      final sum = c.cost;
+      final cur = c.currency.trim().toUpperCase();
+      if (sum == null || cur.isEmpty) continue;
+      if (currency.isEmpty) {
+        currency = cur;
+        amount = sum;
+      } else if (currency == cur) {
+        amount = (amount ?? 0) + sum;
+      } else {
+        conflicting = true;
+      }
+    }
+    if (conflicting) {
+      return MessageCost(
+        cost: null,
+        currency: '',
+        promptTokens: prompt,
+        completionTokens: completion,
+      );
+    }
+    return MessageCost(
+      cost: amount,
+      currency: currency,
+      promptTokens: prompt,
+      completionTokens: completion,
+    );
   }
 
   // ---------- интерфейс ----------
@@ -1650,9 +1729,10 @@ class _ChatScreenState extends State<ChatScreen> {
                   builder: (ctx, _) {
                     final caps = _activeModel.current;
                     final effType = _effectiveModelType;
-                    final effectiveLevel = caps.reasoning
-                        ? ReasoningMapper.fromId(settings.reasoningLevel)
-                        : ReasoningLevel.off;
+                    final effectiveLevel =
+                        (caps.reasoning && caps.reasoningLevels.isNotEmpty)
+                            ? ReasoningMapper.fromId(settings.reasoningLevel)
+                            : ReasoningLevel.off;
                     return AdaptiveChatInputBar(
                       key: ValueKey(caps.normalizedId + effType),
                       config: _currentConfig,
