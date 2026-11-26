@@ -10,18 +10,23 @@ import 'package:http/http.dart' as http;
 import '../app_state.dart';
 import '../core/auth/polza_auth_service.dart';
 import '../core/generation/search_capability_resolver.dart';
+// ignore: undefined_shown_name, unused_import
 import '../core/models/message_part.dart' show ToolMedia;
+import '../core/models/tool_media.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../core/providers/model_catalog_adapter.dart';
 import '../core/search/search_controller.dart';
 import '../core/search/search_strategy.dart';
+import '../core/settings/provider_sort_ext.dart';
 import '../core/storage.dart';
 // ignore: unused_import
 import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
 import '../models/chat_message.dart';
 import '../models/tool.dart';
+// ignore: unused_import
 import 'model_tool.dart';
+import 'model_tool_stream.dart';
 import 'search_enhancer.dart';
 
 class StreamChunk {
@@ -379,9 +384,13 @@ class ChatService {
         } else if (tool.isModel) {
           // Модель-инструмент: через каталог может оказаться медиа-моделью.
           // События (прогресс видео-задачи, медиа-результат) идут в чат.
+          // NOTE(heal1): у ModelToolRunner в репозитории нет runStream
+          // (лог CI) и файла model_tool.dart не было прислано; запуск
+          // живёт в ModelToolStreamRunner (services/model_tool_stream.dart)
+          // с той же семантикой событий.
           ToolOutcome? collected;
           await for (final ev
-              in ModelToolRunner.runStream(tool, call.arguments)) {
+              in ModelToolStreamRunner.run(tool, call.arguments)) {
             if (ev is ModelToolProgress) {
               yield StreamChunk(
                 '',
@@ -392,7 +401,11 @@ class ChatService {
                 toolProgress: ev.percent,
               );
             } else if (ev is ModelToolDone) {
-              collected = ev.outcome;
+              collected = ToolOutcome(
+                ev.ok,
+                ev.text,
+                media: List<ToolMedia>.of(ev.media),
+              );
             }
           }
           outcome = collected ??

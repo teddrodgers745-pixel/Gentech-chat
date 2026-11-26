@@ -28,6 +28,7 @@ import '../core/generation/generation_service.dart';
 import '../core/generation/images_api_executor.dart';
 import '../core/models/cost_estimate.dart';
 import '../core/models/message_part.dart';
+import '../core/models/tool_media.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../core/generation/artifact_repository.dart';
 import '../core/generation/curated_parameter_catalog.dart';
