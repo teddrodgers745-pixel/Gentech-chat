@@ -1,5 +1,8 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 // Типы каталога экспортируются вместе с provider_catalog_service.dart.
 import 'package:gentech_chat/core/catalog/provider_catalog_service.dart';
@@ -168,7 +171,7 @@ void main() {
   test('битая запись не роняет разбор остальных (parseCatalogResponse)', () {
     final body = '{"data": ['
         '{"id": "a/one"},'
-        '"not-a-map",'
+        '42,'
         '{"no_id": true},'
         '{"id": "b/two", "type": "image"}'
         ']}';
@@ -181,4 +184,51 @@ void main() {
     expect(entries[1].id, 'b/two');
     expect(entries[1].type, 'image');
   });
+
+  test(
+    'T-R4-HEAL2-LIVE-CATALOG-STRING: общий каталог принимает строковый id '
+    'и пропускает битые записи',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final paths = <String>[];
+      final service = ProviderCatalogService();
+
+      server.listen((request) async {
+        paths.add(request.uri.path);
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(jsonEncode(<String, dynamic>{
+          'data': <Object?>[
+            <String, dynamic>{'id': 'a/one'},
+            'not-a-map',
+            42,
+            <String, dynamic>{'no_id': true},
+            <String, dynamic>{'id': 'b/two', 'type': 'image'},
+          ],
+        }));
+        await request.response.close();
+      });
+
+      try {
+        final result = await service.sync(
+          CatalogConnection(
+            id: 'heal2-live-catalog',
+            baseUrl: 'http://127.0.0.1:${server.port}/v1',
+            apiKey: 'fixture',
+          ),
+          force: true,
+        );
+
+        expect(result.error, isNull);
+        expect(paths, <String>['/v1/models']);
+        expect(
+          result.entries.map((entry) => entry.id).toList(),
+          <String>['a/one', 'not-a-map', 'b/two'],
+        );
+        expect(result.entries.last.type, 'image');
+      } finally {
+        service.dispose();
+        await server.close(force: true);
+      }
+    },
+  );
 }
