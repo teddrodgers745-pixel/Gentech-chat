@@ -25,7 +25,6 @@ jobs:
       - name: Generate Android platform files
         run: |
           flutter create --platforms=android --project-name gentech_chat --org app.gentech .
-          rm -f test/widget_test.dart
 
       - name: Add INTERNET permission and app name
         run: |
@@ -42,6 +41,9 @@ jobs:
 
       - name: Analyze Code
         run: flutter analyze
+
+      - name: Run tests
+        run: flutter test
 
       - run: flutter build apk --release
 
