@@ -13,6 +13,9 @@ import 'model_type_override_store.dart';
 /// Фасад генерации. Ручной выбор типа имеет приоритет над каталогом.
 class GenerationService {
   final GenerationExecutor? _customExecutor;
+
+  /// Исполнители запросов текущей сессии. Восстановленные в фоне задачи
+  /// сюда не входят: кнопка остановки не должна останавливать их все.
   final Set<GenerationExecutor> _running = <GenerationExecutor>{};
   int _cancelEpoch = 0;
 
@@ -99,7 +102,6 @@ class GenerationService {
     final jobs = await ActiveJobsStore.instance.loadAll();
     for (final record in jobs) {
       final executor = AsyncJobExecutor();
-      _running.add(executor);
       try {
         await for (final ev in executor.resume(record)) {
           if (ev is GenerationFailure && ev.jobId.isEmpty) {
@@ -110,8 +112,6 @@ class GenerationService {
         }
       } catch (_) {
         // Запись остаётся в хранилище для следующего восстановления.
-      } finally {
-        _running.remove(executor);
       }
     }
   }
@@ -151,11 +151,13 @@ class GenerationService {
           prompt: prompt,
         );
     if (rec.baseUrl.trim().isEmpty || rec.apiKey.trim().isEmpty) {
-      yield const GenerationFailure(
-        UnknownGenError(
-          details: 'Не удалось восстановить данные задачи. '
-              'Отправьте запрос заново.',
+      yield GenerationFailure(
+        const UnknownGenError(
+          details: 'Не удалось восстановить исходное подключение задачи. '
+              'Восстановите его для продолжения опроса. Новая генерация '
+              'может привести к повторному списанию.',
         ),
+        jobId: id,
       );
       return;
     }
@@ -176,12 +178,14 @@ class GenerationService {
     }
   }
 
-  /// Прерывает текущие исполнители, включая запросы до получения jobId.
+  /// Прерывает исполнители текущей сессии, включая запросы до получения
+  /// jobId. Фоновые восстановленные задачи в эту область не входят.
+  ///
+  /// Это локальная остановка, а не подтверждённая серверная отмена.
   void cancel() {
     _cancelEpoch++;
     for (final executor in List<GenerationExecutor>.of(_running)) {
       executor.cancel();
     }
-    AsyncJobExecutor.cancelAll();
   }
 }
