@@ -36,6 +36,7 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
 
   bool _loading = false;
   String? _error;
+  String? _selectionError;
   List<String> _models = const <String>[];
   Timer? _autoRefreshTimer;
 
@@ -67,6 +68,7 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     _requestVersion++;
     _loading = false;
     _error = null;
+    _selectionError = null;
     _models = const <String>[];
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -82,13 +84,29 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     super.dispose();
   }
 
-  /// Base URL подключения без хвостовых слэшей.
-  String get _base => widget.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+  static String _normalizeBase(String value) =>
+      value.trim().replaceAll(RegExp(r'/+$'), '');
 
-  /// Ключ подключения без префикса 'Bearer '.
-  String get _key => widget.apiKey
+  static String _normalizeKey(String value) => value
       .trim()
       .replaceFirst(RegExp(r'^Bearer\s+', caseSensitive: false), '');
+
+  /// Base URL подключения без хвостовых слэшей.
+  String get _base => _normalizeBase(widget.baseUrl);
+
+  /// Ключ подключения без префикса 'Bearer '.
+  String get _key => _normalizeKey(widget.apiKey);
+
+  /// Панель может менять модель только для фактической пары адрес/ключ.
+  /// Имя подключения само по себе не доказывает совпадение реквизитов.
+  bool _matchesEffectiveConnection(EffectiveConfig config) {
+    final base = _base;
+    final key = _key;
+    return base.isNotEmpty &&
+        key.isNotEmpty &&
+        _normalizeBase(config.baseUrl) == base &&
+        _normalizeKey(config.apiKey) == key;
+  }
 
   Future<void> _loadModels() async {
     if (_loading) return;
@@ -133,16 +151,30 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
     }
   }
 
-  /// Выбор модели принадлежит активному пресету: панель не пишет
-  /// settings.model в обход PresetStore. Подключение (адрес/ключ)
-  /// обновляется в глобальных настройках, чтобы системный дефолтный
-  /// пресет использовал именно эту панель.
+  /// Не меняем глобальное подключение в обход активного пресета или OAuth:
+  /// это могло показать модель одной панели и отправить её через другую
+  /// пару адрес/ключ. При несовпадении пользователь сначала выбирает
+  /// подходящее подключение в настройках.
   Future<void> _pickModel(String v) async {
-    final base = _base;
-    final key = _key;
-    if (base.isEmpty || key.isEmpty) return;
-    settings.setConnection(url: base, key: key);
-    await presets.updateActivePresetModel(v);
+    if (!_matchesEffectiveConnection(effectiveConfig())) {
+      setState(() {
+        _selectionError =
+            'Выберите в настройках профиль с этим адресом и ключом. '
+            'Модель не изменена.';
+      });
+      return;
+    }
+
+    setState(() => _selectionError = null);
+    try {
+      await presets.updateActivePresetModel(v);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _selectionError = 'Не удалось сохранить выбранную модель.';
+      });
+      return;
+    }
     if (mounted) setState(() {});
   }
 
@@ -152,8 +184,11 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
       listenable: Listenable.merge(<Listenable>[settings, presets]),
       builder: (context, _) {
         final p = settings.palette;
-        final current = settings.currentModelId.trim();
-        final dropdownValue = _models.contains(current) ? current : null;
+        final config = effectiveConfig();
+        final matchesConnection = _matchesEffectiveConnection(config);
+        final current = config.model.trim();
+        final dropdownValue =
+            matchesConnection && _models.contains(current) ? current : null;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -182,6 +217,15 @@ class _ConnectionModelsPanelState extends State<ConnectionModelsPanel> {
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
                   _error!,
+                  softWrap: true,
+                  style: TextStyle(color: p.muted, fontSize: 13),
+                ),
+              ),
+            if (_selectionError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 4),
+                child: Text(
+                  _selectionError!,
                   softWrap: true,
                   style: TextStyle(color: p.muted, fontSize: 13),
                 ),
