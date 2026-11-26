@@ -50,7 +50,7 @@ List<String> _asStringList(Object? v) {
   ]..removeWhere((s) => s.isEmpty);
 }
 
-List<int> _asIntList(Object? v) {
+List<int> _intListSafe(Object? v) {
   if (v is! List) return const <int>[];
   final out = <int>[];
   for (final e in v) {
