@@ -18,10 +18,10 @@ sealed class MessagePart {
 /// которую ChatService отдаёт в [StreamChunk.usage] при стриминге
 /// (stream_options.include_usage) и в непотоковом ответе.
 class MessageCost {
-  /// Стоимость ответа в валюте [currency].
-  final double cost;
+  /// Стоимость ответа в валюте [currency]. null — сумма не сообщена.
+  final double? cost;
 
-  /// Код валюты ('USD', 'RUB' ...).
+  /// Код валюты ('USD', 'RUB' ...); пустая строка — валюта неизвестна.
   final String currency;
 
   /// Токены входа (промпт).
@@ -32,22 +32,33 @@ class MessageCost {
 
   const MessageCost({
     required this.cost,
-    this.currency = 'USD',
+    this.currency = '',
     this.promptTokens = 0,
     this.completionTokens = 0,
   });
 
-  /// Символ валюты для интерфейса.
-  String get symbol => currency.trim().toUpperCase() == 'RUB' ? '₽' : r'$';
+  /// Символ или код валюты для интерфейса.
+  String get symbol {
+    switch (currency.trim().toUpperCase()) {
+      case 'RUB':
+        return '₽';
+      case 'USD':
+        return r'$';
+      default:
+        return currency.trim().toUpperCase();
+    }
+  }
 
   /// Сумма в формате интерфейса с сохранением точности значения.
   ///
   /// Для обычной десятичной записи оставляем не менее двух знаков после
   /// запятой. Экспоненциальная запись не округляется до фиксированного
-  /// числа знаков.
+  /// числа знаков. Неизвестная сумма не подменяется нулём.
   String get formatted {
-    var s = cost.toString();
-    if (cost.isFinite && !s.contains('e') && !s.contains('E')) {
+    final amount = cost;
+    if (amount == null) return 'Стоимость неизвестна';
+    var s = amount.toString();
+    if (amount.isFinite && !s.contains('e') && !s.contains('E')) {
       final dot = s.indexOf('.');
       if (dot < 0) {
         s = '$s.00';
@@ -57,7 +68,9 @@ class MessageCost {
         }
       }
     }
-    return '${s.replaceAll('.', ',')} $symbol';
+    final value = s.replaceAll('.', ',');
+    final unit = symbol;
+    return unit.isEmpty ? value : '$value $unit';
   }
 
   /// Всего токенов (вход + выход).
@@ -71,17 +84,17 @@ class MessageCost {
       };
 
   factory MessageCost.fromJson(Map<String, dynamic> j) => MessageCost(
-        cost: (j['cost'] as num?)?.toDouble() ?? 0,
-        currency: (j['currency'] as String?) ?? 'USD',
-        promptTokens: (j['promptTokens'] as num?)?.toInt() ?? 0,
-        completionTokens: (j['completionTokens'] as num?)?.toInt() ?? 0,
+        cost: _num(j['cost']),
+        currency: j['currency'] is String ? j['currency'] as String : '',
+        promptTokens: _num(j['promptTokens'])?.toInt() ?? 0,
+        completionTokens: _num(j['completionTokens'])?.toInt() ?? 0,
       );
 
   /// Разбор статистики использования провайдера.
   ///
-  /// Если присутствует cost_rub, это фактическая сумма в рублях и она
-  /// имеет приоритет над cost/total_cost. Для ответов без cost_rub
-  /// сохраняется прежний порядок разбора и прежнее поведение.
+  /// cost_rub явно задаёт рублёвую сумму и имеет приоритет над общими
+  /// cost/total_cost. Для общих полей валюта берётся только из ответа.
+  /// Счётчики токенов сохраняются даже при отсутствии суммы.
   static MessageCost? fromUsage(Map<String, dynamic>? usage) {
     final u = usage;
     if (u == null) return null;
@@ -90,10 +103,12 @@ class MessageCost {
     final prompt = _num(u['prompt_tokens'])?.toInt() ?? 0;
     final completion = _num(u['completion_tokens'])?.toInt() ?? 0;
     if (cost == null && prompt == 0 && completion == 0) return null;
-    final currency =
-        costRub != null ? 'RUB' : ((u['currency'] as String?) ?? 'USD');
+    final rawCurrency = u['currency'];
+    final currency = costRub != null
+        ? 'RUB'
+        : (rawCurrency is String ? rawCurrency.trim().toUpperCase() : '');
     return MessageCost(
-      cost: cost ?? 0,
+      cost: cost,
       currency: currency,
       promptTokens: prompt,
       completionTokens: completion,
@@ -101,9 +116,15 @@ class MessageCost {
   }
 
   static double? _num(Object? v) {
-    if (v is num) return v.toDouble();
-    if (v is String) return double.tryParse(v.trim().replaceAll(',', '.'));
-    return null;
+    final double? value;
+    if (v is num) {
+      value = v.toDouble();
+    } else if (v is String) {
+      value = double.tryParse(v.trim().replaceAll(',', '.'));
+    } else {
+      value = null;
+    }
+    return value != null && value.isFinite ? value : null;
   }
 }
 
@@ -214,7 +235,7 @@ class VideoPart extends MessagePart {
 }
 
 /// Часть, которая ещё «в процессе»: например, вложение выбрано, но его
-/// содержимое ещё не прочитано, либо выполняется асинхронная задача
+/// содержимое ещё не прочитано либо выполняется асинхронная задача
 /// генерации (видео) с прогрессом и идентификатором у провайдера.
 class PendingPart extends MessagePart {
   /// Локальный путь файла, который обрабатывается (если известен).
