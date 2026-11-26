@@ -28,7 +28,6 @@ import '../core/generation/generation_service.dart';
 import '../core/generation/images_api_executor.dart';
 import '../core/models/cost_estimate.dart';
 import '../core/models/message_part.dart';
-import '../core/models/model_info.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../core/generation/artifact_repository.dart';
 import '../core/generation/curated_parameter_catalog.dart';
@@ -41,7 +40,6 @@ import '../core/generation/user_param_override_store.dart';
 import '../core/models/generation_schema.dart';
 import '../core/models/param_spec.dart';
 import '../features/composer/modes/image_gen_mode.dart';
-import '../core/models/model_presets.dart';
 import '../core/utils/reasoning_mapper.dart';
 import '../core/utils/stream_pacer.dart';
 import '../services/chat_service.dart';
@@ -867,14 +865,14 @@ class _ChatScreenState extends State<ChatScreen> {
       if ((_mediaQuality ?? '').trim().isNotEmpty)
         ParamKeys.quality: _mediaQuality!.trim(),
     };
-    final override = await _typeOverrideFor(modelId);
+    final typeOverride = await _typeOverrideFor(modelId);
     final snap = GenerationSnapshot(
       route: ModelTypes.image,
       modelId: modelId,
       connectionId: _snapshotConnectionId() ?? '',
       connectionBaseUrl: cfg.baseUrl.trim(),
       prompt: txt,
-      typeOverride: override,
+      typeOverride: typeOverride,
       parameters: params,
     );
     chat.messages.add(ChatMessage(
@@ -1025,14 +1023,14 @@ class _ChatScreenState extends State<ChatScreen> {
       if ((_mediaQuality ?? '').trim().isNotEmpty)
         ParamKeys.quality: _mediaQuality!.trim(),
     };
-    final override = await _typeOverrideFor(modelId);
+    final typeOverride = await _typeOverrideFor(modelId);
     final snap = GenerationSnapshot(
       route: ModelTypes.video,
       modelId: modelId,
       connectionId: _snapshotConnectionId() ?? '',
       connectionBaseUrl: cfg.baseUrl.trim(),
       prompt: txt,
-      typeOverride: override,
+      typeOverride: typeOverride,
       parameters: params,
     );
     chat.messages.add(ChatMessage(

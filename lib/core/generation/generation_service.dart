@@ -1,7 +1,5 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
-import '../../app_state.dart';
-import '../catalog/provider_catalog_service.dart';
 import '../models/gen_error.dart';
 import 'active_jobs_store.dart';
 import 'async_job_executor.dart';

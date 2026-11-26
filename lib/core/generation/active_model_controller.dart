@@ -18,7 +18,6 @@ import '../providers/heuristic_rules.dart';
 import 'curated_parameter_catalog.dart';
 import 'generation_capability_resolver.dart';
 import 'model_type_override_store.dart';
-import 'reasoning_capability_resolver.dart';
 import 'search_capability_resolver.dart';
 import 'user_param_override_store.dart';
 
