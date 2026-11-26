@@ -11,6 +11,7 @@ import '../models/gen_error.dart';
 import '../models/generation_schema.dart';
 import '../providers/model_catalog_adapter.dart';
 import '../providers/model_info_resolver.dart';
+// ignore: unused_import
 import '../settings/provider_sort_ext.dart';
 import 'artifact_materializer.dart';
 import 'generation_event.dart';

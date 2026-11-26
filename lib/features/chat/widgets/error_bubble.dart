@@ -15,6 +15,10 @@ enum _ErrorAction { retry, changeModel, settings }
 ///  - ModelNotFoundError -> «Сменить модель»;
 ///  - остальные -> «Повторить».
 ///  - JobStatusUnknown -> «Повторить» (возобновление созданной задачи).
+///
+/// Текст карточки: для JobStatusUnknown показывается ПОЛНОЕ сообщение
+/// (смысл безопасного повтора без новой оплаты), а не только details;
+/// для остальных — детали провайдера.
 /// Действия можно переопределить колбэками; без колбэка «Настройки»
 /// открывает экран настроек сама.
 class ErrorBubble extends StatelessWidget {
@@ -117,8 +121,14 @@ class ErrorBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final details = GenErrorMapper.detailsOf(error);
-    final bodyText =
-        details.trim().isEmpty ? 'Не удалось получить ответ от модели.' : details;
+    // JobStatusUnknown: показываем ПОЛНОЕ сообщение (включая смысл
+    // безопасного повтора — «без новой оплаты»), а не только details.
+    final bodyText = switch (error) {
+      JobStatusUnknown() => error.message,
+      _ => details.trim().isEmpty
+          ? 'Не удалось получить ответ от модели.'
+          : details,
+    };
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 6),

@@ -2,6 +2,23 @@
 
 import 'gen_error.dart';
 
+/// Медиа-результат инструмента (модель-инструмент оказалась медиа-моделью
+/// по каталогу): тип ('image' | 'video') и адрес результата — локальный
+/// путь на устройстве либо https/data-ссылка. Материализуется в чате
+/// как [ImagePart]/[VideoPart].
+class ToolMedia {
+  /// Тип медиа: 'image' либо 'video'.
+  final String kind;
+
+  /// Адрес результата: путь к локальному файлу либо http(s)/data-ссылка.
+  final String url;
+
+  const ToolMedia({required this.kind, required this.url});
+
+  @override
+  String toString() => 'ToolMedia($kind: $url)';
+}
+
 /// Часть составного сообщения: то, из чего состоит пользовательский запрос
 /// или ответ модели. Базовый sealed-тип гарантирует, что switch по частям
 /// будет исчерпывающим без default — новые типы добавляются явно.
@@ -212,7 +229,7 @@ class VideoPart extends MessagePart {
   /// Удобный конструктор для ссылки.
   const VideoPart.fromUrl(String url)
       : localPath = null,
-        remoteUrl = url;
+      remoteUrl = url;
 
   /// Задан ли локальный источник (иначе считается, что ссылка).
   bool get isLocal => (localPath ?? '').isNotEmpty;

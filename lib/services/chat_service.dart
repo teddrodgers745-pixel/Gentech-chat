@@ -10,13 +10,13 @@ import 'package:http/http.dart' as http;
 import '../app_state.dart';
 import '../core/auth/polza_auth_service.dart';
 import '../core/generation/search_capability_resolver.dart';
-// ignore: undefined_shown_name, unused_import
 import '../core/models/message_part.dart' show ToolMedia;
 import '../core/models/tool_media.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../core/providers/model_catalog_adapter.dart';
 import '../core/search/search_controller.dart';
 import '../core/search/search_strategy.dart';
+// ignore: unused_import
 import '../core/settings/provider_sort_ext.dart';
 import '../core/storage.dart';
 // ignore: unused_import

@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'package:flutter/foundation.dart';
 
+import '../../app_state.dart' show settings;
 import '../models/gen_error.dart';
 import '../models/model_info.dart' show GenerationRoute, Modality;
 import '../providers/model_catalog_adapter.dart';
@@ -147,6 +148,17 @@ class AsyncJobExecutor extends GenerationExecutor {
   @override
   void cancel() {
     _cancelled = true;
+  }
+
+  /// Выбор провайдера Polza из настроек приложения: сортировка
+  /// (по умолчанию по цене — самый дешёвый), конкретный провайдер
+  /// не закрепляется. Для не-Polza провайдеров поле не добавляется.
+  static Map<String, dynamic> _providerSelectionBody() {
+    final sort = settings.providerSort.trim().toLowerCase();
+    if (sort.isEmpty) return const <String, dynamic>{};
+    return <String, dynamic>{
+      'provider': <String, dynamic>{'sort': sort},
+    };
   }
 
   @override
@@ -444,6 +456,9 @@ class AsyncJobExecutor extends GenerationExecutor {
               isVideo: true,
             ),
             'async': true,
+            // Выбор провайдера из настроек (по умолчанию sort: price) —
+            // конкретный провайдер не закрепляется.
+            ..._providerSelectionBody(),
           }
         : <String, dynamic>{
             'model': request.model,
@@ -459,7 +474,7 @@ class AsyncJobExecutor extends GenerationExecutor {
       final http.Response resp;
       try {
         if (isPolza) {
-          debugPrint('[MediaExec] Request body: $body');
+          debugPrint('[PolzaVideo] Request body: $body');
         }
         resp = await client
             .post(uri, headers: headers, body: body)

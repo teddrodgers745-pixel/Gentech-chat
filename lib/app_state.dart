@@ -23,7 +23,7 @@ int _idSeq = 0;
 /// Уникальный идентификатор: время плюс счётчик. Только microsecondsSinceEpoch
 /// недостаточно: на части устройств точность времени миллисекундная, и
 /// инструменты, созданные подряд (например, из MCP-каталога), получали
-/// одинаковый id — из-за этого в редакторе пресета тумблеры «слипались».
+/// одинаковые id — из-за этого в редакторе пресета тумблеры «слипались».
 String newId() {
   _idSeq += 1;
   return '${DateTime.now().microsecondsSinceEpoch}-$_idSeq';
@@ -385,6 +385,14 @@ class AppSettings extends ChangeNotifier {
   /// допустимый уровень.
   final Map<String, String> reasoningByModel = <String, String>{};
 
+  /// Сортировка провайдеров Polza в теле запроса (provider.sort):
+  /// 'price' (по умолчанию — самый дешёвый), 'latency', 'throughput'.
+  /// Конкретный провайдер не закрепляется; автоматический автороутинг
+  /// не считается доказательством минимальной цены. Полный UI выбора
+  /// провайдера пока не строится — настройка хранится и уходит в тела
+  /// запросов (чат + медиа).
+  String providerSort = 'price';
+
   /// Режим для профи (Advanced): полные настройки вместо быстрой настройки.
   bool advancedMode = true;
 
@@ -450,6 +458,12 @@ class AppSettings extends ChangeNotifier {
         // Битый JSON — оставляем пустую карту.
       }
     }
+    // Сортировка провайдеров: только документированные значения.
+    final rawSort = (p.getString('providerSort') ?? 'price').trim().toLowerCase();
+    providerSort =
+        const <String>{'price', 'latency', 'throughput'}.contains(rawSort)
+            ? rawSort
+            : 'price';
     advancedMode = p.getBool('advancedMode') ?? true;
     mcpEnabled = p.getBool('mcpEnabled') ?? true;
   }
@@ -478,6 +492,7 @@ class AppSettings extends ChangeNotifier {
     await p.setBool('isProviderSearchSupported', providerSearchSupported);
     await p.setString('reasoningLevel', reasoningLevel);
     await p.setString('reasoningByModel', jsonEncode(reasoningByModel));
+    await p.setString('providerSort', providerSort);
     await p.setBool('advancedMode', advancedMode);
     await p.setBool('mcpEnabled', mcpEnabled);
   }
@@ -599,6 +614,17 @@ class AppSettings extends ChangeNotifier {
 
   void setProviderSearchSupported(bool v) {
     providerSearchSupported = v;
+    _persist();
+    notifyListeners();
+  }
+
+  /// Сортировка провайдеров Polza: только документированные значения
+  /// ('price' | 'latency' | 'throughput'), по умолчанию 'price'.
+  void setProviderSort(String v) {
+    final s = v.trim().toLowerCase();
+    if (s != 'price' && s != 'latency' && s != 'throughput') return;
+    if (providerSort == s) return;
+    providerSort = s;
     _persist();
     notifyListeners();
   }

@@ -13,7 +13,9 @@ import 'generation_request.dart';
 /// Оборачивает поток [StreamChunk] в поток [GenerationEvent]:
 ///  - куски текста/размышлений -> [GenerationDelta];
 ///  - начало вызова инструмента -> [ToolCallStarted];
-///  - завершение вызова -> [ToolCallFinished];
+///  - прогресс задачи инструмента-медиа (видео) -> [GenProgress];
+///  - завершение вызова (с медиа-результатом, если инструмент
+///    оказался медиа-моделью) -> [ToolCallFinished];
 ///  - источники (citations/annotations) -> [SourcesReceived];
 ///  - любая ошибка -> [GenerationFailure] (последнее событие).
 class ChatCompletionsExecutor extends GenerationExecutor {
@@ -42,18 +44,28 @@ class ChatCompletionsExecutor extends GenerationExecutor {
       )) {
         final toolName = chunk.toolName;
         if (toolName != null) {
-          // События вызова инструмента: статус running -> начало,
-          // done/error -> завершение.
+          // События вызова инструмента: статус running без задачи —
+          // начало; running с jobId — прогресс видео-задачи инструмента;
+          // done/error — завершение (с медиа, если инструмент медиа).
           if (chunk.toolStatus == toolStatusRunning) {
-            yield ToolCallStarted(
-              name: toolName,
-              arguments: chunk.toolArgs ?? '',
-            );
+            final jobId = (chunk.toolJobId ?? '').trim();
+            if (jobId.isNotEmpty) {
+              yield GenProgress(
+                jobId: jobId,
+                percent: chunk.toolProgress ?? 0,
+              );
+            } else {
+              yield ToolCallStarted(
+                name: toolName,
+                arguments: chunk.toolArgs ?? '',
+              );
+            }
           } else {
             yield ToolCallFinished(
               name: toolName,
               result: chunk.toolResult ?? '',
               ok: (chunk.toolStatus ?? toolStatusDone) != toolStatusError,
+              media: chunk.toolMedia,
             );
           }
           continue;

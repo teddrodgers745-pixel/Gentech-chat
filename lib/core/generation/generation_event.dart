@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import '../models/gen_error.dart';
+import '../models/message_part.dart' show ToolMedia;
 
 /// Событие генерации, приходящее из [GenerationExecutor] потоковым
 /// образом. Sealed-тип: обработка switch исчерпывающая без default —
@@ -35,10 +36,16 @@ class ToolCallFinished extends GenerationEvent {
   final String result;
   final bool ok;
 
+  /// Медиа-результат инструмента (image/video), если модель-инструмент
+  /// по каталогу оказалась медиа-моделью; null — инструмент текстовый
+  /// либо результата нет. Потребитель материализует в ImagePart/VideoPart.
+  final List<ToolMedia>? media;
+
   const ToolCallFinished({
     required this.name,
     required this.ok,
     this.result = '',
+    this.media,
   });
 }
 
