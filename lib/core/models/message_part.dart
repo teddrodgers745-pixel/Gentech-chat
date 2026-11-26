@@ -40,10 +40,23 @@ class MessageCost {
   /// Символ валюты для интерфейса.
   String get symbol => currency.trim().toUpperCase() == 'RUB' ? '₽' : r'$';
 
-  /// Сумма в формате интерфейса: '0,42 ₽' (запятая как десятичный
-  /// разделитель, как принято в русском тексте).
+  /// Сумма в формате интерфейса с сохранением точности значения.
+  ///
+  /// Для обычной десятичной записи оставляем не менее двух знаков после
+  /// запятой. Экспоненциальная запись не округляется до фиксированного
+  /// числа знаков.
   String get formatted {
-    final s = cost.toStringAsFixed(2);
+    var s = cost.toString();
+    if (cost.isFinite && !s.contains('e') && !s.contains('E')) {
+      final dot = s.indexOf('.');
+      if (dot < 0) {
+        s = '$s.00';
+      } else {
+        while (s.length - dot - 1 < 2) {
+          s += '0';
+        }
+      }
+    }
     return '${s.replaceAll('.', ',')} $symbol';
   }
 
@@ -257,7 +270,7 @@ class PendingPart extends MessagePart {
 class ErrorPart extends MessagePart {
   final GenError error;
 
-  /// Промпт, на который не удалось получить ответ (для «Повторить»).
+  /// Промпт, на который не удалось получить ответ.
   final String originalPrompt;
 
   /// Параметры повторной попытки (модель, температура и т.п.).
