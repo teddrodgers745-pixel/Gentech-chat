@@ -214,6 +214,11 @@ abstract final class GenErrorMapper {
 
   /// Восстановление [GenError] по сохранённому коду (ChatMessage.errorCode),
   /// чтобы ошибка корректно отображалась после перезапуска приложения.
+  /// Код 'status_unknown' (JobStatusUnknown, F1-retry-resume) обязателен:
+  /// без него карточка «Статус задачи неизвестен» после перезапуска
+  /// восстанавливалась как UnknownGenError («Ошибка генерации»).
+  /// jobId для повтора живёт в GenerationSnapshot, пустой jobId в
+  /// восстановленной ошибке безопасен.
   static GenError fromCode(String code, {String details = ''}) {
     switch (code) {
       case 'auth':
@@ -234,6 +239,8 @@ abstract final class GenErrorMapper {
         return NetworkError(details: details);
       case 'bad_request':
         return BadRequestError(details: details);
+      case 'status_unknown':
+        return JobStatusUnknown(details: details);
       default:
         return UnknownGenError(details: details);
     }
