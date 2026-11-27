@@ -430,7 +430,10 @@ class RichMarkdown extends StatelessWidget {
           height: 1.45,
         );
         return MarkdownBody(
-          data: data,
+          // F4-markdown: чиним «сломанные» пары `**` до разбора —
+          // литеральные звёздочки не прорисовываются, а границы
+          // жирного совпадают с маркерами (см. repairUnpairedEmphasis).
+          data: repairUnpairedEmphasis(data),
           fitContent: false,
           styleSheet: _sheet(p, body, mono, size),
           builders: <String, MarkdownElementBuilder>{
@@ -480,6 +483,179 @@ class RichMarkdown extends StatelessWidget {
     );
   }
 }
+
+/// F4-markdown: чинит «сломанные» пары `**` в тексте ответа модели
+/// перед рендером. Живой тест 2026-11-27 (сборка e1364fb, deepseek,
+/// скриншоты 09:44/09:47): ответ показывал литеральные `**`
+/// («…с файлами** — могу читать…») и неровный жирный (первое слово
+/// обычным шрифтом, следующие — жирным). Так выглядит потеря ОДНОГО
+/// маркера из пары: закрывающий `**` без открывающего рендерится
+/// звёздочками текстом, ближайшая целая пара — жирным ровно по
+/// маркерам. Парсер flutter_markdown_plus сам по себе корректен,
+/// поэтому ремонт делается до разбора.
+///
+/// Что делает функция:
+/// - не трогает корректные пары `**жирный**` (в том числе пары,
+///   разбитые переносом строки внутри одного абзаца);
+/// - удаляет ТОЛЬКО односторонние «потерянные» маркеры: закрывающий
+///   без открывающего (`слово** `) и открывающий без закрывающего
+///   (` **слово`) — вместо литеральных звёздочек остаётся чистый
+///   текст, соседние корректные пары не затрагиваются;
+/// - не трогает нейтральный контекст, где `**` может быть не маркером,
+///   а текстом (возведение в степень: `2**3`, `2 ** 3`);
+/// - не трогает inline-код (`` `...` ``) и fenced-блоки (``` ... ```);
+/// - не трогает ряды из одной или трёх и более звёздочек (`*` и
+///   `***` — курсив/жирный+курсив разбирает сам парсер).
+String repairUnpairedEmphasis(String src) {
+  if (!src.contains('**')) return src;
+  final lines = src.split('\n');
+  final out = <String>[];
+  var i = 0;
+  while (i < lines.length) {
+    final line = lines[i];
+    if (line.trimLeft().startsWith('```')) {
+      // Fenced-блок: копируем как есть до закрывающего забора.
+      out.add(line);
+      i++;
+      while (i < lines.length) {
+        out.add(lines[i]);
+        final closing = lines[i].trimLeft().startsWith('```');
+        i++;
+        if (closing) break;
+      }
+      continue;
+    }
+    if (line.trim().isEmpty) {
+      out.add(line);
+      i++;
+      continue;
+    }
+    // Абзац: подряд идущие непустые строки — внутри абзаца пара `**`
+    // может разбиваться переносом строки, но пары не пересекают
+    // пустую строку (правило CommonMark).
+    final paragraph = <String>[];
+    while (i < lines.length &&
+        lines[i].trim().isNotEmpty &&
+        !lines[i].trimLeft().startsWith('```')) {
+      paragraph.add(lines[i]);
+      i++;
+    }
+    out.add(_repairParagraphStars(paragraph.join('\n')));
+  }
+  return out.join('\n');
+}
+
+/// Чинит непарные `**` внутри одного абзаца.
+String _repairParagraphStars(String text) {
+  // Inline-код `...` защищаем плейсхолдерами: звёздочки внутри кода
+  // не являются маркерами выделения.
+  final codeSpans = <String>[];
+  final marked = StringBuffer();
+  var i = 0;
+  while (i < text.length) {
+    if (text[i] == '`') {
+      final close = text.indexOf('`', i + 1);
+      if (close > i) {
+        marked.write('\uE000${codeSpans.length}\uE001');
+        codeSpans.add(text.substring(i, close + 1));
+        i = close + 1;
+        continue;
+      }
+    }
+    marked.write(text[i]);
+    i++;
+  }
+  final s = marked.toString();
+
+  // Позиции маркеров `**`: учитываются только ряды ровно из двух
+  // звёздочек; `*` и `***` не трогаются.
+  final markers = <int>[];
+  for (var k = 0; k < s.length;) {
+    if (s.codeUnitAt(k) == 0x2A) {
+      var run = 0;
+      while (k + run < s.length && s.codeUnitAt(k + run) == 0x2A) {
+        run++;
+      }
+      if (run == 2) markers.add(k);
+      k += run;
+    } else {
+      k++;
+    }
+  }
+
+  final removed = _unpairedStarMarkers(s, markers);
+
+  final res = StringBuffer();
+  var copy = 0;
+  while (copy < s.length) {
+    if (removed.contains(copy)) {
+      copy += 2; // маркер — ровно два символа
+      continue;
+    }
+    if (s.codeUnitAt(copy) == 0xE000) {
+      final close = s.indexOf('\uE001', copy);
+      if (close > copy) {
+        try {
+          final n = int.parse(s.substring(copy + 1, close));
+          if (n >= 0 && n < codeSpans.length) {
+            res.write(codeSpans[n]);
+            copy = close + 1;
+            continue;
+          }
+        } on FormatException {
+          // Чужой символ \uE000 в исходном тексте — пишем как есть.
+        }
+      }
+    }
+    res.write(s[copy]);
+    copy++;
+  }
+  return res.toString();
+}
+
+/// Приближение алгоритма разбора выделения CommonMark: маркеры `**`
+/// парсятся слева направо со стеком открывающих; лишние односторонние
+/// маркеры помечаются к удалению.
+Set<int> _unpairedStarMarkers(String text, List<int> markers) {
+  final stack = <int>[];
+  final strays = <int>{};
+  for (final pos in markers) {
+    final canClose =
+        pos > 0 && !_isStarWhitespace(text.codeUnitAt(pos - 1));
+    final after = pos + 2;
+    final canOpen =
+        after < text.length && !_isStarWhitespace(text.codeUnitAt(after));
+    if (canClose && stack.isNotEmpty) {
+      stack.removeLast();
+    } else if (canOpen) {
+      stack.add(pos);
+    } else if (canClose) {
+      // Закрывающий маркер без пары: открывающий «потерялся»
+      // (живой сценарий: «…с файлами** — могу читать…»).
+      strays.add(pos);
+    }
+    // Ни открыть, ни закрыть (например `2 ** 3`): оставляем — это
+    // может быть осмысленный текст, а не маркер выделения.
+  }
+  for (final pos in stack) {
+    final canClose = pos > 0 &&
+        !_isStarWhitespace(text.codeUnitAt(pos - 1));
+    // Незакрытый открывающий убираем, только если он односторонний:
+    // двусторонний (`2**3`) может быть осмысленным текстом.
+    if (!canClose) strays.add(pos);
+  }
+  return strays;
+}
+
+/// Пробельные символы для правил фланкинга маркеров (юникод-пробелы:
+/// пробел, таб, переводы строк, NBSP).
+bool _isStarWhitespace(int code) =>
+    code == 0x20 ||
+    code == 0x09 ||
+    code == 0x0A ||
+    code == 0x0D ||
+    code == 0x0C ||
+    code == 0xA0;
 
 class _CodeBuilder extends MarkdownElementBuilder {
   final Palette p;
@@ -1399,6 +1575,7 @@ class _PartPending extends StatelessWidget {
         iconColor: p.muted,
         collapsedIconColor: p.muted,
         expandedAlignment: Alignment.centerLeft,
+        expandedCrossAxisAlignment: CrossAxisAlignment.start,
         title: Text(
           'Показать отладочную информацию',
           maxLines: 1,

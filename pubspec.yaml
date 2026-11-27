@@ -18,7 +18,10 @@ dependencies:
   shared_preferences: ^2.2.2
   google_fonts: ^6.2.0
   # Продолжение discontinued flutter_markdown (Foresight Mobile), ветка 1.0.x.
-  flutter_markdown_plus: ^1.0.0
+  # F4-markdown: не ниже 1.0.12 — в 1.0.8 починен жирный/курсив/ссылки
+  # внутри blockquote, в 1.0.9 — дублирование хвостового текста у
+  # кастомных inline-builders на элементах, разбитых `*`-делимитерами.
+  flutter_markdown_plus: ^1.0.12
   markdown: ^7.2.2
   flutter_highlight: ^0.7.0
   # Пин версии: в новых мажорных релизах file_picker убрали
