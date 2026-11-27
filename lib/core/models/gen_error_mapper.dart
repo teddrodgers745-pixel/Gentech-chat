@@ -10,22 +10,22 @@ import '../../services/chat_service.dart' show ChatServiceException;
 import 'gen_error.dart';
 
 /// Преобразует любые исключения генерации в типизированный [GenError]:
-///  - 401/403 -> AuthError;
-///  - 402 -> InsufficientFunds;
-///  - 429 -> RateLimited;
-///  - 400/422 с признаками фильтра контента -> ContentFiltered,
-///    иначе BadRequestError;
-///  - 404 -> ModelNotFoundError;
-///  - 5xx -> ServerError;
-///  - таймауты -> JobTimeout;
-///  - сетевые сбои -> NetworkError;
-///  - остальное -> UnknownGenError.
+/// - 401/403 -> AuthError;
+/// - 402 -> InsufficientFunds;
+/// - 429 -> RateLimited;
+/// - 400/422 с признаками фильтра контента -> ContentFiltered,
+///   иначе BadRequestError;
+/// - 404 -> ModelNotFoundError;
+/// - 5xx -> ServerError;
+/// - таймауты -> JobTimeout;
+/// - сетевые сбои -> NetworkError;
+/// - остальное -> UnknownGenError.
 ///
 /// Текст ошибки безопасно извлекается из JSON-ответа провайдера
 /// (error.message / message / detail); битый JSON не роняет разбор.
 abstract final class GenErrorMapper {
   /// Подстроки, по которым 400/422 распознаётся как фильтр контента.
-  static const List<String> _safetyHints = <String>[
+  static const List _safetyHints = [
     'safety',
     'content_filter',
     'content filtering',
@@ -37,7 +37,7 @@ abstract final class GenErrorMapper {
   ];
 
   /// Подстроки таймаута в текстовых сообщениях.
-  static const List<String> _timeoutHints = <String>[
+  static const List _timeoutHints = [
     'timeout',
     'timed out',
     'таймаут',
@@ -48,13 +48,7 @@ abstract final class GenErrorMapper {
   static GenError fromException(Object error) {
     if (error is GenError) return error;
     if (error is DioException) return _fromDio(error);
-    if (error is ChatServiceException) {
-      final status = error.statusCode;
-      if (status != null && status > 0) {
-        return _fromStatusCode(status, error.message);
-      }
-      return _fromText(error.message);
-    }
+    if (error is ChatServiceException) return _fromText(error.message);
     if (error is TimeoutException) {
       return const JobTimeout(details: 'Превышено время ожидания ответа.');
     }
@@ -90,6 +84,13 @@ abstract final class GenErrorMapper {
     }
   }
 
+  /// Публичная точка входа для исполнителей (R6-audio-robustness-3, п.8):
+  /// код HTTP-ответа + текст тела -> типизированный [GenError]. Единая
+  /// типизированная функция для видео- и медиа-опроса: расхождения
+  /// 403/402 между исполнителями устранены.
+  static GenError fromStatusCode(int code, String body) =>
+      _fromStatusCode(code, body);
+
   /// Код HTTP-ответа + тело -> [GenError]. Тело может быть строкой JSON,
   /// готовым Map или чем угодно ещё — разбор безопасен.
   static GenError _fromStatusCode(int code, Object? body) {
@@ -114,7 +115,8 @@ abstract final class GenErrorMapper {
     return UnknownGenError(details: 'Ошибка $code. ${_clip(details)}');
   }
 
-  /// Запасной разбор текста, когда HTTP-статус исключения отсутствует.
+  /// Разбор текста ошибки: ChatServiceException уже содержит код ответа
+  /// провайдера в сообщении ('Неверный API-ключ (401)...').
   static GenError _fromText(String message) {
     final m = message.trim();
     if (m.contains('401') || m.contains('403')) return AuthError(details: m);
@@ -190,7 +192,6 @@ abstract final class GenErrorMapper {
         ContentFiltered(:final details) => details,
         JobTimeout(:final details) => details,
         NetworkError(:final details) => details,
-        JobStatusUnknown(:final details) => details,
         BadRequestError(:final details) => details,
         UnknownGenError(:final details) => details,
       };
@@ -215,8 +216,6 @@ abstract final class GenErrorMapper {
         return JobTimeout(details: details);
       case 'network':
         return NetworkError(details: details);
-      case 'status_unknown':
-        return JobStatusUnknown(details: details);
       case 'bad_request':
         return BadRequestError(details: details);
       default:

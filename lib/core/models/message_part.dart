@@ -2,23 +2,6 @@
 
 import 'gen_error.dart';
 
-/// Медиа-результат инструмента (модель-инструмент оказалась медиа-моделью
-/// по каталогу): тип ('image' | 'video') и адрес результата — локальный
-/// путь на устройстве либо https/data-ссылка. Материализуется в чате
-/// как [ImagePart]/[VideoPart].
-class ToolMedia {
-  /// Тип медиа: 'image' либо 'video'.
-  final String kind;
-
-  /// Адрес результата: путь к локальному файлу либо http(s)/data-ссылка.
-  final String url;
-
-  const ToolMedia({required this.kind, required this.url});
-
-  @override
-  String toString() => 'ToolMedia($kind: $url)';
-}
-
 /// Часть составного сообщения: то, из чего состоит пользовательский запрос
 /// или ответ модели. Базовый sealed-тип гарантирует, что switch по частям
 /// будет исчерпывающим без default — новые типы добавляются явно.
@@ -35,10 +18,10 @@ sealed class MessagePart {
 /// которую ChatService отдаёт в [StreamChunk.usage] при стриминге
 /// (stream_options.include_usage) и в непотоковом ответе.
 class MessageCost {
-  /// Стоимость ответа в валюте [currency]. null — сумма не сообщена.
-  final double? cost;
+  /// Стоимость ответа в валюте [currency].
+  final double cost;
 
-  /// Код валюты ('USD', 'RUB' ...); пустая строка — валюта неизвестна.
+  /// Код валюты ('USD', 'RUB' ...).
   final String currency;
 
   /// Токены входа (промпт).
@@ -49,70 +32,44 @@ class MessageCost {
 
   const MessageCost({
     required this.cost,
-    this.currency = '',
+    this.currency = 'USD',
     this.promptTokens = 0,
     this.completionTokens = 0,
   });
 
-  /// Символ или код валюты для интерфейса.
-  String get symbol {
-    switch (currency.trim().toUpperCase()) {
-      case 'RUB':
-        return '₽';
-      case 'USD':
-        return r'$';
-      default:
-        return currency.trim().toUpperCase();
-    }
-  }
+  /// Символ валюты для интерфейса.
+  String get symbol => currency.trim().toUpperCase() == 'RUB' ? '₽' : r'$';
 
-  /// Сумма в формате интерфейса с сохранением точности значения.
-  ///
-  /// Для обычной десятичной записи оставляем не менее двух знаков после
-  /// запятой. Экспоненциальная запись не округляется до фиксированного
-  /// числа знаков. Неизвестная сумма не подменяется нулём.
+  /// Сумма в формате интерфейса: '0,42 ₽' (запятая как десятичный
+  /// разделитель, как принято в русском тексте).
   String get formatted {
-    final amount = cost;
-    if (amount == null) return 'Стоимость неизвестна';
-    var s = amount.toString();
-    if (amount.isFinite && !s.contains('e') && !s.contains('E')) {
-      final dot = s.indexOf('.');
-      if (dot < 0) {
-        s = '$s.00';
-      } else {
-        while (s.length - dot - 1 < 2) {
-          s += '0';
-        }
-      }
-    }
-    final value = s.replaceAll('.', ',');
-    final unit = symbol;
-    return unit.isEmpty ? value : '$value $unit';
+    final s = cost.toStringAsFixed(2);
+    return '${s.replaceAll('.', ',')} $symbol';
   }
 
   /// Всего токенов (вход + выход).
   int get totalTokens => promptTokens + completionTokens;
 
-  Map<String, dynamic> toJson() => <String, dynamic>{
+  Map toJson() => {
         'cost': cost,
         'currency': currency,
         'promptTokens': promptTokens,
         'completionTokens': completionTokens,
       };
 
-  factory MessageCost.fromJson(Map<String, dynamic> j) => MessageCost(
-        cost: _num(j['cost']),
-        currency: j['currency'] is String ? j['currency'] as String : '',
-        promptTokens: _num(j['promptTokens'])?.toInt() ?? 0,
-        completionTokens: _num(j['completionTokens'])?.toInt() ?? 0,
+  factory MessageCost.fromJson(Map j) => MessageCost(
+        cost: (j['cost'] as num?)?.toDouble() ?? 0,
+        currency: (j['currency'] as String?) ?? 'USD',
+        promptTokens: (j['promptTokens'] as num?)?.toInt() ?? 0,
+        completionTokens: (j['completionTokens'] as num?)?.toInt() ?? 0,
       );
 
   /// Разбор статистики использования провайдера.
   ///
-  /// cost_rub явно задаёт рублёвую сумму и имеет приоритет над общими
-  /// cost/total_cost. Для общих полей валюта берётся только из ответа.
-  /// Счётчики токенов сохраняются даже при отсутствии суммы.
-  static MessageCost? fromUsage(Map<String, dynamic>? usage) {
+  /// Если присутствует cost_rub, это фактическая сумма в рублях и она
+  /// имеет приоритет над cost/total_cost. Для ответов без cost_rub
+  /// сохраняется прежний порядок разбора и прежнее поведение.
+  static MessageCost? fromUsage(Map? usage) {
     final u = usage;
     if (u == null) return null;
     final costRub = _num(u['cost_rub']);
@@ -120,12 +77,10 @@ class MessageCost {
     final prompt = _num(u['prompt_tokens'])?.toInt() ?? 0;
     final completion = _num(u['completion_tokens'])?.toInt() ?? 0;
     if (cost == null && prompt == 0 && completion == 0) return null;
-    final rawCurrency = u['currency'];
-    final currency = costRub != null
-        ? 'RUB'
-        : (rawCurrency is String ? rawCurrency.trim().toUpperCase() : '');
+    final currency =
+        costRub != null ? 'RUB' : ((u['currency'] as String?) ?? 'USD');
     return MessageCost(
-      cost: cost,
+      cost: cost ?? 0,
       currency: currency,
       promptTokens: prompt,
       completionTokens: completion,
@@ -133,15 +88,9 @@ class MessageCost {
   }
 
   static double? _num(Object? v) {
-    final double? value;
-    if (v is num) {
-      value = v.toDouble();
-    } else if (v is String) {
-      value = double.tryParse(v.trim().replaceAll(',', '.'));
-    } else {
-      value = null;
-    }
-    return value != null && value.isFinite ? value : null;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v.trim().replaceAll(',', '.'));
+    return null;
   }
 }
 
@@ -154,9 +103,9 @@ class TextPart extends MessagePart {
 
   /// Ссылки-источники из ответа провайдера (citations/annotations).
   /// Пустой список — источников нет.
-  final List<String> sources;
+  final List sources;
 
-  const TextPart(this.text, {this.cost, this.sources = const <String>[]});
+  const TextPart(this.text, {this.cost, this.sources = const []});
 
   @override
   String get label => text.trim().isEmpty ? '(пустой текст)' : text;
@@ -229,7 +178,7 @@ class VideoPart extends MessagePart {
   /// Удобный конструктор для ссылки.
   const VideoPart.fromUrl(String url)
       : localPath = null,
-      remoteUrl = url;
+        remoteUrl = url;
 
   /// Задан ли локальный источник (иначе считается, что ссылка).
   bool get isLocal => (localPath ?? '').isNotEmpty;
@@ -252,7 +201,7 @@ class VideoPart extends MessagePart {
 }
 
 /// Часть, которая ещё «в процессе»: например, вложение выбрано, но его
-/// содержимое ещё не прочитано либо выполняется асинхронная задача
+/// содержимое ещё не прочитано, либо выполняется асинхронная задача
 /// генерации (видео) с прогрессом и идентификатором у провайдера.
 class PendingPart extends MessagePart {
   /// Локальный путь файла, который обрабатывается (если известен).
@@ -267,10 +216,15 @@ class PendingPart extends MessagePart {
   /// Прогресс задачи в процентах (0..100).
   final double progress;
 
+  /// Провайдер не сообщает прогресс: процент в [progress] — плавная
+  /// оценка по попыткам/времени, индикатор показывается в неопределённом
+  /// режиме и не выдаётся за процент провайдера (R6-audio-robustness-3).
+  final bool indeterminate;
+
   /// Диагностика зависшей задачи (показ в карточке — этап 2):
   /// последние события исполнителя ('create: ...',
-  /// 'poll N (http=X): ...', 'file: <путь>') и путь JSONL-файла.
-  final List<String>? debugSnippets;
+  /// 'poll N (http=X): ...', 'file: ') и путь JSONL-файла.
+  final List? debugSnippets;
 
   /// Путь к debug-файлу задачи; null — диагностика недоступна.
   final String? debugLogPath;
@@ -280,6 +234,7 @@ class PendingPart extends MessagePart {
     this.localPath,
     this.jobId = '',
     this.progress = 0,
+    this.indeterminate = false,
     this.debugSnippets,
     this.debugLogPath,
   });
@@ -308,16 +263,16 @@ class PendingPart extends MessagePart {
 class ErrorPart extends MessagePart {
   final GenError error;
 
-  /// Промпт, на который не удалось получить ответ.
+  /// Промпт, на который не удалось получить ответ (для «Повторить»).
   final String originalPrompt;
 
   /// Параметры повторной попытки (модель, температура и т.п.).
-  final Map<String, dynamic> retryParams;
+  final Map retryParams;
 
   const ErrorPart({
     required this.error,
     this.originalPrompt = '',
-    this.retryParams = const <String, dynamic>{},
+    this.retryParams = const {},
   });
 
   @override

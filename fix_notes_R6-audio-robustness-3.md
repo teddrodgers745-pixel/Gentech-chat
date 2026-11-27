@@ -1,90 +1,19 @@
-# R6-audio-robustness-3 — замечания к исправлению
+# R6-audio-robustness-3 — лечение падшей сборки (heal 1)
 
-## Что было не так (по своду Терры)
+## Что было не так
+Коммит ссылался на компоненты, которых нет в репозитории (не закоммичены):
+- `lib/core/generation/media_status_poller.dart` отсутствует целиком (все ошибки про MediaStatusPoller/PollCancelled/PollTransientFailure);
+- у `GenErrorMapper` нет публичного `fromStatusCode` (исполнители вызывали приватный `_fromStatusCode`);
+- у `ActiveModelController` нет `isCurrentTypeUnsupported`/`currentCatalogType`;
+- у `PendingPart` нет параметра `indeterminate`.
 
-1. **Аудио/служебные типы выглядели как текст**: контроллер возвращал для tts/stt/music
-   ActiveModelKind.text без признака «тип не поддерживается», а экран и отправка не
-   проверяли это — запрос уходил в текстовый чат.
-2. **Публичный опрос `pollMediaJob` оставался отдельным циклом**: после обрезанной
-   попытки `_watch` уже шёл через MediaStatusPoller, но публичный опрос (модель-инструмент)
-   всё ещё крутил собственный `for`-цикл с `continue`, дублируя логику.
-3. **GenProgress.indeterminate и debugSnippets терялись на экране**: `_updateVideoPending`
-   и восстановление (`_onRestoredEvent`) пересоздавали PendingPart без indeterminate/
-   диагностических сниппетов — плавная оценка процента выглядела как реальный процент.
-4. **pubspec содержал 8 зависимостей с `any`** (http, shared_preferences, google_fonts,
-   flutter_markdown_plus, markdown, flutter_highlight, flutter_tts, web_socket_channel).
+## Что поправлено (минимально, причины, не симптомы)
+1. **media_status_poller.dart создан** по фактическому контракту из `async_job_executor.dart`: generic-каркас `MediaStatusPoller<T>` (interval/maxAttempts/maxTransientRetries/backoff/isCancelled/onTransientRetry), исключения `PollCancelled` и `PollTransientFailure` с полем `message`; прочие исключения (GenError и др.) транзитом без повторов — это сохраняет публичный контракт `pollMediaJob` («GenError при 401/403, Exception при остальных неудачах»).
+2. **gen_error_mapper.dart**: добавлена публичная обёртка `fromStatusCode(int code, String body) => _fromStatusCode(code, body)` — логика не дублируется, расхождений нет.
+3. **message_part.dart**: у `PendingPart` добавлено поле `indeterminate` (default false) — все три места конструирования в `chat_screen.dart` теперь компилируются.
+4. **chat_screen.dart**: признак «неподдерживаемый тип каталога» выведен из того же резолва каталога, что и маршрут отправки (`ModelTypeOverrideStore.resolveType`): статический хелпер `_unsupportedCatalogType` (всё, что не text/image/video, считается неподдерживаемым). Заменены вызовы `_activeModel.isCurrentTypeUnsupported` (панель → ModelTypes.unknown) и `_activeModel.currentCatalogType` (текст ошибки в `_send`). TEMP-DIAG-UNMODIFIABLE не тронут.
 
-## Что уже было применено с прошлой (обрезанной) попытки — проверено, не переписывалось
-
-10 файлов из resume-13 применены и полны (последний блок @@@FILE не потребовался:
-media_status_poller.dart уже был целым). Проверено: единый MediaStatusPoller у обоих
-исполнителей; GenErrorMapper.fromStatusCode без поиска кода в тексте; сериализация
-частей с partSchemaVersion=2, UnknownPart/ErrorPart/retryParams; равенства
-TextPart(источники)/PendingPart(прогресс); ActiveJobsStore с очередью _synchronized;
-дисковый кэш каталога с schemaVersion=2 и отпечатком подключения (FNV-1a, ключ не
-хранится) и _fileTagOf в имени файла (_safeId больше не сводит разные id к одному);
-события каталога/пресета во время _resolving накапливаются в _pendingRefresh; кэш
-merged-параметров только по ПОЛНЫМ id; глобального blacklist _unsupportedParamsByModel
-в присланных файлах нет (grep не требуется — он отсутствует в images_api_executor и
-parameter_translator-пути).
-
-## Что доправлено в этой попытке (точечно)
-
-- **pubspec.yaml**: все `any` заменены на проверенные caret-диапазоны (flutter_markdown_plus
-  ^1.0.0 — подтверждённая ветка Foresight Mobile; markdown ^7.2.2; flutter_tts ^4.0.0;
-  web_socket_channel ^3.0.0; flutter_highlight ^0.7.0 и т.д.).
-- **async_job_executor.dart**: `pollMediaJob` переведён на общий MediaStatusPoller
-  (новый `_publicPollAttempt`, контракт колбэков/исключений сохранён: GenError при
-  401/403 через GenErrorMapper.fromStatusCode, Exception при остальных). TEMP-DIAG-UNMODIFIABLE
-  не тронут.
-- **chat_screen.dart**: (а) `_effectiveModelType` отдаёт ModelTypes.unknown для
-  неподдерживаемых типов каталога (панель может показать «неподдерживаемый тип»);
-  (б) `_send` блокирует отправку для неподдерживаемого типа с понятной ошибкой,
-  если пользователь не задал явный override; (в) indeterminate/debugSnippets/debugLogPath
-  доставляются из GenProgress в PendingPart и при восстановлении, и в активной задаче,
-  с сохранением уже накопленной диагностики.
-
-## Чего не хватило в присланных файлах (не редактировалось)
-
-- **features/composer/adaptive_chat_input_bar.dart** — не прислан. Чтобы панель
-  физически рисовала «неподдерживаемый тип» на modelType=ModelTypes.unknown, нужен
-  явный branch там (сейчас вероятно fallback на текстовый вид). Отправка уже
-  заблокирована, так что «вранья текстом» не будет, но визуальную метку добавить там.
-- **services/chat_service.dart** и **parameter_translator.dart** — не присланы; их
-  не трогал (проверка потребителей GenProgress и merged-параметров там невозможна).
-- **widgets/message_view.dart** — не прислан: он рендерит PendingPart и UnknownPart;
-  indeterminate-флаг теперь хранится, но бейдж «в процессе, процент неизвестен» нужно
-  проверить/включить там же.
-
-## Что стоит улучшить рядом (не чиня сейчас)
-
-1. Кэш merged-параметров ключуется полным id, но не подключением: две одноимённые
-   модели разных подключений не перезаписывают друг друга только потому, что активна
-   одна; при мультиподключении стоит добавить connectionId в ключ (нужно снаружи
-   передавать в mergedParamsFor — правка ParameterTranslator).
-2. `cost_estimate`: динамический поиск model_pricing_raw внутри mediaParams оставлен
-   как запасной канал — после аудита всех потребителей (chat_service, артефакты)
-   передавать сырые цены только явно и убрать поиск.
-3. Пересчёт события каталога в _resolveGuarded повторяет весь резолв (двойной проход);
-   можно различать «каталог обновился» и «сменён пресет» и пересчитывать дешевле.
-4. Проценты-оценки (5..92) остаются в Percent-канале при indeterminate=false для
-   старых провайдеров без прогресса — MessageView должен их визуально отличать.
-
-## Как проверить живым тестом
-
-1. **Панель аудио-типа**: выбрать модель с типом tts/stt/music из каталога Polza →
-   панель ввода показывает «неподдерживаемый тип» (ModelTypes.unknown), попытка
-   отправки даёт карточку-ошибку «Модель типа «tts» пока не поддерживается…», запрос
-   НЕ уходит в текстовый чат. Ручной override типа снова разрешает прежний маршрут.
-2. **Кэш подключений**: два пресета с одним адресом и разными ключами → sync обоих →
-   каталог первого не «подменяется» вторым после перезапуска (schemaVersion=2 +
-   отпечаток). Две одноимённые модели не сбрасывают параметры друг друга.
-3. **Видео-задача**: запустить генерацию видео, свернуть/убить приложение, открыть
-   заново → карточка PendingPart восстанавливается с прогрессом, диагностика
-   (debugSnippets, file: путь JSONL) не теряется; при отсутствии процента у провайдера
-   UI не должен показывать точный «процент от сервера».
-4. **Модель-инструмент**: текстовая модель вызывает медиа-инструмент → публичный
-   pollMediaJob идёт по тому же каркасу (в JSONL-логе видео-задачи poll_transient
-   пишется как раньше); 401/403 → AuthError в карточке, не зависание.
-5. **Регрессия**: живые тесты R1–R5 (текст, картинка, видео, пресеты, тулбар) —
-   зелёные; CI: flutter analyze + flutter test + build apk.
+## Замечания / что стоит улучшить рядом
+- **Не хватило файлов**: `active_model_controller.dart` и `widgets/message_view.dart` пришли обрезанными — править их вслепую нельзя. Поэтому: (а) геттеры добавлены на уровне chat_screen, а не в контроллере — стоит перенести в контроллер (единый источник истины), когда придёт полный файл; (б) `_PartPending` в message_view пока не использует `indeterminate` (показывает плавный процент как раньше) — при рендере стоит рисовать неопределённый индикатор, когда `part.indeterminate == true`.
+- Проверить, что `ModelTypeOverrideStore.resolveType` возвращает сырой каталожный тип ('tts', 'stt', 'music'...) для не-чат моделей, а не маскирует в 'text' — иначе блокировка отправки не сработает и нужно чинить в store.
+- В `_watch`/`pollMediaJob` поведение зависит от точной семантики retries исчерпаны → rethrow — покрыто живым тестом после зелёной сборки (пользователь проверяет на телефоне).

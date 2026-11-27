@@ -165,7 +165,7 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_modelType == ModelTypes.image || _modelType == ModelTypes.video) {
       return _modelType;
     }
-    if (_activeModel.isCurrentTypeUnsupported) {
+    if (_unsupportedCatalogType(_modelType)) {
       return ModelTypes.unknown;
     }
     if (_modelType == ModelTypes.text) return _modelType;
@@ -177,6 +177,19 @@ class _ChatScreenState extends State<ChatScreen> {
       default:
         return ModelTypes.text;
     }
+  }
+
+  /// Служебные/аудио типы каталога (tts, stt, music, embedding,
+  /// classification и прочие не-'text/image/video') не поддерживаются
+  /// в чате: панель ввода получает ModelTypes.unknown, отправка
+  /// блокируется с понятной ошибкой (R6-audio-robustness-3, п.1).
+  /// Тип берётся из того же резолва каталога, что и маршрут отправки.
+  static bool _unsupportedCatalogType(String rawType) {
+    final t = rawType.trim().toLowerCase();
+    return t.isNotEmpty &&
+        t != ModelTypes.text &&
+        t != ModelTypes.image &&
+        t != ModelTypes.video;
   }
 
   /// Эффективный тип активной модели ('text'/'image'/'video') для панели
@@ -696,11 +709,10 @@ class _ChatScreenState extends State<ChatScreen> {
     // Без явного ручного override типа отправка блокируется с понятной
     // ошибкой; осознанный override пользователя сохраняет прежнее поведение.
     final manualTypeOverride = await _typeOverrideFor(modelId);
-    if (manualTypeOverride == null &&
-        _activeModel.isCurrentTypeUnsupported) {
+    if (manualTypeOverride == null && _unsupportedCatalogType(genType)) {
       await _addGenErrorBubble(
-        'Модель типа «${_activeModel.currentCatalogType}» пока не '
-        'поддерживается в чате — аудио-режим ещё не реализован.',
+        'Модель типа «$genType» пока не поддерживается в чате — '
+        'аудио-режим ещё не реализован.',
       );
       return;
     }
