@@ -71,6 +71,12 @@ class AsyncJobRecord {
 /// СЕРИАЛИЗОВАНЫ очередью (R6-audio-robustness-2, п.4): параллельные
 /// задачи не теряют обновления друг друга, как это было бы при
 /// независимых «прочитал — изменил — записал» над одним списком.
+///
+/// F1-fix-tests-heal1: [_readAll] возвращает ВЫРАЩИВАЕМЫЙ список
+/// (раньше возвращался const-литерал — неизменяемый): read-modify-write
+/// операции мутируют прочитанный список (add / []= / removeWhere),
+/// и на пустом хранилище save() падал с
+/// «Unsupported operation: Cannot add to an unmodifiable list».
 class ActiveJobsStore {
   ActiveJobsStore._();
 
@@ -99,9 +105,13 @@ class ActiveJobsStore {
     try {
       final p = await SharedPreferences.getInstance();
       final raw = p.getString(_key);
-      if (raw == null || raw.isEmpty) return const <AsyncJobRecord>[];
+      // Пустое хранилище — свежий выращиваемый список (НЕ const):
+      // вызывающий код (save/updateProgress/remove) мутирует его
+      // после чтения. const-список ронял save с
+      // «Cannot add to an unmodifiable list».
+      if (raw == null || raw.isEmpty) return <AsyncJobRecord>[];
       final decoded = jsonDecode(raw);
-      if (decoded is! List) return const <AsyncJobRecord>[];
+      if (decoded is! List) return <AsyncJobRecord>[];
       final out = <AsyncJobRecord>[];
       for (final e in decoded) {
         if (e is! Map) continue;
@@ -113,7 +123,7 @@ class ActiveJobsStore {
       }
       return out;
     } catch (_) {
-      return const <AsyncJobRecord>[];
+      return <AsyncJobRecord>[];
     }
   }
 
