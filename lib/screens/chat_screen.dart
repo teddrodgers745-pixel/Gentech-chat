@@ -1829,8 +1829,22 @@ class _ChatScreenState extends State<ChatScreen> {
           sources: List<String>.of(sources),
         ));
         _addKnownRub(chat, usageCost);
-      } else if (sources.isNotEmpty) {
-        reply.parts.add(TextPart('', sources: List<String>.of(sources)));
+      } else {
+        if (sources.isNotEmpty) {
+          reply.parts.add(TextPart('', sources: List<String>.of(sources)));
+        }
+        // F3-cost-line-3 (п.1): usage отсутствует — строка стоимости
+        // не показывается вовсе, и причина фиксируется в логе, чтобы
+        // живой тест отличал «провайдер не прислал usage» от «строка
+        // скрыта настройкой» либо «строка не отрисована». Если этот
+        // лог печатается на каждом запросе — провайдер не вернул usage
+        // (проверить, что запрос содержит stream_options.include_usage
+        // для стрима и поле usage в JSON-ответе вне стрима).
+        debugPrint(
+          '[cost] usage отсутствует — строка стоимости не показана '
+          '(раундов с usage: ${roundCosts.length}, '
+          'модель: ${cfg.model.trim()}, стрим: ${cfg.stream})',
+        );
       }
     }
     if (err == null &&
@@ -1879,7 +1893,7 @@ class _ChatScreenState extends State<ChatScreen> {
     for (final c in rounds) {
       prompt += c.promptTokens;
       completion += c.completionTokens;
-      // «Суммы нет» — null cost и/или пустая валюта (R6: откат
+      // «Суммы нет» — это null cost и/или пустая валюта (R6: откат
       // non-nullable адаптации, где ноль выдавался за отсутствие данных).
       final sum = c.cost;
       final cur = c.currency.trim().toUpperCase();
