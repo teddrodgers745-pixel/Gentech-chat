@@ -32,7 +32,17 @@
 // не изменён; ChatMessage без const — у него нет const-конструктора
 // (мутабельные поля content/errorCode/...), подтверждено зелёным Analyze
 // теста f5_gallery_media_test.dart с теми же не-const ChatMessage.
+//
+// F5-gallery-image-load-2-heal1: анализатор ругался
+// «Undefined class 'StreamSubscription'» на переопределение listen в
+// _MockHttpClientResponse. Причина — отсутствие импорта dart:async:
+// StreamSubscription живёт в dart:async и НЕ экспортируется через
+// dart:convert, dart:io или flutter/material, на которые опирался тест.
+// Мок HttpClientResponse наследует Stream<List<int>> и обязан вернуть
+// StreamSubscription в listen — тип нужен явно. Исправление минимальное:
+// добавлен import 'dart:async'; логика теста не менялась.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
