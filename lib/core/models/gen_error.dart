@@ -60,9 +60,6 @@ class RateLimited extends GenError {
   final String details;
 
   @override
-  String get code => 'rate_limit';
-
-  @override
   String get message {
     final base = 'Слишком много запросов. Подождите немного и повторите.';
     final wait = retryAfter;
@@ -97,9 +94,6 @@ class ServerError extends GenError {
   final String details;
 
   @override
-  String get code => 'server';
-
-  @override
   String get message {
     final sc = statusCode;
     final prefix = sc != null ? 'Ошибка сервера провайдера ($sc).' : 'Ошибка сервера провайдера.';
@@ -123,7 +117,11 @@ class NetworkError extends GenError {
 }
 
 /// Задача уже создана, но получить её статус не удалось из-за сети.
-/// Запись задачи сохранена и может быть возобновлена без новой оплаты.
+/// Запись задачи сохранена (ActiveJobsStore) и может быть возобновлена
+/// БЕЗ повторной оплаты: «Повторить» продолжает опрос ТОЙ ЖЕ задачи,
+/// а не создаёт новую (F1-retry-resume). Отличайте от фатальных ошибок
+/// (failed/404/фатальный код) — там задача мертва на сервере, и повтор
+/// обязан создавать новую задачу.
 class JobStatusUnknown extends GenError {
   const JobStatusUnknown({this.jobId = '', this.details = ''});
 
@@ -135,8 +133,9 @@ class JobStatusUnknown extends GenError {
 
   @override
   String get message {
-    final base = 'Задача создана, но статус неизвестен. '
-        'Нажмите «Повторить», чтобы продолжить ожидание без новой оплаты.';
+    final base = 'Задача уже создана и продолжает выполняться у провайдера. '
+        'Не удалось получить её статус из-за сети. «Повторить» продолжит '
+        'ожидание той же задачи — без нового списания.';
     return details.trim().isEmpty ? base : '$base $details';
   }
 }

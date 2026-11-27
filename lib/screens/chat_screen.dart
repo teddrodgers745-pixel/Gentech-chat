@@ -1012,8 +1012,21 @@ class _ChatScreenState extends State<ChatScreen> {
             snapshot.jobId = ev.jobId;
           }
         } else if (ev is GenerationFailure) {
-          if (ev.jobId.isNotEmpty && snapshot != null) {
-            snapshot.jobId = ev.jobId;
+          // F1-retry-resume: различаем две принципиально разные ошибки.
+          // 1) Транзиентная сетевая ошибка ОПРОСА (JobStatusUnknown):
+          //    картинка УЖЕ сгенерирована у провайдера, задача жива,
+          //    запись не удалена — «Повторить» продолжает опрос ТОЙ ЖЕ
+          //    задачи (resumeJobId в ImagesApiExecutor пропускает POST)
+          //    без новой генерации и без нового списания.
+          // 2) Фатальная ошибка (failed/404/отмена/ошибка создания):
+          //    задача мертва на сервере — jobId из снимка убираем,
+          //    повтор честно создаёт новую задачу.
+          if (snapshot != null) {
+            if (ev.error is JobStatusUnknown) {
+              if (ev.jobId.isNotEmpty) snapshot.jobId = ev.jobId;
+            } else {
+              snapshot.jobId = '';
+            }
           }
           genError = ev.error;
         }
@@ -1116,6 +1129,11 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Общий путь генерации видео (/v1/media через AsyncJobExecutor,
   /// тот же, что и при обычной отправке; используется и при повторе).
+  ///
+  /// F1-retry-resume: при непустом `snapshot.jobId` повтор НЕ создаёт
+  /// новую задачу — GenerationService.resumeJob возобновляет опрос
+  /// сохранённого jobId (только GET /media/{id}, без POST /v1/media
+  /// и без новой резервации).
   Future<void> _generateVideo({
     required Chat chat,
     required String prompt,
@@ -1153,6 +1171,7 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       final Stream<GenerationEvent> events;
       if (resumeJobId.isNotEmpty) {
+        // Повтор живой задачи: продолжаем опрос ТОГО ЖЕ jobId.
         events = _genService.resumeJob(
           resumeJobId,
           baseUrl: conn.baseUrl,
@@ -1205,8 +1224,21 @@ class _ChatScreenState extends State<ChatScreen> {
                   : VideoPart.fromUrl(ev.remoteUrl),
             );
         } else if (ev is GenerationFailure) {
-          if (ev.jobId.isNotEmpty && snapshot != null) {
-            snapshot.jobId = ev.jobId;
+          // F1-retry-resume: различаем две принципиально разные ошибки.
+          // 1) Транзиентная сетевая ошибка ОПРОСА (JobStatusUnknown):
+          //    задача ЖИВА у провайдера, запись сохранена в ActiveJobsStore
+          //    (restorePendingJobs подхватит её и после перезапуска) —
+          //    jobId остаётся в снимке, «Повторить» продолжит опрос ТОЙ ЖЕ
+          //    задачи без нового POST /v1/media и без новой резервации.
+          // 2) Фатальная ошибка (failed/404/таймаут лимита/отмена):
+          //    задача мертва на сервере, запись удалена — jobId из
+          //    снимка убираем, повтор создаёт новую задачу.
+          if (snapshot != null) {
+            if (ev.error is JobStatusUnknown) {
+              if (ev.jobId.isNotEmpty) snapshot.jobId = ev.jobId;
+            } else if (ev.jobId.isNotEmpty || snapshot.jobId.isNotEmpty) {
+              snapshot.jobId = '';
+            }
           }
           if (ev.error.message.contains('отменена')) {
             cancelled = true;
@@ -1277,7 +1309,7 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  /// Сохраняет файлы из блоков ответа модели.
+  /// Материализует файлы из блоков ответа модели.
   Future<void> _materializeResponseFiles(
     ChatMessage reply,
     String modelId,
@@ -1436,6 +1468,24 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
+    // F1-retry-resume: повтор после сетевой ошибки ОПРОСА возвращается
+    // к ТОЙ ЖЕ задаче. Если jobId в снимке нет (например, приложение было
+    // завершено до первого события прогресса), живая задача ищется в
+    // ActiveJobsStore по модели и промпту. Живая запись означает: задача
+    // создана у провайдера и не завершена/не провалена — повтор
+    // продолжает её опрос, БЕЗ нового POST /v1/media и БЕЗ новой
+    // резервации. Проваленные на сервере задачи из хранилища удаляются
+    // при фатальной ошибке, поэтому повтор честно создаёт новую задачу.
+    if (snap.jobId.trim().isEmpty) {
+      final liveId = await _genService.findLiveJobId(
+        model: snap.modelId,
+        prompt: snap.prompt,
+      );
+      if (liveId != null && liveId.isNotEmpty) {
+        snap.jobId = liveId;
+      }
+    }
+
     final params = Map<String, dynamic>.of(snap.parameters);
     if (route == ModelTypes.video) {
       await _generateVideo(
@@ -1530,7 +1580,7 @@ class _ChatScreenState extends State<ChatScreen> {
         continue;
       }
       if (m.content.isEmpty) continue;
-      msgs.add(<String, dynamic>{'role': m.role, 'content': m.content});
+      msgs.add(<Map<String, dynamic>{'role': m.role, 'content': m.content});
     }
     return msgs;
   }

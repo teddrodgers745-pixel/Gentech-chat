@@ -80,6 +80,11 @@ class _CreateResult {
 /// общим каркасом [MediaStatusPoller] — единым с исполнителем изображений
 /// (R6-audio-robustness-3, п.8); HTTP-коды сводятся к общей типизированной
 /// функции GenErrorMapper.fromStatusCode (расхождение 403/402 устранено).
+///
+/// F1-retry-resume: сетевая ошибка ОПРОСА (DNS/таймаут/обрыв) не убивает
+/// задачу — запись остаётся в [ActiveJobsStore], событие ошибки несёт
+/// jobId как [JobStatusUnknown], и «Повторить» продолжает опрос ТОЙ ЖЕ
+/// задачи без нового POST /media и без новой резервации.
 class AsyncJobExecutor extends GenerationExecutor {
   static const Duration _pollInterval = Duration(seconds: 5);
   static const int _maxAttempts = 150;
@@ -241,7 +246,15 @@ class AsyncJobExecutor extends GenerationExecutor {
           UnknownGenError(details: 'Задача отменена.'),
         );
       } else {
-        yield GenerationFailure(g);
+        // F1-retry-resume: jobId для повтора несёт только транзиентная
+        // сетевая ошибка ОПРОСА (JobStatusUnknown) — задача жива у
+        // провайдера, «Повторить» продолжит её. Фатальные ошибки
+        // (провалена на сервере / отменена / ошибка создания) jobId не
+        // несут: повтор обязан создать НОВУЮ задачу, а не крутить мёртвую.
+        yield GenerationFailure(
+          g,
+          jobId: g is JobStatusUnknown ? g.jobId : '',
+        );
       }
     } on ParameterValidationException catch (e) {
       if (!_cancelled) {

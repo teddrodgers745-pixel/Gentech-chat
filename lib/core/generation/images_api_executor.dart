@@ -128,6 +128,8 @@ class ImagesApiExecutor extends GenerationExecutor {
       String? asyncJobId;
       List<String> sources = <String>[];
       if (resumeId.isNotEmpty) {
+        // F1-retry-resume: повтор после сетевой ошибки опроса НЕ создаёт
+        // новую задачу — POST пропускается, идём сразу к опросу той же.
         asyncJobId = resumeId;
         yield GenProgress(jobId: asyncJobId, percent: 10);
       } else {
@@ -174,7 +176,14 @@ class ImagesApiExecutor extends GenerationExecutor {
             yield GenProgress(jobId: asyncJobId, percent: st.percent);
           }
         } on GenError catch (e) {
-          yield GenerationFailure(e, jobId: asyncJobId);
+          // F1-retry-resume: jobId прикрепляется только к транзиентной
+          // сетевой ошибке ОПРОСА (JobStatusUnknown) — задача жива,
+          // повтор продолжит её опрос. Фатальные ошибки jobId не несут:
+          // проваленная на сервере задача повторяется новой.
+          yield GenerationFailure(
+            e,
+            jobId: e is JobStatusUnknown ? e.jobId : '',
+          );
           return;
         }
       }
@@ -275,6 +284,8 @@ class ImagesApiExecutor extends GenerationExecutor {
     } on PollCancelled {
       return;
     } on PollTransientFailure catch (e) {
+      // F1-retry-resume: сеть недоступна — задача жива у провайдера,
+      // это транзиентная ошибка, а не провал задачи.
       throw JobStatusUnknown(
         jobId: jobId,
         details: 'Не удалось получить статус: ${e.message}',

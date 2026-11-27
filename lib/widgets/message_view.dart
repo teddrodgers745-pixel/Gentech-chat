@@ -1,9 +1,11 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/painting.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
@@ -627,12 +629,9 @@ class _MarkdownImage extends StatelessWidget {
             errorBuilder: (_, __, ___) => _placeholder(p),
           );
         } else {
-          image = Image.network(
-            uri.toString(),
-            width: double.infinity,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => _placeholder(p),
-          );
+          // F1-retry-resume: сетевые URL грузятся с повторной загрузкой
+          // (DNS/таймаут — временно), а НЕ с новой генерацией.
+          image = _RetryableNetworkImage(url: uri.toString(), p: p);
         }
         final src = uri.toString();
         return Padding(
@@ -733,12 +732,10 @@ class _PartImage extends StatelessWidget {
       return _fallback;
     }
     if (url.isEmpty) return _fallback;
-    return Image.network(
-      url,
-      width: double.infinity,
-      fit: BoxFit.cover,
-      errorBuilder: (_, __, ___) => _fallback,
-    );
+    // F1-retry-resume: ссылка на картинку может быть временно
+    // недоступна (DNS/таймаут) — повторная ЗАГРУЗКА того же URL
+    // с нарастающей паузой, а не новая генерация.
+    return _RetryableNetworkImage(url: url, p: p);
   }
 
   Widget get _fallback => Padding(
@@ -749,6 +746,106 @@ class _PartImage extends StatelessWidget {
           style: TextStyle(color: p.muted, fontSize: 13),
         ),
       );
+}
+
+/// Сетевое изображение с повторной ЗАГРУЗКОЙ (F1-retry-resume, п.3):
+/// опрос задачи завершился (completed), но сам URL картинки временно
+/// недоступен (DNS/таймаут/обрыв). Карточка НЕ запускает новую генерацию —
+/// только повторную загрузку ТОГО ЖЕ URL с нарастающей паузой
+/// (2/4/8/15/30/60/120 секунд) и кнопкой ручного повтора. Когда сеть
+/// восстанавливается, картинка появляется сама — без нового списания.
+class _RetryableNetworkImage extends StatefulWidget {
+  final String url;
+  final Palette p;
+
+  const _RetryableNetworkImage({required this.url, required this.p});
+
+  @override
+  State<_RetryableNetworkImage> createState() =>
+      _RetryableNetworkImageState();
+}
+
+class _RetryableNetworkImageState extends State<_RetryableNetworkImage> {
+  static const List<Duration> _backoff = <Duration>[
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+    Duration(seconds: 8),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+    Duration(seconds: 60),
+    Duration(seconds: 120),
+  ];
+
+  int _attempt = 0;
+  bool _scheduled = false;
+  Timer? _timer;
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  void _retry() {
+    _timer?.cancel();
+    _scheduled = false;
+    // Кэш изображений мог запомнить неудачную загрузку: выталкиваем
+    // запись, чтобы повтор действительно пошёл в сеть.
+    try {
+      PaintingBinding.instance.imageCache.evict(NetworkImage(widget.url));
+    } catch (_) {}
+    if (mounted) setState(() => _attempt++);
+  }
+
+  /// Планирует автоматический повтор; вызывается из errorBuilder
+  /// (фаза build), поэтому только таймер — без setState.
+  void _scheduleAutoRetry() {
+    if (_scheduled) return;
+    _scheduled = true;
+    final delay = _backoff[_attempt.clamp(0, _backoff.length - 1)];
+    _timer = Timer(delay, _retry);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = widget.p;
+    return Image.network(
+      // Уникальный ключ попытки: после повтора виджет пересоздаётся
+      // и загрузка идёт заново.
+      widget.url,
+      key: ValueKey('${widget.url}#$_attempt'),
+      width: double.infinity,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) {
+        _scheduleAutoRetry();
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Не удалось загрузить изображение',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: p.muted, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                onPressed: _retry,
+                icon: const Icon(Icons.refresh_rounded, size: 16),
+                label: const Text('Повторить загрузку'),
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 34),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
+                  visualDensity: VisualDensity.compact,
+                  textStyle: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 }
 
 /// Оверлей-кнопки изображения в чате: «Скачать» (share_plus: системный

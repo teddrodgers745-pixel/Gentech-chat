@@ -116,6 +116,33 @@ class GenerationService {
     }
   }
 
+  /// Ищет живую (сохранённую в [ActiveJobsStore]) видео-задачу по модели
+  /// и промпту — F1-retry-resume. Повтор после сетевой ошибки ОПРОСА
+  /// должен возобновить опрос той же задачи, а не создавать новую с
+  /// новой резервацией; если jobId по какой-то причине не попал в снимок
+  /// (приложение завершено до первого события прогресса), живая задача
+  /// находится здесь. Проваленные на сервере задачи из хранилища
+  /// удаляются при фатальной ошибке — живой записи не остается, и
+  /// повтор честно создаёт новую задачу. null — задачи не найдено.
+  Future<String?> findLiveJobId({
+    required String model,
+    required String prompt,
+  }) async {
+    final m = model.trim();
+    final p = prompt.trim();
+    if (m.isEmpty || p.isEmpty) return null;
+    try {
+      final jobs = await ActiveJobsStore.instance.loadAll();
+      for (final r in jobs) {
+        if (r.model.trim() == m && r.prompt.trim() == p) {
+          final id = r.jobId.trim();
+          if (id.isNotEmpty) return id;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   /// Возобновляет ранее созданную задачу по её jobId. Если запись
   /// отсутствует в ActiveJobsStore, используется переданный fallback.
   Stream<GenerationEvent> resumeJob(
