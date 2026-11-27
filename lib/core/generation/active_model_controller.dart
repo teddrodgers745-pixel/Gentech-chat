@@ -239,7 +239,11 @@ class ActiveModelController extends ChangeNotifier {
           (clean != null && clean.isNotEmpty) ? clean : null;
     }
     if (quality != null || clearNulls) {
-      _selectedQuality = (clean != null && clean.isNotEmpty) ? clean : null;
+      // R6-leftover-6-heal1: в блоке quality локальная clean не была
+      // объявлена (осталась от шаблона двух других блоков) — фикс.
+      final clean = quality?.trim();
+      _selectedQuality =
+          (clean != null && clean.isNotEmpty) ? clean : null;
     }
   }
 

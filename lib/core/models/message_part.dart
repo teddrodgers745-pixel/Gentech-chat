@@ -17,16 +17,11 @@ sealed class MessagePart {
 /// Данные приходят из статистики использования (usage) провайдера,
 /// которую ChatService отдаёт в [StreamChunk.usage] при стриминге
 /// (stream_options.include_usage) и в непотоковом ответе.
-///
-/// ПОЛУоткрытый контракт суммы: [cost] непустой (double) — «суммы нет»
-/// выражается пустой строкой [currency] (см. GenErrorMapper-агрегаторы),
-/// а не null. Сумма и валюта всегда движутся парой.
 class MessageCost {
   /// Стоимость ответа в валюте [currency].
   final double cost;
 
-  /// Код валюты ('USD', 'RUB' ...). Пустая строка — суммы нет
-  /// (остаются только счётчики токенов).
+  /// Код валюты ('USD', 'RUB' ...).
   final String currency;
 
   /// Токены входа (промпт).
@@ -45,7 +40,7 @@ class MessageCost {
   /// Символ валюты для интерфейса.
   String get symbol => currency.trim().toUpperCase() == 'RUB' ? '₽' : r'$';
 
-  /// Сумма в формате интерфейса: '0,42 ₽' (запятая как десятичный
+  /// Сумма в формате интерфейса: '0,42 ₽' (запятая как десятичная
   /// разделитель, как принято в русском тексте).
   String get formatted {
     final s = cost.toStringAsFixed(2);
@@ -74,7 +69,7 @@ class MessageCost {
   /// Если присутствует cost_rub, это фактическая сумма в рублях и она
   /// имеет приоритет над cost/total_cost. Для ответов без cost_rub
   /// сохраняется прежний порядок разбора и прежнее поведение.
-  static MessageCost? fromUsage(Map<String, dynamic>? usage) {
+  static MessageCost? fromUsage(Map? usage) {
     final u = usage;
     if (u == null) return null;
     final costRub = _num(u['cost_rub']);
@@ -221,6 +216,12 @@ class PendingPart extends MessagePart {
   /// Прогресс задачи в процентах (0..100).
   final double progress;
 
+  /// true — провайдер не сообщил числовой прогресс, но задача «в
+  /// процессе»: интерфейс должен показывать неопределённую индикацию,
+  /// а не выдуманный процент (R6, п.8). По умолчанию false — процент
+  /// известен и лежит в [progress].
+  final bool indeterminate;
+
   /// Диагностика зависшей задачи (показ в карточке — этап 2):
   /// последние события исполнителя ('create: ...',
   /// 'poll N (http=X): ...', 'file: ') и путь JSONL-файла.
@@ -234,6 +235,7 @@ class PendingPart extends MessagePart {
     this.localPath,
     this.jobId = '',
     this.progress = 0,
+    this.indeterminate = false,
     this.debugSnippets,
     this.debugLogPath,
   });
@@ -281,19 +283,32 @@ class ErrorPart extends MessagePart {
   String toString() => 'ErrorPart(${error.code})';
 }
 
-/// Медиа-результат модели-инструмента (image/video) до материализации
-/// в чате: ссылка (https/data) либо локальный путь и род носителя.
-/// Постоянное место типа — здесь, рядом с [MessagePart]; файл
-/// core/models/tool_media.dart реэкспортирует [ToolMedia] («TEMP-SHIM»),
-/// чтобы существующие импорты продолжали работать. НЕ является
-/// [MessagePart]: потребитель (чат-сцена) превращает его в
-/// [ImagePart]/[VideoPart] в том же ответе.
-class ToolMedia {
-  /// Ссылка либо локальный путь к медиа-файлу.
-  final String url;
-
-  /// Род носителя: 'image' либо 'video'.
+/// Часть неизвестного приложению типа: встречается при чтении истории,
+/// записанной более новой версией приложения (partSchemaVersion выше
+/// текущей), либо содержащей незнакомый тип части. Метка типа ([kind])
+/// и сырые данные ([raw]) сохраняются при повторной сериализации —
+/// часть не превращается в пустой текст и не теряется (R6, п.7).
+///
+/// Наследует [TextPart] с пустым текстом НАМЕРЕННО:sealed-иерархия
+/// [MessagePart] требует, чтобы исчерпывающие switch по частям
+/// (например, MessageView._partsWidgets) оставались валидными без
+/// правок; подтип TextPart покрывается веткой `case TextPart(): break;`
+/// и не рендерится в ленте — как и пустой текст. Если позже UnknownPart
+/// станет отдельным листом иерархии, ВСЕ такие switch нужно дополнить
+/// явной веткой UnknownPart.
+class UnknownPart extends TextPart {
+  /// Метка исходного типа части ('audio', 'video_url', ...).
   final String kind;
 
-  const ToolMedia({required this.url, this.kind = 'image'});
+  /// Сырые данные части в том виде, как они были сохранены.
+  final Map<String, dynamic> raw;
+
+  const UnknownPart({this.kind = '', this.raw = const <String, dynamic>{}})
+      : super('');
+
+  @override
+  String get label => kind.isEmpty ? 'неизвестная часть' : 'неизвестная часть: $kind';
+
+  @override
+  String toString() => 'UnknownPart($kind)';
 }

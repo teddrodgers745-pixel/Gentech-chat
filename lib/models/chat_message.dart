@@ -187,8 +187,20 @@ class ChatMessage {
 /// Версионирование: каждая запись сообщения несёт partSchemaVersion
 /// (см. [ChatMessage.toJson]). Неизвестная часть сохраняется как
 /// {'type': 'unknown', ...} и НЕ превращается в пустой текст.
+///
+/// Порядок проверок важен: ветка UnknownPart идёт ПЕРЕД TextPart,
+/// потому что UnknownPart наследует TextPart (пустой текст) — без
+/// переноса неизвестные части сериализовались бы как пустой текст и
+/// теряли kind/raw (R6, п.7).
 Map<String, dynamic> _encodePart(MessagePart part) {
   final p = part;
+  if (p is UnknownPart) {
+    return <String, dynamic>{
+      'type': 'unknown',
+      'kind': p.kind,
+      'raw': p.raw,
+    };
+  }
   if (p is TextPart) {
     return <String, dynamic>{
       'type': 'text',
@@ -232,13 +244,6 @@ Map<String, dynamic> _encodePart(MessagePart part) {
       'details': GenErrorMapper.detailsOf(p.error),
       'prompt': p.originalPrompt,
       if (p.retryParams.isNotEmpty) 'retryParams': p.retryParams,
-    };
-  }
-  if (p is UnknownPart) {
-    return <String, dynamic>{
-      'type': 'unknown',
-      'kind': p.kind,
-      'raw': p.raw,
     };
   }
   // Любая новая часть, незнакомая этой версии сериализации, сохраняется
