@@ -33,7 +33,7 @@ void main() {
         id: 'm1',
         role: 'assistant',
         parts: <MessagePart>[
-          ImagePart.fromPath('/storage/emulated/0/GenTech/img_a.png'),
+          const ImagePart.fromPath('/storage/emulated/0/GenTech/img_a.png'),
         ],
       ));
       // Markdown-ссылка на материализованный файл — путь ImagesApiExecutor.
@@ -46,7 +46,7 @@ void main() {
         id: 'm3',
         role: 'assistant',
         parts: <MessagePart>[
-          VideoPart.fromUrl('https://cdn.example.com/v.mp4'),
+          const VideoPart.fromUrl('https://cdn.example.com/v.mp4'),
         ],
       ));
       // НЕ медиа: текст, источники, ожидающая задача, сообщение пользователя.
@@ -55,8 +55,8 @@ void main() {
         role: 'assistant',
         content: 'Обычный текст',
         parts: <MessagePart>[
-          TextPart('', sources: <String>['https://example.com']),
-          PendingPart(name: 'Генерация видео', jobId: 'job-1'),
+          const TextPart('', sources: <String>['https://example.com']),
+          const PendingPart(name: 'Генерация видео', jobId: 'job-1'),
         ],
       ));
       chat.messages.add(ChatMessage(
@@ -93,7 +93,7 @@ void main() {
         id: 'a2',
         role: 'assistant',
         parts: <MessagePart>[
-          ImagePart.fromUrl('https://cdn.example.com/i.png'),
+          const ImagePart.fromUrl('https://cdn.example.com/i.png'),
         ],
       ));
       chat.messages.add(ChatMessage(
@@ -118,7 +118,7 @@ void main() {
         id: 'o1',
         role: 'assistant',
         parts: <MessagePart>[
-          ImagePart.fromUrl('https://cdn.example.com/old.png'),
+          const ImagePart.fromUrl('https://cdn.example.com/old.png'),
         ],
       ));
       final newer = store.createChat();
@@ -127,7 +127,7 @@ void main() {
         id: 'n1',
         role: 'assistant',
         parts: <MessagePart>[
-          ImagePart.fromUrl('https://cdn.example.com/new.png'),
+          const ImagePart.fromUrl('https://cdn.example.com/new.png'),
         ],
       ));
 

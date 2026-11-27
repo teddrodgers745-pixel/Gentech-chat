@@ -17,6 +17,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+// F5-gallery-image-load-heal1: импорт сохранён по правилам проекта
+// (не удалять существующие импорты). Сервисы (MethodChannel/мок
+// path_provider) в этом тесте не используются — он не мокает платформенные
+// каналы, в отличие от f1_retry_resume_test.dart, откуда импорт был скопирован.
+// ignore: unused_import
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gentech_chat/core/models/message_part.dart';
