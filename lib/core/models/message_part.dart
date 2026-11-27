@@ -17,11 +17,16 @@ sealed class MessagePart {
 /// Данные приходят из статистики использования (usage) провайдера,
 /// которую ChatService отдаёт в [StreamChunk.usage] при стриминге
 /// (stream_options.include_usage) и в непотоковом ответе.
+///
+/// ПОЛУоткрытый контракт суммы: [cost] непустой (double) — «суммы нет»
+/// выражается пустой строкой [currency] (см. GenErrorMapper-агрегаторы),
+/// а не null. Сумма и валюта всегда движутся парой.
 class MessageCost {
   /// Стоимость ответа в валюте [currency].
   final double cost;
 
-  /// Код валюты ('USD', 'RUB' ...).
+  /// Код валюты ('USD', 'RUB' ...). Пустая строка — суммы нет
+  /// (остаются только счётчики токенов).
   final String currency;
 
   /// Токены входа (промпт).
@@ -50,7 +55,7 @@ class MessageCost {
   /// Всего токенов (вход + выход).
   int get totalTokens => promptTokens + completionTokens;
 
-  Map toJson() => {
+  Map<String, dynamic> toJson() => {
         'cost': cost,
         'currency': currency,
         'promptTokens': promptTokens,
@@ -69,7 +74,7 @@ class MessageCost {
   /// Если присутствует cost_rub, это фактическая сумма в рублях и она
   /// имеет приоритет над cost/total_cost. Для ответов без cost_rub
   /// сохраняется прежний порядок разбора и прежнее поведение.
-  static MessageCost? fromUsage(Map? usage) {
+  static MessageCost? fromUsage(Map<String, dynamic>? usage) {
     final u = usage;
     if (u == null) return null;
     final costRub = _num(u['cost_rub']);
@@ -103,7 +108,7 @@ class TextPart extends MessagePart {
 
   /// Ссылки-источники из ответа провайдера (citations/annotations).
   /// Пустой список — источников нет.
-  final List sources;
+  final List<String> sources;
 
   const TextPart(this.text, {this.cost, this.sources = const []});
 
@@ -216,15 +221,10 @@ class PendingPart extends MessagePart {
   /// Прогресс задачи в процентах (0..100).
   final double progress;
 
-  /// Провайдер не сообщает прогресс: процент в [progress] — плавная
-  /// оценка по попыткам/времени, индикатор показывается в неопределённом
-  /// режиме и не выдаётся за процент провайдера (R6-audio-robustness-3).
-  final bool indeterminate;
-
   /// Диагностика зависшей задачи (показ в карточке — этап 2):
   /// последние события исполнителя ('create: ...',
   /// 'poll N (http=X): ...', 'file: ') и путь JSONL-файла.
-  final List? debugSnippets;
+  final List<String>? debugSnippets;
 
   /// Путь к debug-файлу задачи; null — диагностика недоступна.
   final String? debugLogPath;
@@ -234,7 +234,6 @@ class PendingPart extends MessagePart {
     this.localPath,
     this.jobId = '',
     this.progress = 0,
-    this.indeterminate = false,
     this.debugSnippets,
     this.debugLogPath,
   });
@@ -267,7 +266,7 @@ class ErrorPart extends MessagePart {
   final String originalPrompt;
 
   /// Параметры повторной попытки (модель, температура и т.п.).
-  final Map retryParams;
+  final Map<String, dynamic> retryParams;
 
   const ErrorPart({
     required this.error,
@@ -280,4 +279,21 @@ class ErrorPart extends MessagePart {
 
   @override
   String toString() => 'ErrorPart(${error.code})';
+}
+
+/// Медиа-результат модели-инструмента (image/video) до материализации
+/// в чате: ссылка (https/data) либо локальный путь и род носителя.
+/// Постоянное место типа — здесь, рядом с [MessagePart]; файл
+/// core/models/tool_media.dart реэкспортирует [ToolMedia] («TEMP-SHIM»),
+/// чтобы существующие импорты продолжали работать. НЕ является
+/// [MessagePart]: потребитель (чат-сцена) превращает его в
+/// [ImagePart]/[VideoPart] в том же ответе.
+class ToolMedia {
+  /// Ссылка либо локальный путь к медиа-файлу.
+  final String url;
+
+  /// Род носителя: 'image' либо 'video'.
+  final String kind;
+
+  const ToolMedia({required this.url, this.kind = 'image'});
 }

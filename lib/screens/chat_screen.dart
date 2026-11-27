@@ -601,8 +601,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (!mounted) return;
       _snack(e.message);
     } catch (_) {
-      if (!mounted) return;
-      _snack('Не удалось запустить голосовой ввод');
+      if (mounted) _snack('Не удалось запустить голосовой ввод');
     }
   }
 
@@ -1783,8 +1782,10 @@ class _ChatScreenState extends State<ChatScreen> {
   /// сумму: неизвестная сумма или сумма в чужой валюте не прибавляется
   /// и не переводится наугад фиксированным курсом.
   static void _addKnownRub(Chat chat, MessageCost cost) {
+    // MessageCost.cost непустой (double): «суммы нет» выражается пустой
+    // валютой (см. _sumRoundCosts), сравнение с null недостижимо.
     final amount = cost.cost;
-    if (amount == null || !amount.isFinite) return;
+    if (!amount.isFinite) return;
     if (cost.currency.trim().toUpperCase() != 'RUB') return;
     chat.totalCost += amount;
   }
@@ -1803,9 +1804,11 @@ class _ChatScreenState extends State<ChatScreen> {
     for (final c in rounds) {
       prompt += c.promptTokens;
       completion += c.completionTokens;
+      // MessageCost.cost непустой (double): «суммы нет» — пустая валюта,
+      // а не null. Раунд без валюты в итоговую сумму не входит.
       final sum = c.cost;
       final cur = c.currency.trim().toUpperCase();
-      if (sum == null || cur.isEmpty) continue;
+      if (cur.isEmpty) continue;
       if (currency.isEmpty) {
         currency = cur;
         amount = sum;
@@ -1816,15 +1819,17 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     if (conflicting) {
+      // Суммы противоречат друг другу: итоговую сумму не выдумываем,
+      // валюту опускаем (пустая строка) — остаются только токены.
       return MessageCost(
-        cost: null,
+        cost: 0,
         currency: '',
         promptTokens: prompt,
         completionTokens: completion,
       );
     }
     return MessageCost(
-      cost: amount,
+      cost: amount ?? 0,
       currency: currency,
       promptTokens: prompt,
       completionTokens: completion,

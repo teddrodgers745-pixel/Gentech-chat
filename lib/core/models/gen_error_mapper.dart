@@ -183,6 +183,9 @@ abstract final class GenErrorMapper {
   }
 
   /// Сырые детали из любого [GenError] (для сохранения в ChatMessage).
+  /// Исчерпывающий switch по sealed-типу: каждый новый подтип GenError
+  /// обязан появиться здесь (R6-audio-robustness-3: добавлен
+  /// JobStatusUnknown).
   static String detailsOf(GenError e) => switch (e) {
         AuthError(:final details) => details,
         InsufficientFunds(:final details) => details,
@@ -193,6 +196,7 @@ abstract final class GenErrorMapper {
         JobTimeout(:final details) => details,
         NetworkError(:final details) => details,
         BadRequestError(:final details) => details,
+        JobStatusUnknown(:final details) => details,
         UnknownGenError(:final details) => details,
       };
 

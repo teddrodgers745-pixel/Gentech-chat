@@ -11,6 +11,7 @@ import '../app_state.dart';
 import '../core/auth/polza_auth_service.dart';
 import '../core/generation/search_capability_resolver.dart';
 import '../core/models/message_part.dart' show ToolMedia;
+// ignore: unused_import
 import '../core/models/tool_media.dart';
 import '../core/providers/heuristic_rules.dart';
 import '../core/providers/model_catalog_adapter.dart';

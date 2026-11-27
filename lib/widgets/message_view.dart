@@ -194,7 +194,8 @@ class MessageView extends StatelessWidget {
   /// в частях сообщения есть TextPart с MessageCost (приходит из usage
   /// провайдера) и генерация уже завершена. Известная сумма показывается
   /// с её фактической валютой (MessageCost.formatted, без округления);
-  /// сумма без валюты и валюта без суммы не подменяются — остаются
+  /// сумма без валюты (пустая [MessageCost.currency] — противоречивые
+  /// раунды не складываются) и валюта без суммы не подменяются — остаются
   /// только счётчики токенов, без выдуманной суммы.
   List<Widget> _costWidgets(Palette p) {
     if (streaming) return const <Widget>[];
@@ -203,9 +204,10 @@ class MessageView extends StatelessWidget {
     for (final part in message.parts) {
       if (part is TextPart && part.cost != null) {
         final c = part.cost!;
-        final amount = c.cost;
+        // MessageCost.cost непустой (double): «суммы нет» выражается
+        // пустой валютой, а не null — сравнение с null недостижимо.
         final currency = c.currency.trim();
-        final known = amount != null && currency.isNotEmpty;
+        final known = currency.isNotEmpty;
         final tokens = c.totalTokens;
         final String text;
         if (known) {
