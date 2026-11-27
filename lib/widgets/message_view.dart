@@ -935,7 +935,15 @@ class _RetryableNetworkImage extends StatefulWidget {
   final String url;
   final Palette p;
 
-  const _RetryableNetworkImage({required this.url, required this.p});
+  /// Режим вписывания: cover — как в чате (по умолчанию), contain —
+  /// в полноэкранном просмотре (F5-image-load).
+  final BoxFit fit;
+
+  const _RetryableNetworkImage({
+    required this.url,
+    required this.p,
+    this.fit = BoxFit.cover,
+  });
 
   @override
   State<_RetryableNetworkImage> createState() =>
@@ -992,7 +1000,7 @@ class _RetryableNetworkImageState extends State<_RetryableNetworkImage> {
       widget.url,
       key: ValueKey('${widget.url}#$_attempt'),
       width: double.infinity,
-      fit: BoxFit.cover,
+      fit: widget.fit,
       errorBuilder: (_, __, ___) {
         _scheduleAutoRetry();
         return Padding(
@@ -1135,7 +1143,14 @@ Widget _buildFullscreenImageWidget(String s) {
     }
   }
   if (s.startsWith('http://') || s.startsWith('https://')) {
-    return Image.network(s, fit: BoxFit.contain);
+    // F5-image-load: полноэкранный просмотр тоже использует повторную
+    // ЗАГРУЗКУ того же URL (_RetryableNetworkImage из F1), а не новую
+    // генерацию — без дублирования логики повтора.
+    return _RetryableNetworkImage(
+      url: s,
+      p: settings.palette,
+      fit: BoxFit.contain,
+    );
   }
   final path = s.startsWith('file://')
       ? Uri.parse(s).toFilePath()
