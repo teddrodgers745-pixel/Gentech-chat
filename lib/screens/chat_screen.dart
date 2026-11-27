@@ -43,6 +43,12 @@ import '../core/models/generation_schema.dart';
 import '../core/models/param_spec.dart';
 import '../features/composer/modes/image_gen_mode.dart';
 import '../core/utils/reasoning_mapper.dart';
+// F4-markdown-root: StreamPacer больше не используется в этом файле —
+// пейсинг целиком живёт внутри ChatService._pacedStream, а слушатель
+// onPaced (перезапись reply.content из pacer.displayed) удалён как корень
+// гонки. Импорт сохранён по правилам проекта (не удалять существующие
+// импорты).
+// ignore: unused_import
 import '../core/utils/stream_pacer.dart';
 import '../services/chat_service.dart';
 import '../services/speech_service.dart';
@@ -1855,15 +1861,23 @@ class _ChatScreenState extends State<ChatScreen> {
     // несколько (вызовы инструментов), итог собирается из всех.
     final roundCosts = <MessageCost>[];
     final sources = <String>[];
-    StreamPacer? pacer;
-    void onPaced() {
-      if (!mounted) return;
-      final shown = pacer?.shown ?? '';
-      if (shown.length > reply.content.length) {
-        reply.content = shown;
-        _scheduleUi();
-      }
-    }
+    // F4-markdown-root: слушатель onPaced (перезапись reply.content из
+    // pacer.displayed) и подписка pacer?.displayed.addListener(onPaced)
+    // удалены — это был КОРЕНЬ потери/дублирования пар `**`. Взаимодействие
+    // было таким: ChatService._pacedStream сам пропускает каждый
+    // chunk.content через pacer.add(...) и выдаёт наружу ТОЛЬКО порции
+    // pacer.onTick (2-3 символа) и остаток pacer.flush() в onDone. При
+    // этом Ticker пейсера на очередном кадре синхронно обновлял displayed
+    // и выполнял onPaced: reply.content = pacer.shown. Чанк-порция,
+    // положенная в StreamController в тот же момент, доезжала до цикла
+    // await for ниже на следующем микротаске и конкатенировалась
+    // (reply.content += ch.content) — длина становилась БОЛЬШЕ pacer.shown,
+    // условие `shown.length > reply.content.length` переставало
+    // срабатывать, и на стыках куски текста (порции по 2-3 символа —
+    // как раз половинки `**слово**`) дублировались или рассинхронизировались.
+    // Теперь единственный источник reply.content — цикл await for ниже:
+    // контент собирается строго последовательно из StreamChunk (порции
+    // пейсера + flush-остаток), без гонки между Ticker и контроллером.
 
     try {
       final tools = await _activeTools();
@@ -1877,10 +1891,6 @@ class _ChatScreenState extends State<ChatScreen> {
         reasoningEffort: reasoningEffort,
         tools: tools,
       )) {
-        if (pacer == null) {
-          pacer = _chatService.activePacer;
-          pacer?.displayed.addListener(onPaced);
-        }
         if (ch.toolName != null) {
           final jobId = (ch.toolJobId ?? '').trim();
           if (ch.toolStatus == toolStatusRunning) {
@@ -1934,7 +1944,6 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       if (!_chatService.wasCancelled) genError = GenErrorMapper.fromException(e);
     }
-    pacer?.displayed.removeListener(onPaced);
 
     _uiTimer?.cancel();
     _uiTimer = null;
