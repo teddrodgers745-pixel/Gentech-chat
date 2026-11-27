@@ -7,7 +7,22 @@ import 'package:flutter/material.dart';
 import '../app_state.dart';
 import '../core/search/search_strategy.dart';
 import '../core/storage.dart';
+// F2-settings-probe: авто-проба legacy-инструмента web_search ИСКЛЮЧЕНА
+// из секции «ПОИСК» — она гейтила режим «Провайдер» поддержкой legacy-
+// инструмента {'type': 'web_search'}, что противоречит контракту F2:
+// polza:web_search — серверный инструмент Polza, независимый от нативного
+// поиска модели (и от её поддержки вызова функций: для моделей без
+// function calling Polza выполняет поиск как плагин web ДО обращения
+// к модели — docs/gaidy/server-tools.md). Поэтому красный баннер
+// «Текущая модель не поддерживает поиск» и кнопка «Повторить» в режиме
+// «Провайдер» удалены вместе с пробой.
+// Импорт сохранён по правилам проекта (не удалять существующие импорты).
+// ignore: unused_import
 import '../services/search_probe.dart';
+// F2-settings-probe: ОДНО правило настроек и чата — эффективный режим
+// поиска считает ChatService.effectiveSearchMode (тот же вызов, что
+// использует ChatService._roundOnce при сборке тела запроса).
+import '../services/chat_service.dart';
 import '../theme.dart';
 import '../ui/screens/tools_screen.dart';
 
@@ -15,13 +30,16 @@ import '../ui/screens/tools_screen.dart';
 /// (Выключен / Нативный / Провайдер / Инструмент) и динамическая область
 /// под списком (SearchModeDetailView):
 ///  - off — ничего не показывается;
-///  - native — пояснение «настройки не требуются»;
+///  - native — правило ОДНО с чатом: эффективный режим считает
+///    ChatService.effectiveSearchMode. Если «нативный» у модели без
+///    нативного поиска переводится в «провайдер», показывается
+///    спокойная информационная подпись (НЕ красная ошибка);
+///  - provider — серверный поиск провайдера (для Polza — polza:web_search):
+///    работает независимо от нативного поиска модели, поэтому НИКАКИХ
+///    проб и баннеров — спокойное пояснение;
 ///  - modelAsTool — кнопка «⚙️ Настроить инструмент поиска»
 ///    (переход на экран инструментов) плюс выбор модели-инструмента;
-///  - provider — auto-ping: при выборе режима автоматически выполняется
-///    лёгкий probe-запрос (tools: [{'type': 'web_search'}]); ответ 200 —
-///    зелёный баннер с иконкой обновления, ответ 400 — красный баннер
-///    с кнопкой «Повторить».
+///  - customApi — ключ пользовательского поискового API.
 /// Все значения сохраняются в SharedPreferences через [AppSettings].
 class SearchSettingsSection extends StatefulWidget {
   const SearchSettingsSection({super.key});
@@ -31,30 +49,17 @@ class SearchSettingsSection extends StatefulWidget {
       _SearchSettingsSectionState();
 }
 
-/// Состояние авто-проверки поддержки веб-поиска (режим «Провайдер»).
-enum _ProbeState { idle, checking, supported, unsupported, error }
-
 class _SearchSettingsSectionState extends State<SearchSettingsSection> {
-  static const Color _green = Color(0xFF2E7D32);
-  static const Color _red = Color(0xFFB3261E);
-
   late final TextEditingController _apiKey;
   late final TextEditingController _toolModel;
   Timer? _debounce;
   bool _showKey = false;
 
-  /// Состояние авто-проверки поддержки веб-поиска.
-  _ProbeState _probeState = _ProbeState.idle;
-
-  /// Текст проблемы последней проверки (нет подключения, сбой сети);
-  /// null — проблемы нет.
-  String? _probeError;
-
   /// Идентификаторы моделей из инструментов типа «модель»
   /// (Tool.typeModel) — кандидаты для роли модели-инструмента.
   List<String> _toolModels = const <String>[];
 
-  /// Режимы выпадающего списка: ровно четыре варианта из задания.
+  /// Режимы выпадающего списка: четыре варианта из задания.
   static const List<SearchMode> _modes = <SearchMode>[
     SearchMode.off,
     SearchMode.native,
@@ -68,11 +73,6 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
     _apiKey = TextEditingController(text: settings.customSearchApiKey);
     _toolModel = TextEditingController(text: settings.searchToolModel);
     _loadToolModels();
-    // Auto-ping: режим «Провайдер» уже выбран при открытии настроек —
-    // проверка поддержки запускается автоматически.
-    if (SearchModes.fromId(settings.searchMode) == SearchMode.provider) {
-      unawaited(_runProbe());
-    }
   }
 
   @override
@@ -117,66 +117,13 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
         SearchMode.customApi => 'Свой API',
       };
 
-  /// Auto-ping: лёгкая проверка поддержки серверного веб-поиска
-  /// (POST /chat/completions с tools: [{'type': 'web_search'}]).
-  /// 200 -> «Провайдер поддерживает веб-поиск», 400 -> «не поддерживает».
-  /// Итог сохраняется в настройках — от него зависит добавление
-  /// инструмента web_search в реальные запросы чата.
-  Future<void> _runProbe() async {
-    if (_probeState == _ProbeState.checking) return;
-    final cfg = effectiveConfig();
-    if (cfg.baseUrl.trim().isEmpty ||
-        cfg.model.trim().isEmpty ||
-        cfg.apiKey.trim().isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        _probeState = _ProbeState.error;
-        _probeError =
-            'Для проверки задайте Base URL, API-ключ и модель в настройках.';
-      });
-      return;
-    }
-    setState(() {
-      _probeState = _ProbeState.checking;
-      _probeError = null;
-    });
-    final res = await probeWebSearchSupport(
-      baseUrl: cfg.baseUrl,
-      apiKey: cfg.apiKey,
-      model: cfg.model,
-    );
-    if (!mounted) return;
-    setState(() {
-      switch (res) {
-        case WebSearchProbeResult.supported:
-          _probeState = _ProbeState.supported;
-          settings.setWebSearchSupported(true);
-          settings.setProviderSearchSupported(true);
-        case WebSearchProbeResult.unsupported:
-          _probeState = _ProbeState.unsupported;
-          settings.setWebSearchSupported(false);
-          settings.setProviderSearchSupported(false);
-        case WebSearchProbeResult.error:
-          _probeState = _ProbeState.error;
-          _probeError =
-              'Проверка не удалась: проверьте сеть и повторите.';
-      }
-    });
-  }
-
-  /// Смена режима в выпадающем списке; при выборе «Провайдер»
-  /// автоматически запускается проверка поддержки (auto-ping).
+  /// Смена режима в выпадающем списке. Авто-проба режима «Провайдер»
+  /// удалена (F2-settings-probe): режим не гейтится пробой и всегда
+  /// показывается спокойно.
   void _onModeChanged(SearchMode? mode) {
     if (mode == null) return;
     settings.setSearchMode(mode.id);
-    if (mode == SearchMode.provider) {
-      unawaited(_runProbe());
-    } else {
-      setState(() {
-        _probeState = _ProbeState.idle;
-        _probeError = null;
-      });
-    }
+    setState(() {});
   }
 
   /// Динамическая область под выпадающим списком (SearchModeDetailView).
@@ -185,10 +132,7 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
       case SearchMode.off:
         return const SizedBox.shrink();
       case SearchMode.native:
-        return Text(
-          'Поиск выполняется самой моделью. Настройки не требуются.',
-          style: TextStyle(color: p.muted, fontSize: 13, height: 1.35),
-        );
+        return _nativeDetail(p);
       case SearchMode.provider:
         return _providerDetail(p);
       case SearchMode.modelAsTool:
@@ -198,135 +142,60 @@ class _SearchSettingsSectionState extends State<SearchSettingsSection> {
     }
   }
 
-  /// Режим «Провайдер»: auto-ping и баннеры результата.
-  Widget _providerDetail(Palette p) {
-    switch (_probeState) {
-      case _ProbeState.checking:
-        return Row(
-          children: [
-            const SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Проверка поддержки...',
-                style: TextStyle(color: p.muted, fontSize: 13),
-              ),
-            ),
-          ],
-        );
-      case _ProbeState.supported:
-        return _banner(
-          border: _green,
-          bg: _green.withValues(alpha: 0.12),
-          content: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '🟢 Провайдер поддерживает веб-поиск',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: _green,
-                  ),
-                ),
-              ),
-              IconButton(
-                tooltip: 'Проверить снова',
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                padding: EdgeInsets.zero,
-                icon: Icon(Icons.refresh_rounded, size: 18, color: p.accent),
-                onPressed: _runProbe,
-              ),
-            ],
-          ),
-        );
-      case _ProbeState.unsupported:
-        return _banner(
-          border: _red,
-          bg: _red.withValues(alpha: 0.10),
-          content: Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  '🔴 Текущая модель не поддерживает поиск',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: _red,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: _runProbe,
-                style: TextButton.styleFrom(
-                  foregroundColor: _red,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  textStyle: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                child: const Text('Повторить'),
-              ),
-            ],
-          ),
-        );
-      case _ProbeState.error:
-        return _banner(
-          border: p.border,
-          bg: p.card,
-          content: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  _probeError ?? 'Проверка не удалась.',
-                  style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
-                ),
-              ),
-              TextButton(
-                onPressed: _runProbe,
-                style: TextButton.styleFrom(
-                  foregroundColor: p.accent,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  textStyle: const TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                child: const Text('Повторить'),
-              ),
-            ],
-          ),
-        );
-      case _ProbeState.idle:
-        return const SizedBox.shrink();
+  /// Активное подключение: адрес и модель, как их увидит чат
+  /// (effectiveConfig — тот же источник, что у ChatService).
+  EffectiveConfig _config() => effectiveConfig();
+
+  /// Режим «Нативный»: правило ОДНО с чатом — эффективный режим считает
+  /// ChatService.effectiveSearchMode (в чате тот же вызов применяется
+  /// в _roundOnce). Если «нативный» у модели без нативного поиска
+  /// переводится в «провайдер» — спокойная информационная подпись,
+  /// а не красная ошибка.
+  Widget _nativeDetail(Palette p) {
+    final cfg = _config();
+    final effective = ChatService.effectiveSearchMode(
+      baseUrl: cfg.baseUrl,
+      model: cfg.model,
+      mode: SearchMode.native,
+    );
+    if (effective != SearchMode.native) {
+      return Text(
+        'У модели нет нативного поиска — будет использован поиск '
+        'провайдера Polza.',
+        style: TextStyle(color: p.muted, fontSize: 13, height: 1.35),
+      );
     }
+    return Text(
+      'Поиск выполняется самой моделью. Настройки не требуются.',
+      style: TextStyle(color: p.muted, fontSize: 13, height: 1.35),
+    );
   }
 
-  /// Баннер результата проверки в тёплой гамме темы.
-  Widget _banner({
-    required Color border,
-    required Color bg,
-    required Widget content,
-  }) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(12, 6, 6, 6),
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: border.withValues(alpha: 0.6)),
-      ),
-      child: content,
+  /// Режим «Провайдер»: серверный поиск выполняет провайдер
+  /// (для Polza — polza:web_search). Он НЕ зависит от нативного поиска
+  /// модели и НИКОГДА не показывает баннер «Текущая модель не
+  /// поддерживает поиск»: проба legacy-инструмента web_search удалена
+  /// как противоречащая контракту F2.
+  Widget _providerDetail(Palette p) {
+    final cfg = _config();
+    final isPolza = cfg.baseUrl.trim().toLowerCase().contains('polza.ai');
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          isPolza
+              ? 'Поиск выполняет сервер Polza инструментом polza:web_search — '
+                  'работает независимо от нативного поиска модели.'
+              : 'Поиск выполняется на стороне провайдера.',
+          style: TextStyle(color: p.muted, fontSize: 13, height: 1.35),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Если модель не принимает вызовы инструментов, поиск выполняет '
+          'предзапрос моделью-инструментом.',
+          style: TextStyle(color: p.muted, fontSize: 12.5, height: 1.35),
+        ),
+      ],
     );
   }
 
