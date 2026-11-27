@@ -29,7 +29,10 @@ class _PollResult {
   final String videoUrl;
   final double? percent;
 
-  /// Сервер сообщил «в процессе» без числового прогресса.
+  /// Сервер сообщил «в процессе» без числового прогресса (не прислал
+  /// процент вовсе либо прислал <= 0). true — интерфейс показывает
+  /// неопределённую индикацию «в процессе…», а не выдуманные проценты
+  /// (F1-seedance-restore).
   final bool indeterminate;
   final GenError? fatal;
 
@@ -233,9 +236,13 @@ class AsyncJobExecutor extends GenerationExecutor {
       _jobId = record.jobId;
       _active[_jobId] = this;
       await ActiveJobsStore.instance.save(record);
+      // F1-seedance-restore: до первого ответа провайдера процент не
+      // известен — первый прогресс неопределённый («в процессе…»),
+      // а не фиктивные 5%/0%.
       yield GenProgress(
         jobId: record.jobId,
         percent: 5,
+        indeterminate: true,
         debugSnippets: _debugPayload(),
         debugLogPath: debugLogPath,
       );
@@ -299,9 +306,13 @@ class AsyncJobExecutor extends GenerationExecutor {
     await _initDebugLog();
     final client = http.Client();
     try {
+      // F1-seedance-restore: сохранённый прогресс мог быть синтетическим
+      // (сервер не сообщал процент) — первый прогресс после возобновления
+      // неопределённый, пока опрос не принесёт реальный процент > 0.
       yield GenProgress(
         jobId: _jobId,
         percent: record.progress > 0 ? record.progress : 5,
+        indeterminate: true,
         debugSnippets: _debugPayload(),
         debugLogPath: debugLogPath,
       );
@@ -622,7 +633,12 @@ class AsyncJobExecutor extends GenerationExecutor {
       if (code >= 200 && code < 300) {
         return _parsePollBody(resp.body, createdAt, attempt);
       }
-      return _PollResult(percent: _defaultPercent(attempt));
+      // F1-seedance-restore: сервер не сообщил процент — прогресс
+      // неопределённый, а не выдуманное число.
+      return _PollResult(
+        percent: _defaultPercent(attempt),
+        indeterminate: true,
+      );
     }
     if (notFound >= prefixes.length) {
       return const _PollResult(
@@ -631,7 +647,7 @@ class AsyncJobExecutor extends GenerationExecutor {
         ),
       );
     }
-    return _PollResult(percent: _defaultPercent(attempt));
+    return _PollResult(percent: _defaultPercent(attempt), indeterminate: true);
   }
 
   /// Разбор тела ответа опроса статуса.
@@ -644,7 +660,10 @@ class AsyncJobExecutor extends GenerationExecutor {
     try {
       json = jsonDecode(body);
     } catch (_) {
-      return _PollResult(percent: _defaultPercent(attempt));
+      return _PollResult(
+        percent: _defaultPercent(attempt),
+        indeterminate: true,
+      );
     }
     final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
     final pct = _findPercent(json, 0);
@@ -679,14 +698,20 @@ class AsyncJobExecutor extends GenerationExecutor {
       );
     }
 
+    // F1-seedance-restore: прогресс неопределён, когда сервер НЕ прислал
+    // процент ИЛИ прислал <= 0 (видео-модели Polza отдают progress: 0,
+    // пока задача processing). Плавная оценка остаётся в поле percent
+    // для совместимости, но indeterminate=true не позволяет карточке
+    // выдавать её за реальный процент провайдера.
+    final hasServerPct = pct != null && pct > 0;
     var percent = pct;
-    if (percent == null || percent <= 0) {
+    if (!hasServerPct) {
       final elapsed = DateTime.now().difference(createdAt).inSeconds;
       final byTime = (5.0 + elapsed * 1.5).clamp(5.0, 92.0);
       final byAttempt = _defaultPercent(attempt);
       percent = byTime > byAttempt ? byTime : byAttempt;
     }
-    return _PollResult(percent: percent, indeterminate: pct == null);
+    return _PollResult(percent: percent, indeterminate: !hasServerPct);
   }
 
   /// Извлекает URL из полей ответа медиа-задачи.

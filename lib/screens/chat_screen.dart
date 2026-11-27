@@ -18,6 +18,7 @@ import '../models.dart';
 import '../models/attachment_draft.dart';
 import '../models/model_config.dart';
 import '../models/tool.dart';
+import '../core/generation/active_jobs_store.dart';
 import '../core/generation/active_model_controller.dart';
 import '../core/generation/search_capability_resolver.dart';
 import '../core/generation/generation_event.dart';
@@ -211,8 +212,18 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     // Умный автоскролл: следим, находится ли пользователь у нижнего края.
     _scroll.addListener(_onScroll);
-    // Восстановление незавершённых видео-задач после перезапуска приложения.
-    _restoreSub = _genService.restorePendingJobs().listen(_onRestoredEvent);
+    // F1-seedance-restore: восстановление незавершённых видео-задач
+    // запускается ТОЛЬКО после первого кадра — когда store уже отдал
+    // загруженные из хранилища чаты в память. Раньше подписка стартовала
+    // синхронно в initState: события restorePendingJobs применялись к ещё
+    // не загруженному (пустому) store, _applyToJobParts молча выходил,
+    // фоновый опрос шёл впустую, а при ошибке/завершении задача удалялась
+    // из ActiveJobsStore.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _restoreSub != null) return;
+      _restoreSub =
+          _genService.restorePendingJobs().listen(_onRestoredEvent);
+    });
     // Контроллер возможностей активной модели: параметры, vision, reasoning.
     _overrideStore = UserParamOverrideStore();
     _activeModel = ActiveModelController(
@@ -298,9 +309,13 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Прогресс доставляется с indeterminate и диагностикой (R6, п.8):
   /// придуманный процент не выдаётся за процент провайдера.
   void _onRestoredEvent(GenerationEvent ev) {
+    unawaited(_handleRestoredEvent(ev));
+  }
+
+  Future<void> _handleRestoredEvent(GenerationEvent ev) async {
     if (ev is GenCompleted) {
       _clearJobIdInSnapshot(ev.jobId);
-      _applyToJobParts(ev.jobId, (m, idx, part) {
+      await _applyToJobParts(ev.jobId, (m, idx, part) {
         final path = ev.localPath.trim();
         m.parts[idx] = path.isNotEmpty
             ? VideoPart.fromPath(path)
@@ -308,7 +323,7 @@ class _ChatScreenState extends State<ChatScreen> {
       });
       store.save();
     } else if (ev is GenProgress) {
-      _applyToJobParts(ev.jobId, (m, idx, part) {
+      await _applyToJobParts(ev.jobId, (m, idx, part) {
         m.parts[idx] = PendingPart(
           name: part.name,
           localPath: part.localPath,
@@ -325,9 +340,12 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     } else if (ev is GenerationFailure) {
       if (ev.error.message.contains('отменена')) {
-        _applyToJobParts(ev.jobId, (m, idx, part) => m.parts.removeAt(idx));
+        await _applyToJobParts(
+          ev.jobId,
+          (m, idx, part) => m.parts.removeAt(idx),
+        );
       } else {
-        _applyToJobParts(ev.jobId, (m, idx, part) {
+        await _applyToJobParts(ev.jobId, (m, idx, part) {
           m.parts.removeAt(idx);
           m
             ..errorCode = ev.error.code
@@ -340,11 +358,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Находит первое PendingPart с данным jobId во всех чатах
-  /// и применяет к нему [apply].
-  void _applyToJobParts(
+  /// и применяет к нему [apply]. Если прямого совпадения нет (карточка
+  /// была сохранена с пустым jobId либо не сохранена вовсе — приложение
+  /// убито до первого сохранения), карточка восстанавливается
+  /// fallback-ом [_restorePendingForJob] (F1-seedance-restore): поиск
+  /// по снимку запроса либо по модели и промпту записи ActiveJobsStore.
+  Future<void> _applyToJobParts(
     String jobId,
     void Function(ChatMessage m, int idx, PendingPart part) apply,
-  ) {
+  ) async {
     final id = jobId.trim();
     if (id.isEmpty) return;
     for (final chat in store.chats) {
@@ -358,6 +380,89 @@ class _ChatScreenState extends State<ChatScreen> {
         }
       }
     }
+    await _restorePendingForJob(id, apply);
+  }
+
+  /// F1-seedance-restore: восстановление потерянной карточки генерации.
+  /// Прямого PendingPart с jobId нет, поэтому задача ищется по снимку
+  /// пользователя (generationSnapshot.jobId == id) либо — если jobId не
+  /// успел сохраниться в снимок — по модели и промпту живой записи
+  /// [ActiveJobsStore]. В найденном ответе ассистента восстанавливается
+  /// (либо создаётся) PendingPart «Генерация видео» с indeterminate,
+  /// после чего выполняется [apply] (прогресс/замена/снятие).
+  Future<bool> _restorePendingForJob(
+    String id,
+    void Function(ChatMessage m, int idx, PendingPart part) apply,
+  ) async {
+    String model = '';
+    String prompt = '';
+    try {
+      final jobs = await ActiveJobsStore.instance.loadAll();
+      for (final r in jobs) {
+        if (r.jobId.trim() == id) {
+          model = r.model.trim();
+          prompt = r.prompt.trim();
+          break;
+        }
+      }
+    } catch (_) {
+      // Хранилище задач недоступно — остаётся только поиск по снимку.
+    }
+
+    for (final chat in store.chats) {
+      for (int i = 0; i < chat.messages.length; i++) {
+        final m = chat.messages[i];
+        if (m.role != 'user') continue;
+        final snap = m.generationSnapshot;
+        if (snap == null) continue;
+        final snapJob = snap.jobId.trim();
+        final matchesJob = snapJob == id;
+        final matchesMeta = snapJob.isEmpty &&
+            model.isNotEmpty &&
+            snap.modelId.trim() == model &&
+            snap.prompt.trim() == prompt;
+        if (!matchesJob && !matchesMeta) continue;
+
+        // Ответ ассистента следом за запросом — карточка генерации.
+        ChatMessage? reply;
+        for (int j = i + 1; j < chat.messages.length; j++) {
+          if (chat.messages[j].role != 'assistant') break;
+          reply = chat.messages[j];
+          break;
+        }
+        final pending = PendingPart(
+          name: 'Генерация видео',
+          jobId: id,
+          indeterminate: true,
+        );
+        int partIdx;
+        if (reply == null) {
+          // Карточки нет вовсе: создаём сообщение-ответ с карточкой.
+          reply = ChatMessage(id: newId(), role: 'assistant');
+          reply.parts.add(pending);
+          chat.messages.insert(i + 1, reply);
+          partIdx = 0;
+        } else {
+          // Восстанавливаем существующую карточку: заменяем первую
+          // PendingPart (в том числе сохранённую с пустым jobId).
+          final existing =
+              reply.parts.indexWhere((p) => p is PendingPart);
+          if (existing >= 0) {
+            reply.parts[existing] = pending;
+            partIdx = existing;
+          } else {
+            reply.parts.add(pending);
+            partIdx = reply.parts.length - 1;
+          }
+        }
+        if (snapJob.isEmpty) snap.jobId = id;
+        store.touch(chat);
+        unawaited(store.save());
+        apply(reply, partIdx, pending);
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Добавляет источники в [target], отбрасывая пустые строки и дубликаты.
@@ -1134,6 +1239,11 @@ class _ChatScreenState extends State<ChatScreen> {
   /// новую задачу — GenerationService.resumeJob возобновляет опрос
   /// сохранённого jobId (только GET /media/{id}, без POST /v1/media
   /// и без новой резервации).
+  ///
+  /// F1-seedance-restore: начальная карточка создаётся с
+  /// `indeterminate: true` (не «0%»), а первый известный jobId
+  /// немедленно сохраняется в чат (`store.save()` до конца генерации),
+  /// чтобы задача пережила убийство приложения во время processing.
   Future<void> _generateVideo({
     required Chat chat,
     required String prompt,
@@ -1148,12 +1258,14 @@ class _ChatScreenState extends State<ChatScreen> {
         PendingPart(
           name: 'Генерация видео',
           jobId: snapshot?.jobId ?? '',
+          indeterminate: true,
         ),
       ],
     );
     chat.messages.add(reply);
     setState(() => _streaming = true);
     store.touch(chat);
+    unawaited(store.save());
     _toEnd();
 
     final model = conn.model.trim();
@@ -1197,8 +1309,16 @@ class _ChatScreenState extends State<ChatScreen> {
 
       await for (final ev in events) {
         if (ev is GenProgress) {
-          if (ev.jobId.isNotEmpty && snapshot != null) {
-            snapshot.jobId = ev.jobId;
+          if (snapshot != null && ev.jobId.isNotEmpty) {
+            if (snapshot.jobId.trim() != ev.jobId.trim()) {
+              snapshot.jobId = ev.jobId;
+              // F1-seedance-restore: jobId впервые известен (сменился
+              // с пустого на реальный) — немедленно сохраняем чат в
+              // SharedPreferences. Раньше store.save() вызывался только
+              // в самом конце генерации, и при убийстве приложения во
+              // время processing снимок с jobId терялся вместе с деньгами.
+              unawaited(store.save());
+            }
           }
           // Диагностика и indeterminate доставляются до UI (R6, п.8):
           // PendingPart хранит и то, и другое; придуманный процент не
@@ -1591,6 +1711,9 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// Добавляет/обновляет ожидающую медиа-часть инструмента (jobId
   /// виден для восстановления задачи после перезапуска без новой оплаты).
+  /// F1-seedance-restore: пока реальный процент от сервера не пришёл
+  /// (прогресс <= 0), часть помечается indeterminate — карточка показывает
+  /// «в процессе…», а не выдуманные 0%.
   void _upsertPendingToolMedia(
     ChatMessage reply,
     String jobId,
@@ -1604,6 +1727,7 @@ class _ChatScreenState extends State<ChatScreen> {
           localPath: p.localPath,
           jobId: jobId,
           progress: progress,
+          indeterminate: progress <= 0,
           debugSnippets: p.debugSnippets,
           debugLogPath: p.debugLogPath,
         );
@@ -1614,6 +1738,7 @@ class _ChatScreenState extends State<ChatScreen> {
       name: 'Медиа инструмента',
       jobId: jobId,
       progress: progress,
+      indeterminate: progress <= 0,
     ));
   }
 
