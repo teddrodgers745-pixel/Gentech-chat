@@ -1,3 +1,4 @@
+```dart
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import '../core/models/gen_error.dart';
@@ -188,10 +189,9 @@ class ChatMessage {
 /// (см. [ChatMessage.toJson]). Неизвестная часть сохраняется как
 /// {'type': 'unknown', ...} и НЕ превращается в пустой текст.
 ///
-/// Порядок проверок важен: ветка UnknownPart идёт ПЕРЕД TextPart,
-/// потому что UnknownPart наследует TextPart (пустой текст) — без
-/// переноса неизвестные части сериализовались бы как пустой текст и
-/// теряли kind/raw (R6, п.7).
+/// UnknownPart — отдельный лист sealed-иерархии, поэтому его ветка
+/// стоит первой лишь для единообразия: подтипом TextPart он больше
+/// не является и в текстовую ветку попасть не может.
 Map<String, dynamic> _encodePart(MessagePart part) {
   final p = part;
   if (p is UnknownPart) {
@@ -259,6 +259,23 @@ MessagePart? _decodePart(Object? raw) {
   if (raw is! Map) return null;
   final j = Map<String, dynamic>.from(raw);
   switch ((j['type'] ?? '').toString()) {
+    case 'text':
+      // Восстановление текстовой части со стоимостью и источниками:
+      // без этой ветки TextPart после перезапуска терял бы cost/sources
+      // (стоимость ответа и ссылки пропадали бы из истории).
+      final rawCost = j['cost'];
+      final rawSources = j['sources'];
+      return TextPart(
+        (j['text'] as String?) ?? '',
+        cost: rawCost is Map
+            ? MessageCost.fromJson(Map<String, dynamic>.from(rawCost))
+            : null,
+        sources: rawSources is List
+            ? <String>[
+                for (final e in rawSources) if (e != null) e.toString(),
+              ]
+            : const <String>[],
+      );
     case 'image':
       return ImagePart(
         localPath: (j['localPath'] as String?) ?? '',
@@ -330,3 +347,4 @@ List<MessagePart> _decodeParts(Object? raw) {
   }
   return out;
 }
+```

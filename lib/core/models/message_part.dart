@@ -1,3 +1,4 @@
+```dart
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'gen_error.dart';
@@ -5,7 +6,6 @@ import 'gen_error.dart';
 /// Часть составного сообщения: то, из чего состоит пользовательский запрос
 /// или ответ модели. Базовый sealed-тип гарантирует, что switch по частям
 /// будет исчерпывающим без default — новые типы добавляются явно.
-/// Пока никем не подключён — фундамент для мультимодального ввода.
 sealed class MessagePart {
   const MessagePart();
 
@@ -18,10 +18,15 @@ sealed class MessagePart {
 /// которую ChatService отдаёт в [StreamChunk.usage] при стриминге
 /// (stream_options.include_usage) и в непотоковом ответе.
 class MessageCost {
-  /// Стоимость ответа в валюте [currency].
-  final double cost;
+  /// Стоимость ответа в валюте [currency]; null — провайдер не сообщил
+  /// сумму (известны только счётчики токенов). Неизвестная сумма НЕ
+  /// заменяется нулём и НЕ переводится в другую валюту наугад:
+  /// «нет данных» и «ноль» — разные вещи (R4/R6, честная стоимость).
+  final double? cost;
 
-  /// Код валюты ('USD', 'RUB' ...).
+  /// Код валюты ('USD', 'RUB' ...). Пустая строка — валюта неизвестна
+  /// либо противоречива (суммы раундов в разных валютах не складываются).
+  /// Пустая валюта НЕ означает 'USD'.
   final String currency;
 
   /// Токены входа (промпт).
@@ -31,20 +36,34 @@ class MessageCost {
   final int completionTokens;
 
   const MessageCost({
-    required this.cost,
-    this.currency = 'USD',
+    this.cost,
+    this.currency = '',
     this.promptTokens = 0,
     this.completionTokens = 0,
   });
 
-  /// Символ валюты для интерфейса.
-  String get symbol => currency.trim().toUpperCase() == 'RUB' ? '₽' : r'$';
+  /// Символ валюты для интерфейса. Известная валюта не выдумывается:
+  /// пустая (неизвестная) валюта даёт пустой символ, а не доллар.
+  String get symbol {
+    final cur = currency.trim().toUpperCase();
+    if (cur == 'RUB') return '₽';
+    if (cur == 'USD') return r'$';
+    return cur;
+  }
 
-  /// Сумма в формате интерфейса: '0,42 ₽' (запятая как десятичная
-  /// разделитель, как принято в русском тексте).
+  /// Сумма в формате интерфейса с сохранением фактической точности
+  /// ('1,875 ₽' — дробные копейки не отбрасываются; '0,42 ₽' — запятая
+  /// как десятичный разделитель). Стоимость неизвестна (null) —
+  /// возвращается 'Стоимость неизвестна', ноль не подставляется.
   String get formatted {
-    final s = cost.toStringAsFixed(2);
-    return '${s.replaceAll('.', ',')} $symbol';
+    final c = cost;
+    if (c == null) return 'Стоимость неизвестна';
+    var text = c.toStringAsFixed(8);
+    text = text.replaceFirst(RegExp(r'0+$'), '');
+    text = text.replaceFirst(RegExp(r'\.$'), '');
+    text = text.replaceAll('.', ',');
+    final sym = symbol;
+    return sym.isEmpty ? text : '$text $sym';
   }
 
   /// Всего токенов (вход + выход).
@@ -57,18 +76,26 @@ class MessageCost {
         'completionTokens': completionTokens,
       };
 
+  /// Терпимый разбор сохранённой стоимости: отсутствие полей не
+  /// подменяется значениями по умолчанию (cost не становится 0,
+  /// валюта не становится 'USD') — нулевой списание и неизвестная
+  /// сумма различимы.
   factory MessageCost.fromJson(Map j) => MessageCost(
-        cost: (j['cost'] as num?)?.toDouble() ?? 0,
-        currency: (j['currency'] as String?) ?? 'USD',
-        promptTokens: (j['promptTokens'] as num?)?.toInt() ?? 0,
-        completionTokens: (j['completionTokens'] as num?)?.toInt() ?? 0,
+        cost: _num(j['cost']),
+        currency: j['currency'] is String
+            ? (j['currency'] as String).trim()
+            : '',
+        promptTokens: _num(j['promptTokens'])?.toInt() ?? 0,
+        completionTokens: _num(j['completionTokens'])?.toInt() ?? 0,
       );
 
   /// Разбор статистики использования провайдера.
   ///
   /// Если присутствует cost_rub, это фактическая сумма в рублях и она
-  /// имеет приоритет над cost/total_cost. Для ответов без cost_rub
-  /// сохраняется прежний порядок разбора и прежнее поведение.
+  /// имеет приоритет над cost/total_cost, а валюта — 'RUB'. Сумма без
+  /// валюты провайдера ('cost' без 'currency') не считается долларом:
+  /// валюта остаётся пустой. Для ответов без cost_rub прежний порядок
+  /// разбора сохранён.
   static MessageCost? fromUsage(Map? usage) {
     final u = usage;
     if (u == null) return null;
@@ -77,10 +104,12 @@ class MessageCost {
     final prompt = _num(u['prompt_tokens'])?.toInt() ?? 0;
     final completion = _num(u['completion_tokens'])?.toInt() ?? 0;
     if (cost == null && prompt == 0 && completion == 0) return null;
-    final currency =
-        costRub != null ? 'RUB' : ((u['currency'] as String?) ?? 'USD');
+    final rawCurrency = u['currency'] is String
+        ? (u['currency'] as String).trim()
+        : '';
+    final currency = costRub != null ? 'RUB' : rawCurrency;
     return MessageCost(
-      cost: cost ?? 0,
+      cost: cost,
       currency: currency,
       promptTokens: prompt,
       completionTokens: completion,
@@ -105,7 +134,7 @@ class TextPart extends MessagePart {
   /// Пустой список — источников нет.
   final List<String> sources;
 
-  const TextPart(this.text, {this.cost, this.sources = const []});
+  const TextPart(this.text, {this.cost, this.sources = const <String>[]});
 
   @override
   String get label => text.trim().isEmpty ? '(пустой текст)' : text;
@@ -289,26 +318,25 @@ class ErrorPart extends MessagePart {
 /// и сырые данные ([raw]) сохраняются при повторной сериализации —
 /// часть не превращается в пустой текст и не теряется (R6, п.7).
 ///
-/// Наследует [TextPart] с пустым текстом НАМЕРЕННО:sealed-иерархия
-/// [MessagePart] требует, чтобы исчерпывающие switch по частям
-/// (например, MessageView._partsWidgets) оставались валидными без
-/// правок; подтип TextPart покрывается веткой `case TextPart(): break;`
-/// и не рендерится в ленте — как и пустой текст. Если позже UnknownPart
-/// станет отдельным листом иерархии, ВСЕ такие switch нужно дополнить
-/// явной веткой UnknownPart.
-class UnknownPart extends TextPart {
+/// ОТДЕЛЬНЫЙ лист sealed-иерархии [MessagePart] (не подтип TextPart):
+/// исчерпывающие switch по частям (MessageView._partsWidgets и другие)
+/// обязаны иметь явную ветку `case UnknownPart():`. В ленте чата часть
+/// не рендерится (данные сохраняются при round-trip), но теперь она
+/// типизирована честно: `is TextPart` больше не ловит UnknownPart.
+class UnknownPart extends MessagePart {
   /// Метка исходного типа части ('audio', 'video_url', ...).
   final String kind;
 
   /// Сырые данные части в том виде, как они были сохранены.
   final Map<String, dynamic> raw;
 
-  const UnknownPart({this.kind = '', this.raw = const <String, dynamic>{}})
-      : super('');
+  const UnknownPart({this.kind = '', this.raw = const <String, dynamic>{}});
 
   @override
-  String get label => kind.isEmpty ? 'неизвестная часть' : 'неизвестная часть: $kind';
+  String get label =>
+      kind.isEmpty ? 'неизвестная часть' : 'неизвестная часть: $kind';
 
   @override
   String toString() => 'UnknownPart($kind)';
 }
+```

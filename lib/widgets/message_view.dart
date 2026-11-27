@@ -1,3 +1,4 @@
+```dart
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'dart:convert';
@@ -192,11 +193,11 @@ class MessageView extends StatelessWidget {
 
   /// Строка стоимости под ответом: мелкая серая подпись — только если
   /// в частях сообщения есть TextPart с MessageCost (приходит из usage
-  /// провайдера) и генерация уже завершена. Известная сумма показывается
-  /// с её фактической валютой (MessageCost.formatted, без округления);
-  /// сумма без валюты (пустая [MessageCost.currency] — противоречивые
-  /// раунды не складываются) и валюта без суммы не подменяются — остаются
-  /// только счётчики токенов, без выдуманной суммы.
+  /// провайдера) и генерация уже завершена. Сумма показывается только
+  /// когда известна И стоимость (cost != null), И валюта (непустая
+  /// [MessageCost.currency]): неизвестная сумма не подменяется нулём,
+  /// валюта — долларом; противоречивые раунды (разные валюты не
+  /// складываются) показываются только счётчиками токенов.
   List<Widget> _costWidgets(Palette p) {
     if (streaming) return const <Widget>[];
     // Экономика: стоимость показывается только если включено в настройках.
@@ -204,13 +205,12 @@ class MessageView extends StatelessWidget {
     for (final part in message.parts) {
       if (part is TextPart && part.cost != null) {
         final c = part.cost!;
-        // MessageCost.cost непустой (double): «суммы нет» выражается
-        // пустой валютой, а не null — сравнение с null недостижимо.
-        final currency = c.currency.trim();
-        final known = currency.isNotEmpty;
+        final currency = c.currency.trim().toUpperCase();
+        // «Суммы нет» — это null cost и/или пустая валюта, а не ноль.
+        final hasAmount = c.cost != null && currency.isNotEmpty;
         final tokens = c.totalTokens;
         final String text;
-        if (known) {
+        if (hasAmount) {
           text = tokens > 0
               ? '≈ ${c.formatted} · $tokens ток.'
               : '≈ ${c.formatted}';
@@ -300,6 +300,9 @@ class MessageView extends StatelessWidget {
   /// Части сообщения: изображение, видео (с воспроизведением),
   /// ожидающая асинхронная задача (прогресс + отмена) и ошибка.
   /// Текстовая часть не рендерится отдельно: текст уже входит в контент.
+  /// UnknownPart — явная ветка (отдельный лист sealed-иерархии): часть
+  /// неизвестного типа не рендерится (данные сохраняются при round-trip),
+  /// но не «пролезает» в другие ветки под видом TextPart.
   List<Widget> _partsWidgets(Palette p) {
     final list = parts.isEmpty ? message.parts : parts;
     if (list.isEmpty) return const <Widget>[];
@@ -314,6 +317,8 @@ class MessageView extends StatelessWidget {
           out.add(_PartPending(part: part, p: p));
         case ErrorPart():
           out.add(ErrorBubble(error: part.error, onRetry: onRegenerate));
+        case UnknownPart():
+          break;
         case TextPart():
           break;
       }
@@ -1178,11 +1183,15 @@ class _PartVideoState extends State<_PartVideo> {
   }
 }
 
-/// Ожидающая часть: круговой прогресс асинхронной задачи (генерация
-/// видео) и кнопка отмены по jobId. Стиль карточки — как у VideoPart.
-/// При наличии диагностики задачи (debugSnippets либо debugLogPath)
-/// под прогрессом показывается сворачиваемый блок отладки: последние
-/// события моноширинным шрифтом, путь JSONL-лога и кнопка копирования.
+/// Ожидающая часть: индикация асинхронной задачи (генерация видео)
+/// и кнопка отмены по jobId. Стиль карточки — как у VideoPart.
+/// Когда провайдер не сообщил числовой прогресс
+/// (PendingPart.indeterminate == true), показывается неопределённая
+/// индикация (вращающийся индикатор, подпись «в процессе…»), а не
+/// выдуманный процент (R6, п.8). При наличии диагностики задачи
+/// (debugSnippets либо debugLogPath) под прогрессом показывается
+/// сворачиваемый блок отладки: последние события моноширинным шрифтом,
+/// путь JSONL-лога и кнопка копирования.
 class _PartPending extends StatelessWidget {
   final PendingPart part;
   final Palette p;
@@ -1202,8 +1211,9 @@ class _PartPending extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final pct = part.progress.clamp(0.0, 100.0);
     final p = this.p;
+    final indeterminate = part.indeterminate;
+    final pct = part.progress.clamp(0.0, 100.0);
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -1228,7 +1238,7 @@ class _PartPending extends StatelessWidget {
                       width: 42,
                       height: 42,
                       child: CircularProgressIndicator(
-                        value: pct <= 0 ? null : pct / 100,
+                        value: (indeterminate || pct <= 0) ? null : pct / 100,
                         strokeWidth: 3,
                         color: p.accent,
                       ),
@@ -1254,7 +1264,8 @@ class _PartPending extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '${pct.toStringAsFixed(0)}%',
+                      // Неопределённая индикация вместо выдуманного процента.
+                      indeterminate ? 'в процессе…' : '${pct.toStringAsFixed(0)}%',
                       style: TextStyle(fontSize: 12, color: p.muted),
                     ),
                   ],
@@ -1351,3 +1362,4 @@ class _PartPending extends StatelessWidget {
     );
   }
 }
+```

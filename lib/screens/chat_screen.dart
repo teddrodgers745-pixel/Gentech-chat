@@ -1,3 +1,4 @@
+```dart
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'dart:async';
@@ -1780,36 +1781,38 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Прибавляет к суммарной стоимости чата только известную рублёвую
-  /// сумму: неизвестная сумма или сумма в чужой валюте не прибавляется
-  /// и не переводится наугад фиксированным курсом.
+  /// сумму: неизвестная сумма (cost == null), нечисловое значение или
+  /// сумма в чужой валюте не прибавляется и не переводится наугад
+  /// фиксированным курсом. «Нет суммы» — это null cost, а не ноль.
   static void _addKnownRub(Chat chat, MessageCost cost) {
-    // MessageCost.cost непустой (double): «суммы нет» выражается пустой
-    // валютой (см. _sumRoundCosts), сравнение с null недостижимо.
     final amount = cost.cost;
-    if (!amount.isFinite) return;
+    if (amount == null || !amount.isFinite) return;
     if (cost.currency.trim().toUpperCase() != 'RUB') return;
     chat.totalCost += amount;
   }
 
   /// Итоговая стоимость раундов одного ответа: счётчики токенов
   /// складываются всегда; суммы — только когда все раунды с суммой
-  /// сообщили одну и ту же известную валюту. Разные валюты и суммы без
-  /// валюты в итоговую сумму не складываются.
+  /// сообщили одну и ту же известную валюту. Разные валюты (итоговая
+  /// сумма не выдумывается: cost остаётся null, валюта пустая) и суммы
+  /// без валюты в итоговую сумму не складываются.
   static MessageCost? _sumRoundCosts(List<MessageCost> rounds) {
     if (rounds.isEmpty) return null;
     var prompt = 0;
     var completion = 0;
     double? amount;
     var currency = '';
+    var sawAmount = false;
     var conflicting = false;
     for (final c in rounds) {
       prompt += c.promptTokens;
       completion += c.completionTokens;
-      // MessageCost.cost непустой (double): «суммы нет» — пустая валюта,
-      // а не null. Раунд без валюты в итоговую сумму не входит.
+      // «Суммы нет» — null cost и/или пустая валюта (R6: откат
+      // non-nullable адаптации, где ноль выдавался за отсутствие данных).
       final sum = c.cost;
       final cur = c.currency.trim().toUpperCase();
-      if (cur.isEmpty) continue;
+      if (sum == null || cur.isEmpty) continue;
+      sawAmount = true;
       if (currency.isEmpty) {
         currency = cur;
         amount = sum;
@@ -1820,17 +1823,22 @@ class _ChatScreenState extends State<ChatScreen> {
       }
     }
     if (conflicting) {
-      // Суммы противоречат друг другу: итоговую сумму не выдумываем,
-      // валюту опускаем (пустая строка) — остаются только токены.
+      // Суммы противоречат друг другу: итоговую сумму не выдумываем —
+      // остаются только счётчики токенов (cost null, валюта пустая).
       return MessageCost(
-        cost: 0,
-        currency: '',
+        promptTokens: prompt,
+        completionTokens: completion,
+      );
+    }
+    if (!sawAmount) {
+      // Ни один раунд не сообщил сумму: только токены, ничего не нулём.
+      return MessageCost(
         promptTokens: prompt,
         completionTokens: completion,
       );
     }
     return MessageCost(
-      cost: amount ?? 0,
+      cost: amount,
       currency: currency,
       promptTokens: prompt,
       completionTokens: completion,
@@ -2180,9 +2188,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       backgroundColor: p.accent,
                       foregroundColor: Colors.white,
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
             const SizedBox(height: 20),
             Wrap(
@@ -2233,3 +2241,4 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
+```
