@@ -33,7 +33,7 @@
 //
 // F1-fix-tests-2-heal2: зона с настоящими HttpOverrides сама по себе
 // НЕ спасала: настоящий HttpClient нельзя создать внутри зоны с
-// HttpOverrides — factory HttpClient() вызывает
+// HttpOverrides через factory HttpClient() — factory вызывает
 // HttpOverrides.current.createHttpClient(), то есть рекурсию. Прежняя
 // версия кэшировала клиент полем `final HttpClient _client =
 // HttpClient()` — поле инициализировалось при конструировании
@@ -44,22 +44,45 @@
 // «настоящая» зона раздавала всем запросам заглушку: каждый
 // POST/GET завершался 400 с пустым телом, тестовый сервер не
 // достигался, исполнитель бесконечно считал задачу «в процессе», и
-// оба теста падали по TimeoutException после 2 минут. Настоящий
-// HttpClient теперь создаётся В main() ДО TestWidgetsFlutterBinding
-// .ensureInitialized() (когда HttpOverrides.global ещё не установлен),
-// а зона _RealHttpOverrides раздаёт его всем клиентам.
+// оба теста падали по TimeoutException после 2 минут.
 //
 // F1-fix-tests-3: в Dart 3.9 (Flutter 3.35.7) у статического
 // HttpOverrides.global УДАЛЁН ГЕТТЕР — остался только сеттер
 // («no getter» в dart:io API; чтение доступно лишь через zone-aware
 // HttpOverrides.current, у которого наоборот нет сеттера). Прежний
 // `final saved = HttpOverrides.global` падал на flutter analyze:
-// undefined_getter 'global'. Обход см. в [_RealHttpClientFactory]:
-// клиент создаётся через runWithHttpOverrides с подклассом, который
-// наследует БАЗОВУЮ реализацию HttpOverrides.createHttpClient —
-// по документации dart:io она возвращает НАСТОЯЩИЙ HttpClient
-// (не заглушку и не рекурсию factory). Такой способ не зависит
-// ни от состояния global, ни от порядка инициализации binding.
+// undefined_getter 'global'. Клиент стал создаваться через
+// runWithHttpOverrides с подклассом, который наследует БАЗОВУЮ
+// реализацию HttpOverrides.createHttpClient — по документации dart:io
+// она возвращает НАСТОЯЩИЙ HttpClient (не заглушку и не рекурсию
+// factory). Такой способ не зависит ни от состояния global, ни от
+// порядка инициализации binding.
+//
+// F1-fix-tests-3-heal1: fix-tests-3 кэшировал ЕДИНСТВЕННЫЙ настоящий
+// HttpClient статически и раздавал его всем http.Client() зоны. Это
+// ломало ПОСЛЕДОВАТЕЛЬНОСТЬ тестов файла: исполнитель генерации
+// владеет своим клиентом и в finally делает client.close()
+// (AsyncJobExecutor.run и .resume) — а его клиент был ОБЩИМ
+// закэшированным. Первый же тест (F1-T-RESUME-SAME-JOB) закрывал кэш
+// в самом конце, и во втором тесте (F1-T-NETWORK-POLL-KEEPS-RECORD)
+// POST /media выполнялся уже на ЗАКРЫТОМ клиенте: запрос навсегда не
+// доходил до тестового сервера (в логе упавшего шага только
+// '[PolzaVideo] create: ...', ни одного 'AsyncJobExecutor CREATE ...'),
+// created.future не завершался, и фикстура падала по TimeoutException
+// (2 минуты). Таймауты запросов (60 с) не спасали: не-polza путь
+// _createJob перебирает 5 резервных путей, по 60 с на каждый —
+// суммарно дольше таймаута теста.
+//
+// Исправление: кэш удалён. Каждый HttpClient() внутри зоны получает
+// СОБСТВЕННЫЙ настоящий клиент: _RealHttpOverrides.createHttpClient
+// делегирует базовой реализации dart:io (super.createHttpClient) —
+// она конструирует настоящий клиент НАПРЯМУЮ, без рекурсии factory
+// HttpClient() (рекурсия возникает только при вызове factory ВНУТРИ
+// createHttpClient; super.createHttpClient её не выполняет — это
+// подтверждено тем, что именно через базовую реализацию был создан
+// кэшированный клиент, на котором зелёно прошёл F1-T-RESUME-SAME-JOB
+// в fix-tests-3). Владельцы (исполнители) продолжают закрывать
+// только свои клиенты — общий закрываемый ресурс исчез вместе с кэшем.
 
 import 'dart:async';
 import 'dart:convert';
@@ -78,81 +101,35 @@ import 'package:gentech_chat/core/generation/model_type_override_store.dart'
     show ModelTypes;
 import 'package:gentech_chat/core/models/gen_error.dart';
 
-/// Подкласс HttpOverrides, который НЕ подменяет клиент: его
-/// createHttpClient наследует базовую реализацию dart:io, которая по
-/// документации «defaults to the actual HttpClient implementation» —
-/// то есть возвращает настоящий клиент, не заглушку и не рекурсию
-/// factory HttpClient() внутри зоны с HttpOverrides.
-class _RealHttpClientFactory extends HttpOverrides {
+/// HttpOverrides зоны с живыми локальными HttpServer: каждый
+/// `HttpClient()` внутри зоны получает СОБСТВЕННЫЙ настоящий клиент
+/// через базовую реализацию dart:io — [super.createHttpClient]
+/// конструирует настоящий клиент напрямую (не заглушку binding и не
+/// рекурсию factory HttpClient(), которая шла бы через
+/// HttpOverrides.current).
+///
+/// F1-fix-tests-3-heal1: раньше здесь кэшировался единственный
+/// статический HttpClient, созданный в main() до инициализации
+/// binding, и ВСЕ http.Client() зоны разделяли его. Исполнитель
+/// генерации владеет своим клиентом и в finally вызывает
+/// client.close(): закрывался ОБЩИЙ кэшированный HttpClient, и все
+/// запросы СЛЕДУЮЩЕГО теста файла выполнялись на закрытом клиенте —
+/// POST /media навсегда не доходил до тестового сервера, и фикстура
+/// F1-T-NETWORK-POLL-KEEPS-RECORD падала по TimeoutException
+/// (2 минуты). Кэш удалён: свежий настоящий клиент на каждый
+/// HttpClient(), владелец закрывает только свой.
+class _RealHttpOverrides extends HttpOverrides {
   @override
   HttpClient createHttpClient(SecurityContext? context) =>
       super.createHttpClient(context);
 }
 
-/// Настоящие HttpOverrides (настоящий HttpClient) для тестов с живыми
-/// локальными HttpServer: зона, в которой создаются клиенты, отменяет
-/// глобальную заглушку TestWidgetsFlutterBinding (все ответы 400).
-///
-/// F1-fix-tests-2-heal2: настоящий HttpClient НЕ создаётся ни внутри
-/// [createHttpClient] (рекурсия factory HttpClient() в зоне с
-/// HttpOverrides), ни полем-инициализатором (оно выполняется под
-/// заглушкой binding — все ответы 400). Единственный настоящий клиент
-/// создаёт [createRealHttpClient] в main() до инициализации binding.
-class _RealHttpOverrides extends HttpOverrides {
-  /// Единственный настоящий HttpClient для этой сессии тестов.
-  static HttpClient? _realClient;
-
-  /// Создаёт настоящий HttpClient независимо от состояния
-  /// HttpOverrides.global и текущей зоны: factory HttpClient()
-  /// выполняется в зоне с [_RealHttpClientFactory], чей
-  /// createHttpClient — базовая (настоящая) реализация dart:io.
-  ///
-  /// F1-fix-tests-3: раньше здесь читали и восстанавливали
-  /// HttpOverrides.global (`final saved = HttpOverrides.global; ...`),
-  /// но в Dart 3.9 у global удалён статический ГЕТТЕР — остался только
-  /// сеттер (чтение — через HttpOverrides.current, без сеттера), поэтому
-  /// flutter analyze падал: undefined_getter 'global' на строке
-  /// `final HttpOverrides? saved = HttpOverrides.global;`. Новый вариант
-  /// ничего не читает и не восстанавливает: клиент кэшируется
-  /// статически, а construction идёт через документированную базовую
-  /// реализацию createHttpClient — она всегда даёт настоящий клиент,
-  /// даже если binding уже установил глобальную заглушку.
-  static HttpClient createRealHttpClient() {
-    final HttpClient? existing = _realClient;
-    if (existing != null) return existing;
-    return _realClient = HttpOverrides.runWithHttpOverrides<HttpClient>(
-      () => HttpClient(),
-      _RealHttpClientFactory(),
-    );
-  }
-
-  @override
-  HttpClient createHttpClient(SecurityContext? context) {
-    final HttpClient? real = _realClient;
-    if (real == null) {
-      // Сюда попасть не должно: клиент создаётся в main() до
-      // инициализации TestWidgetsFlutterBinding. Громкий сбой вместо
-      // тихой заглушки 400, которая маскирует ошибку фикстуры.
-      throw StateError(
-        'Настоящий HttpClient не создан: _RealHttpOverrides'
-        '.createRealHttpClient() должен быть вызван до '
-        'TestWidgetsFlutterBinding.ensureInitialized().',
-      );
-    }
-    return real;
-  }
-}
-
 void main() {
-  // F1-fix-tests-2-heal2: настоящий HttpClient создаётся ДО
-  // TestWidgetsFlutterBinding.ensureInitialized(), который ставит
-  // HttpOverrides.global-заглушку (все ответы 400). Внутри зоны с
-  // HttpOverrides factory HttpClient() недоступен — createHttpClient
-  // вызывался бы рекурсивно. См. комментарий у _RealHttpOverrides.
-  // F1-fix-tests-3: способ создания стал устойчивым и к обратному
-  // порядку (см. _RealHttpClientFactory), но контракт сохранён.
-  _RealHttpOverrides.createRealHttpClient();
-
+  // F1-fix-tests-3-heal1: предварительное создание клиента ДО
+  // TestWidgetsFlutterBinding.ensureInitialized() больше не требуется —
+  // каждый HttpClient() в зоне с _RealHttpOverrides получает
+  // собственный настоящий клиент (см. комментарий у класса).
+  // Раньше здесь вызывался _RealHttpOverrides.createRealHttpClient().
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late Directory tempDir;
