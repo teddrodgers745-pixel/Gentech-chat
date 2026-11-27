@@ -1674,6 +1674,25 @@ class _ChatScreenState extends State<ChatScreen> {
     _toEnd();
 
     final cfg = effectiveConfig();
+    // F2-search-provider: признак «модель принимает вызов инструментов»
+    // для режима поиска «провайдер» — supportsTools каталога активной
+    // модели. Данных нет (null) либо каталог недоступен — инструмент
+    // НЕ блокируется: отсутствие данных не запрещает polza:web_search;
+    // блокируем только явное supportsTools == false.
+    bool modelAcceptsTools = true;
+    try {
+      final entry = await providerCatalog.lookup(
+        _catalogConnectionIdFor(cfg.baseUrl),
+        cfg.model.trim(),
+      );
+      modelAcceptsTools = entry.supportsTools != false;
+    } catch (_) {
+      modelAcceptsTools = true;
+    }
+    ChatService.toolSupportProbe =
+        (m) => m.trim().toLowerCase() == cfg.model.trim().toLowerCase()
+            ? modelAcceptsTools
+            : true;
     // Уровень размышлений перечисляет только каталог активной модели:
     // выбранный уровень уходит провайдеру КАК ЕСТЬ, без ремапа (low не
     // превращается в medium, xhigh/max — в high). Выключенный уровень
@@ -2279,7 +2298,7 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
               ],
             ),
-          ],
+          ),
         ),
       ),
     );

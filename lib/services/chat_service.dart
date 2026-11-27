@@ -606,6 +606,50 @@ class ChatService {
     }
   }
 
+  /// Признак «у модели есть нативный поиск» — источник: эвристика
+  /// SearchCapabilityResolver (каталог поля native search не выражает).
+  /// Подменяется тестами; null — используется резолвер.
+  static bool Function(String model)? nativeSearchProbe;
+
+  static bool _nativeSearchSupported(String model) {
+    try {
+      final probe = nativeSearchProbe;
+      if (probe != null) return probe.call(model);
+    } catch (_) {}
+    return SearchCapabilityResolver.supportsNativeSearch(model);
+  }
+
+  /// Признак «модель умеет принимать вызов инструментов» (supportsTools
+  /// каталога активной модели). Подключается из UI (chat_screen) перед
+  /// отправкой; null/ошибка — данных нет, серверный инструмент не
+  /// блокируется: отсутствие данных не запрещает polza:web_search.
+  static bool Function(String model)? toolSupportProbe;
+
+  static bool _toolsSupportedFor(String model) {
+    try {
+      final probe = toolSupportProbe;
+      if (probe != null) return probe.call(model);
+    } catch (_) {}
+    return true;
+  }
+
+  /// Эффективный режим поиска Polza с учётом возможностей модели:
+  /// «нативный» у модели БЕЗ нативного поиска переводится в «провайдер» —
+  /// серверный инструмент polza:web_search даёт реальные источники и не
+  /// даёт модели выдумывать ссылки. Остальные режимы — как выбрано.
+  /// Не-Polza провайдеры не изменяются (их контракт не выдумываем).
+  static SearchMode effectiveSearchMode({
+    required String baseUrl,
+    required String model,
+    required SearchMode mode,
+  }) {
+    if (!_isPolza(baseUrl)) return mode;
+    if (mode == SearchMode.native && !_nativeSearchSupported(model)) {
+      return SearchMode.provider;
+    }
+    return mode;
+  }
+
   /// Payload размышлений: выбранный уровень уходит провайдеру КАК ЕСТЬ,
   /// без ремапа (low не превращается в medium, xhigh/max — в high).
   ///
@@ -685,6 +729,11 @@ class ChatService {
   /// Chat Completions: `web_search_options`. Поиск выполняет провайдер
   /// модели, если умеет, иначе Polza — запрос не падает. Для не-Polza
   /// провайдеров параметр не выдумывается.
+  ///
+  /// F2-search-provider: добавляется ТОЛЬКО для моделей с нативным
+  /// поиском (режим «нативный» у модели без нативного поиска заранее
+  /// переводится в «провайдер» — effectiveSearchMode), чтобы модель
+  /// не имитировала поиск выдуманными ссылками.
   @visibleForTesting
   static Map<String, dynamic> nativeSearchBodyPayload(String baseUrl) {
     if (!_isPolza(baseUrl)) return const <String, dynamic>{};
@@ -693,15 +742,23 @@ class ChatService {
 
   /// Серверные инструменты поиска для тела запроса:
   ///  - native — поиск выполняет сама модель: документированный параметр
-  ///    тела `web_search_options` (добавляется в _roundOnce). Серверный
-  ///    инструмент polza:web_fetch сюда НЕ добавляется: «нативный поиск
-  ///    означает нативный фетчинг» — недоказанное предположение, ни один
-  ///    режим поиска фетчинг не подразумевает;
-  ///  - provider — серверный поиск: для Polza polza:web_search,
-  ///    для остальных — web_search (legacy-контракт), если модель
-  ///    умеет искать;
+  ///    тела `web_search_options` (добавляется в _roundOnce). У модели
+  ///    БЕЗ нативного поиска режим заранее переводится в provider
+  ///    (effectiveSearchMode) — здесь инструменты добавятся от provider.
+  ///    Серверный инструмент polza:web_fetch сюда НЕ добавляется:
+  ///    «нативный поиск означает нативный фетчинг» — недоказанное
+  ///    предположение, ни один режим поиска фетчинг не подразумевает;
+  ///  - provider — серверный поиск: для Polza polza:web_search
+  ///    (НЕ зависит от нативного поиска модели и НЕ блокируется его
+  ///    отсутствием), для остальных — web_search (legacy-контракт),
+  ///    если модель умеет искать;
   ///  - off / modelAsTool / customApi — инструменты поиска
   ///    не добавляются (modelAsTool ищет отдельной моделью до запроса).
+  ///
+  /// [toolsSupported] — признак «модель принимает вызов инструментов»
+  /// (supportsTools каталога): false — серверный инструмент не
+  /// прикрепляется к запросу, поиск выполняется предзапросом
+  /// (modelAsTool в _roundOnce).
   @visibleForTesting
   static List<Map<String, dynamic>> builtinSearchTools({
     required String baseUrl,
@@ -709,11 +766,25 @@ class ChatService {
     required bool searchEnabled,
     required SearchMode mode,
     required bool webSearchSupported,
+    bool toolsSupported = true,
   }) {
     final out = <Map<String, dynamic>>[];
     if (!searchEnabled) return out;
     if (_isPolza(baseUrl)) {
-      switch (mode) {
+      if (!toolsSupported) {
+        // Модель не умеет принимать вызовы инструментов: серверный
+        // инструмент не прикрепляется; _roundOnce выполняет поиск
+        // предзапросом «модель-инструмент» (плагин web Polza).
+        return out;
+      }
+      var effective = mode;
+      if (effective == SearchMode.native && !_nativeSearchSupported(model)) {
+        // F2-search-provider: «нативный» только у моделей с нативным
+        // поиском; у остальных реальный поиск провайдера вместо
+        // выдуманных ссылок.
+        effective = SearchMode.provider;
+      }
+      switch (effective) {
         case SearchMode.native:
           break;
         case SearchMode.provider:
@@ -725,7 +796,7 @@ class ChatService {
       }
       return out;
     }
-    final nativeSearch = SearchCapabilityResolver.supportsNativeSearch(model);
+    final nativeSearch = _nativeSearchSupported(model);
     if (mode == SearchMode.native || mode == SearchMode.provider) {
       if (nativeSearch || webSearchSupported) {
         out.add(<String, dynamic>{'type': 'web_search'});
@@ -812,10 +883,35 @@ class ChatService {
       final base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
       final uri = Uri.parse('$base/chat/completions');
       final isPolza = _isPolza(base);
-      final searchMode = SearchModes.fromId(settings.searchMode);
       final searchEnabled = chatSearch.enabled;
+      var searchMode = SearchModes.fromId(settings.searchMode);
       final firstRound = _searchPending;
       _searchPending = false;
+
+      // ---- F2-search-provider: приведение режима поиска к
+      // возможностям модели (источник — резолвер/каталог).
+      // 1) «Нативный» работает ТОЛЬКО у моделей с нативным поиском;
+      //    у остальных — «провайдер» (серверный polza:web_search):
+      //    реальные источники вместо выдуманных ссылок.
+      // 2) «Провайдер» не зависит от нативного поиска, но серверный
+      //    инструмент можно прикрепить только к модели, принимающей
+      //    вызовы инструментов (supportsTools каталога == false —
+      //    ожидаем отказ API). Для таких моделей поиск уходит в
+      //    предзапрос «модель-инструмент» (плагин web Polza работает
+      //    с любой моделью); для не-Polza — прежнее поведение.
+      final modelAcceptsTools = _toolsSupportedFor(model);
+      if (searchEnabled) {
+        searchMode = effectiveSearchMode(
+          baseUrl: base,
+          model: model,
+          mode: searchMode,
+        );
+        if (searchMode == SearchMode.provider &&
+            isPolza &&
+            !modelAcceptsTools) {
+          searchMode = SearchMode.modelAsTool;
+        }
+      }
 
       // ---- Режим «Модель-инструмент»: предварительный запрос к
       // поисковой модели. Поиск ВКЛЮЧАЕТСЯ В API (плагин web Polza /
@@ -825,7 +921,14 @@ class ChatService {
       if (firstRound &&
           searchEnabled &&
           searchMode == SearchMode.modelAsTool) {
-        final sm = settings.searchToolModel.trim();
+        // Выбранная пользователем поисковая модель. Если она не выбрана
+        // (в том числе запасной путь режима «провайдер» для модели без
+        // вызова инструментов) — Polza ищет плагином web через текущую
+        // модель: отдельная поисковая модель не нужна.
+        final configured = settings.searchToolModel.trim();
+        final sm = configured.isNotEmpty
+            ? configured
+            : (isPolza ? model : '');
         final q = _lastUserText(history);
         if (sm.isNotEmpty && q.isNotEmpty) {
           final res = await _preQuerySearchModel(
@@ -889,6 +992,7 @@ class ChatService {
         searchEnabled: searchEnabled,
         mode: searchMode,
         webSearchSupported: settings.webSearchSupported,
+        toolsSupported: modelAcceptsTools,
       );
       final reasoningPayload = _buildReasoningPayload(
         baseUrl: base,
