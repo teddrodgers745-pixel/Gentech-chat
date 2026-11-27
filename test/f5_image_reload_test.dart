@@ -23,6 +23,15 @@
 // разрешается в fake-async обычными pump. Проверяемое поведение не меняется:
 // первая загрузка 503 -> заглушка -> «Повторить загрузку» -> второй GET
 // ТОГО ЖЕ URL -> заглушка уходит; POST = 0.
+//
+// F5-gallery-image-load-2: единственная ошибка анализатора после heal2 —
+// prefer_const_constructors на ImagePart.fromUrl(url) ниже (flutter analyze
+// в analysis_options.yaml включает этот lint, и CI падает на любом
+// findings, включая info). ImagePart.fromUrl — const-конструктор,
+// url — const-переменная: вызов const-оспособен. Добавлен const, сам вызов
+// не изменён; ChatMessage без const — у него нет const-конструктора
+// (мутабельные поля content/errorCode/...), подтверждено зелёным Analyze
+// теста f5_gallery_media_test.dart с теми же не-const ChatMessage.
 
 import 'dart:convert';
 import 'dart:io';
@@ -193,7 +202,9 @@ void main() {
       final msg = ChatMessage(
         id: 'f5-reload',
         role: 'assistant',
-        parts: <MessagePart>[ImagePart.fromUrl(url)],
+        // const обязателен: ImagePart.fromUrl — const-конструктор, url —
+        // const-переменная; иначе prefer_const_constructors валит Analyze.
+        parts: <MessagePart>[const ImagePart.fromUrl(url)],
       );
 
       await HttpOverrides.runWithHttpOverrides<Future<void>>(() async {
