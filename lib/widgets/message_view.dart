@@ -197,19 +197,28 @@ class MessageView extends StatelessWidget {
   /// в частях сообщения есть TextPart с MessageCost (приходит из usage
   /// провайдера) и генерация уже завершена. Сумма показывается только
   /// когда известна И стоимость (cost != null), И валюта (непустая
-  /// [MessageCost.currency]): неизвестная сумма не подменяется нулём,
+  /// [MessageCost.currency]), И включён тумблер «Показывать стоимость»
+  /// (settings.showCost): неизвестная сумма не подменяется нулём,
   /// валюта — долларом; противоречивые раунды (разные валюты не
   /// складываются) показываются только счётчиками токенов.
+  ///
+  /// F3-cost-toggle: тумблер showCost гейтит ТОЛЬКО денежную сумму
+  /// (hasAmount), а не всю строку. При выключенном тумблере счётчики
+  /// токенов («N ток.») остаются видимыми, если они известны, — иначе
+  /// выключение стоимости гасило бы и токены (живой тест 2026-11-27:
+  /// «при выключении стоимости токены тоже уходят»). Если известны
+  /// только токены — строка показывается независимо от тумблера.
   List<Widget> _costWidgets(Palette p) {
     if (streaming) return const <Widget>[];
-    // Экономика: стоимость показывается только если включено в настройках.
-    if (!settings.showCost) return const <Widget>[];
     for (final part in message.parts) {
       if (part is TextPart && part.cost != null) {
         final c = part.cost!;
         final currency = c.currency.trim().toUpperCase();
         // «Суммы нет» — это null cost и/или пустая валюта, а не ноль.
-        final hasAmount = c.cost != null && currency.isNotEmpty;
+        // F3-cost-toggle: выключенный тумблер showCost гейтит здесь —
+        // только сумму, токены остаются.
+        final hasAmount = settings.showCost && c.cost != null &&
+            currency.isNotEmpty;
         final tokens = c.totalTokens;
         final String text;
         if (hasAmount) {
@@ -217,7 +226,8 @@ class MessageView extends StatelessWidget {
               ? '≈ ${c.formatted} · $tokens ток.'
               : '≈ ${c.formatted}';
         } else if (tokens > 0) {
-          // Токены без суммы: только счётчики, ничего не выдумываем.
+          // Токены без суммы (либо сумма скрыта тумблером): только
+          // счётчики, ничего не выдумываем.
           text = '$tokens ток.';
         } else {
           return const <Widget>[];

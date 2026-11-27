@@ -10,8 +10,17 @@
 // ТОЛЬКО токены — ни «≈ 0,00 ₽», ни «$0,00», ни «Стоимость неизвестна»
 // (приёмка F3-LIVE-COST-TOKENS-ONLY, контракт R4/R6 тест 2).
 //
-// F3-T-COST-LINE-SETTING-OFF: при выключенном показе стоимости в
-// настройках (settings.showCost == false) строки нет вообще.
+// F3-COST-TOGGLE (обновление, 2026-11-27; прецедент — обновление теста
+// парсера reasoning в R4): старый тест F3-T-COST-LINE-SETTING-OFF
+// зацементировал БАГ — ранний return в MessageView._costWidgets гасил
+// ВСЮ строку (и стоимость, и токены) при выключенном тумблере showCost.
+// Живой тест: «при выключении стоимости токены тоже уходят». Новое
+// эталонное поведение (контракт R4/F3: токены — когда известны;
+// стоимость — когда известна И включена):
+//  - стоимость вкл + токены известны -> «≈ X ₽ · N ток.»;
+//  - стоимость вкл + токенов нет -> «≈ X ₽»;
+//  - стоимость выкл + токены известны -> «N ток.», без «≈ X ₽»;
+//  - стоимость выкл + токенов нет -> строки нет вообще.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,10 +47,20 @@ void main() {
         ),
       );
 
+  /// Переключает showCost на [value] и возвращает прежнее значение
+  /// в tearDown: тесты не должны зависеть от порядка в файле.
+  void setShowCost(bool value) {
+    final was = settings.showCost;
+    addTearDown(() => settings.setShowCost(was));
+    settings.setShowCost(value);
+  }
+
   testWidgets(
     'F3-T-COST-LINE-BOTH: сумма с полной точностью и токены — '
     'оба показаны («≈ 1,875 ₽ · 30 ток.»)',
     (tester) async {
+      setShowCost(true);
+
       await tester.pumpWidget(host(replyWithCost(const MessageCost(
         cost: 1.875,
         currency: 'RUB',
@@ -56,9 +75,27 @@ void main() {
   );
 
   testWidgets(
+    'F3-T-COST-LINE-AMOUNT-ONLY: стоимость включена, токенов нет — '
+    'только сумма, без счётчиков',
+    (tester) async {
+      setShowCost(true);
+
+      await tester.pumpWidget(host(replyWithCost(const MessageCost(
+        cost: 1.875,
+        currency: 'RUB',
+      ))));
+
+      expect(find.text('≈ 1,875 ₽'), findsOneWidget);
+      expect(find.textContaining('ток.'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'F3-T-COST-LINE-TOKENS-ONLY: сумма неизвестна — только токены, '
     'ноль и «неизвестно» не подставляются',
     (tester) async {
+      setShowCost(true);
+
       await tester.pumpWidget(host(replyWithCost(const MessageCost(
         promptTokens: 10,
         completionTokens: 20,
@@ -72,11 +109,10 @@ void main() {
   );
 
   testWidgets(
-    'F3-T-COST-LINE-SETTING-OFF: показ стоимости выключен — строки нет',
+    'F3-T-COST-TOGGLE-OFF-TOKENS-STAY: показ стоимости выключен, '
+    'токены известны — показывается «30 ток.», суммы «≈ X ₽» нет',
     (tester) async {
-      final was = settings.showCost;
-      addTearDown(() => settings.setShowCost(was));
-      settings.setShowCost(false);
+      setShowCost(false);
 
       await tester.pumpWidget(host(replyWithCost(const MessageCost(
         cost: 1.875,
@@ -85,7 +121,44 @@ void main() {
         completionTokens: 20,
       ))));
 
+      // НОВОЕ поведение: токены остаются, стоимость скрыта.
+      expect(find.text('30 ток.'), findsOneWidget);
+      expect(find.textContaining('≈'), findsNothing);
       expect(find.text('≈ 1,875 ₽ · 30 ток.'), findsNothing);
+      // Строка не исчезает целиком: именно это чинит живой дефект
+      // «при выключении стоимости токены тоже уходят».
+      expect(find.textContaining('ток.'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'F3-T-COST-TOGGLE-OFF-NO-TOKENS: показ стоимости выключен, '
+    'токенов нет — строки нет вовсе',
+    (tester) async {
+      setShowCost(false);
+
+      // Сумма известна, но скрыта тумблером, токенов нет: показывать
+      // нечего — строка не рендерится (приёмка F3-LIVE-COST-TOGGLE).
+      await tester.pumpWidget(host(replyWithCost(const MessageCost(
+        cost: 1.875,
+        currency: 'RUB',
+      ))));
+
+      expect(find.textContaining('ток.'), findsNothing);
+      expect(find.textContaining('≈'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'F3-T-COST-TOGGLE-OFF-EMPTY-COST: выключенный тумблер и пустой '
+    'MessageCost (ни суммы, ни токенов) — строки нет',
+    (tester) async {
+      setShowCost(false);
+
+      await tester.pumpWidget(host(replyWithCost(const MessageCost())));
+
+      expect(find.textContaining('ток.'), findsNothing);
+      expect(find.textContaining('≈'), findsNothing);
     },
   );
 }

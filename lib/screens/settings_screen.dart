@@ -245,7 +245,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 contentPadding: EdgeInsets.zero,
                 title: const Text('Показывать стоимость ответов'),
                 subtitle: Text(
-                  'Стоимость ответа под сообщением и суммы в списке чатов',
+                  'Суммы «≈ X ₽» под ответами и итоги в списке чатов. '
+                  'Счётчики токенов («N ток.») видны всегда',
                   style: TextStyle(color: p.muted, fontSize: 12),
                 ),
                 value: settings.showCost,
