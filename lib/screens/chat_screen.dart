@@ -1,4 +1,3 @@
-```dart
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'dart:async';
@@ -2241,4 +2240,3 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
-```

@@ -1,4 +1,3 @@
-```dart
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import '../core/models/gen_error.dart';
@@ -347,4 +346,3 @@ List<MessagePart> _decodeParts(Object? raw) {
   }
   return out;
 }
-```

@@ -1,4 +1,3 @@
-```dart
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'gen_error.dart';
@@ -339,4 +338,3 @@ class UnknownPart extends MessagePart {
   @override
   String toString() => 'UnknownPart($kind)';
 }
-```

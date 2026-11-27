@@ -1,4 +1,3 @@
-```dart
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import 'dart:convert';
@@ -1362,4 +1361,3 @@ class _PartPending extends StatelessWidget {
     );
   }
 }
-```
