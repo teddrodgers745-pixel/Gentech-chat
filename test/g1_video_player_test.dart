@@ -23,6 +23,28 @@
 // возвращает const ColoredBox (prefer_const_constructors); снят const
 // с ChatMessage в тесте галереи — у ChatMessage нет const-конструктора
 // (мутабельные поля, см. эталонные тесты f5_gallery_media_test.dart).
+//
+// G1-video-player-heal2 (CI 46055528708, «73 passed, 6 failed» — упали
+// ВСЕ тесты файла, три причины):
+//  1) google_fonts: fontStyle(..., weight: FontWeight.w600) в карточке
+//     запрашивал вариант JetBrainsMono-SemiBold у google_fonts; в
+//     виджет-тестах сеть заглушена binding'ом (HTTP 400 на всё), и
+//     попытка загрузки шрифта кидала необработанное исключение
+//     «Failed to load font ...» — оно падает на ТЕКУЩИЙ тест, даже если
+//     инициировано более ранним тестом файла (исключение «after the test
+//     had completed» атрибутируется выполняющемуся тесту). Исправлено в
+//     lib/widgets/video_player_card.dart: моно-подписи имени файла без
+//     weight-варианта (fontStyle без weight provably безопасен — те же
+//     вызовы в f3/f4 зелёные; weight-варианты у fontStyle в
+//     виджет-тестированном коде ранее нигде не использовались).
+//  2) G1-T-VIDEO-FULLSCREEN: после завершения перехода Navigator
+//     помечает накрытый маршрут offstage (opaque MaterialPageRoute),
+//     а find.byType по умолчанию пропускает offstage-поддеревья —
+//     исходная карточка «не считалась». Ищем с skipOffstage: false.
+//  3) G1-T-VIDEO-DOWNLOAD: подтверждение приходит ВТОРОЙ плашкой
+//     SnackBar: snack() перед показом вызывает hideCurrentSnackBar,
+//     новая плашка показывается только после exit-анимации первой
+//     (~250 мс). Одного pump() мало — прокачиваем часы до появления.
 
 import 'dart:async';
 import 'dart:io';
@@ -252,9 +274,17 @@ void main() {
 
       expect(find.byKey(const ValueKey('g1_fullscreen_video')), findsOneWidget,
           reason: 'полноэкранный плеер открыт');
-      expect(find.byType(VideoPlayerCard), findsNWidgets(2),
-          reason: 'в полном экране — тот же единый плеер, а не вторая '
-              'реализация');
+      // G1-video-player-heal2: после завершения перехода Navigator
+      // помечает накрытый маршрут offstage, а find.byType по умолчанию
+      // пропускает offstage-поддеревья (Found 1 вместо 2 в CI). Оба
+      // плеера считаем с skipOffstage: false: исходный (карточка чата)
+      // + полноэкранный — тот же единый виджет, а не вторая реализация.
+      expect(
+        find.byType(VideoPlayerCard, skipOffstage: false),
+        findsNWidgets(2),
+        reason: 'в полном экране — тот же единый плеер, а не вторая '
+            'реализация',
+      );
       expect(
         fake.calls.where((c) => c == 'play').length,
         greaterThan(playsBefore),
@@ -301,6 +331,19 @@ void main() {
       await tester.runAsync(() async {
         await Future<void>.delayed(const Duration(milliseconds: 300));
       });
+
+      // G1-video-player-heal2: подтверждение приходит ВТОРОЙ плашкой
+      // SnackBar. snack() перед показом вызывает hideCurrentSnackBar:
+      // первая плашка уходит с exit-анимацией (~250 мс), и только после
+      // неё показывается вторая — одного pump() недостаточно (в CI:
+      // «Found 0 widgets ... Видео сохранено»). Прокачиваем фейковые
+      // часы, пока текст подтверждения не появится (до 1.2 с).
+      for (var i = 0;
+          i < 10 &&
+              find.textContaining('Видео сохранено').evaluate().isEmpty;
+          i++) {
+        await tester.pump(const Duration(milliseconds: 120));
+      }
       await tester.pump();
 
       // Подтверждение с именем файла.

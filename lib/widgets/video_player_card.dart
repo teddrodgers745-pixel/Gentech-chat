@@ -37,6 +37,16 @@ import '../theme.dart';
 ///
 /// Контролы появляются по тапу и угасают через 4 секунды во время
 /// воспроизведения; на паузе остаются видимыми.
+///
+/// G1-video-player-heal2: моноширинные подписи имени файла НЕ
+/// запрашивают у google_fonts вариант JetBrainsMono-SemiBold
+/// (fontStyle(..., weight: FontWeight.w600)). В виджет-тестах сеть
+/// заглушена binding'ом (любой HTTP-запрос -> 400), попытка загрузки
+/// шрифта кидала необработанное исключение «Failed to load font ...»
+/// и роняла КАЖДЫЙ тест файла — включая те, чьи собственные
+/// утверждения верны. Здесь textStyle без weight — тот же
+/// provably-безопасный путь, что у fontStyle(...) без weight в
+/// RichMarkdown/MessageView (f3/f4 зелёные). Смотри fix_notes.
 class VideoPlayerCard extends StatefulWidget {
   const VideoPlayerCard({super.key, required this.source, this.fullscreen = false});
 
@@ -415,10 +425,13 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
               videoDisplayName(widget.source),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
+              // G1-video-player-heal2: без weight — вариант SemiBold
+              // код-шрифта google_fonts тянет по сети (в тестах сеть
+              // заглушена binding'ом -> необработанное исключение
+              // «Failed to load font» в каждом тесте файла).
               style: fontStyle(
                 settings.codeFont,
                 size: 13,
-                weight: FontWeight.w600,
                 color: p.text,
               ),
             ),
@@ -485,10 +498,12 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
                   videoDisplayName(widget.source),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  // G1-video-player-heal2: без weight — см. комментарий
+                  // в _footer (вариант SemiBold = runtime-фetch google_fonts,
+                  // роняющий виджет-тесты).
                   style: fontStyle(
                     settings.codeFont,
                     size: 14,
-                    weight: FontWeight.w600,
                     color: p.text,
                   ),
                 ),
