@@ -277,7 +277,16 @@ void main() {
         transientBackoffBase: const Duration(milliseconds: 1),
         isCancelled: () => false,
       );
-      final events = await poller.poll((attempt) async {
+      final events = <String>[];
+      // Каркас опроса сам НЕ останавливает стрим после успешной попытки:
+      // «ещё выполняется» — тоже результат попытки, и опрос продолжается
+      // до maxAttempts. Останавливать опрос обязан вызывающий код (как
+      // AsyncJobExecutor._watch / ImagesApiExecutor._pollMediaState —
+      // по готовому URL или фатальному коду); иначе первый же ответ
+      // «в процессе» обрывал бы опрос, и живая задача умирала бы с
+      // JobTimeout. Поэтому стрим потребляется как в исполнителе:
+      // первый готовый ответ — остановка опроса.
+      await for (final res in poller.poll((attempt) async {
         calls++;
         if (calls <= 2) {
           // Транзиентный сетевой сбой (DNS/обрыв): задача жива,
@@ -285,10 +294,14 @@ void main() {
           throw const PollTransientFailure("Failed host lookup: 'polza.ai'");
         }
         return 'done-$attempt';
-      }).toList();
+      })) {
+        events.add(res);
+        break;
+      }
 
       // Оба сбоя пережиты ВНУТРИ первой логической попытки:
-      // задача не пересоздавалась, опрос дошёл до ответа.
+      // задача не пересоздавалась (номер попытки остался 1),
+      // опрос дошёл до ответа.
       expect(events, <String>['done-1']);
       expect(calls, 3);
 
