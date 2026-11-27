@@ -153,12 +153,22 @@ class _ChatScreenState extends State<ChatScreen> {
   /// Эффективный тип модели для панели ввода: override/каталог из
   /// [_modelType], затем вид из [ActiveModelController]. Ручной «текст»
   /// больше не проигрывает каталожному video/image.
+  ///
+  /// R6-audio-robustness-3, п.1: служебные/аудио типы каталога (tts, stt,
+  /// music, embedding, classification и прочие не-'chat/image/video') не
+  /// маскируются под текст — панель получает ModelTypes.unknown и может
+  /// показать «неподдерживаемый тип» вместо текстового режима. Явные
+  /// ручные override 'image'/'video' сохраняют приоритет (осознанный
+  /// выбор пользователя), ручной 'text' — нет: маскировку под текст
+  /// контроллер уже не делает, здесь тоже.
   String get _effectiveModelType {
-    if (_modelType == ModelTypes.image ||
-        _modelType == ModelTypes.video ||
-        _modelType == ModelTypes.text) {
+    if (_modelType == ModelTypes.image || _modelType == ModelTypes.video) {
       return _modelType;
     }
+    if (_activeModel.isCurrentTypeUnsupported) {
+      return ModelTypes.unknown;
+    }
+    if (_modelType == ModelTypes.text) return _modelType;
     switch (_activeModel.current.kind) {
       case ActiveModelKind.video:
         return ModelTypes.video;
@@ -271,6 +281,8 @@ class _ChatScreenState extends State<ChatScreen> {
 
   /// События восстановленных задач: обновление прогресса в карточке
   /// PendingPart, замена её на VideoPart при успехе, снятие при ошибке.
+  /// Прогресс доставляется с indeterminate и диагностикой (R6, п.8):
+  /// придуманный процент не выдаётся за процент провайдера.
   void _onRestoredEvent(GenerationEvent ev) {
     if (ev is GenCompleted) {
       _clearJobIdInSnapshot(ev.jobId);
@@ -285,8 +297,12 @@ class _ChatScreenState extends State<ChatScreen> {
       _applyToJobParts(ev.jobId, (m, idx, part) {
         m.parts[idx] = PendingPart(
           name: part.name,
+          localPath: part.localPath,
           jobId: part.jobId,
           progress: ev.percent,
+          indeterminate: ev.indeterminate,
+          debugSnippets: ev.debugSnippets ?? part.debugSnippets,
+          debugLogPath: ev.debugLogPath ?? part.debugLogPath,
         );
       });
     } else if (ev is SourcesReceived) {
@@ -674,6 +690,20 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
     if (!mounted) return;
+
+    // R6-audio-robustness-3, п.1: служебные/аудио типы каталога (tts, stt,
+    // music, embedding, classification и прочие) не маскируются под текст.
+    // Без явного ручного override типа отправка блокируется с понятной
+    // ошибкой; осознанный override пользователя сохраняет прежнее поведение.
+    final manualTypeOverride = await _typeOverrideFor(modelId);
+    if (manualTypeOverride == null &&
+        _activeModel.isCurrentTypeUnsupported) {
+      await _addGenErrorBubble(
+        'Модель типа «${_activeModel.currentCatalogType}» пока не '
+        'поддерживается в чате — аудио-режим ещё не реализован.',
+      );
+      return;
+    }
 
     if (genType == ModelTypes.image) {
       if (!await _validateGenParams(
@@ -1139,7 +1169,17 @@ class _ChatScreenState extends State<ChatScreen> {
           if (ev.jobId.isNotEmpty && snapshot != null) {
             snapshot.jobId = ev.jobId;
           }
-          _updateVideoPending(reply, jobId: ev.jobId, progress: ev.percent);
+          // Диагностика и indeterminate доставляются до UI (R6, п.8):
+          // PendingPart хранит и то, и другое; придуманный процент не
+          // выдаётся за процент провайдера.
+          _updateVideoPending(
+            reply,
+            jobId: ev.jobId,
+            progress: ev.percent,
+            indeterminate: ev.indeterminate,
+            debugSnippets: ev.debugSnippets,
+            debugLogPath: ev.debugLogPath,
+          );
         } else if (ev is SourcesReceived) {
           _mergeSources(sources, ev.sources);
         } else if (ev is GenCompleted) {
@@ -1198,10 +1238,15 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   /// Обновляет ожидающую часть видео-задачи в сообщении [reply].
+  /// Уже накопленная диагностика части сохраняется, если событие не
+  /// принесло новую; indeterminate фиксируется в PendingPart (R6, п.8).
   void _updateVideoPending(
     ChatMessage reply, {
     required String jobId,
     required double progress,
+    bool indeterminate = false,
+    List<String>? debugSnippets,
+    String? debugLogPath,
   }) {
     for (int i = 0; i < reply.parts.length; i++) {
       final part = reply.parts[i];
@@ -1211,6 +1256,9 @@ class _ChatScreenState extends State<ChatScreen> {
           localPath: part.localPath,
           jobId: jobId.isNotEmpty ? jobId : part.jobId,
           progress: progress,
+          indeterminate: indeterminate,
+          debugSnippets: debugSnippets ?? part.debugSnippets,
+          debugLogPath: debugLogPath ?? part.debugLogPath,
         );
         return;
       }

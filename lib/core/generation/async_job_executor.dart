@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../app_state.dart' show settings;
 import '../models/gen_error.dart';
+import '../models/gen_error_mapper.dart';
 import '../models/model_info.dart' show GenerationRoute, Modality;
 import '../providers/model_catalog_adapter.dart';
 import '../providers/model_info_resolver.dart';
@@ -19,16 +20,9 @@ import 'artifact_materializer.dart';
 import 'generation_event.dart';
 import 'generation_executor.dart';
 import 'generation_request.dart';
+import 'media_status_poller.dart';
 import 'parameter_translator.dart';
 import 'parameter_validation_exception.dart';
-
-/// Транзиентный сбой опроса (сеть, таймаут, DNS). Не убивает наблюдение
-/// сразу: цикл опроса повторит запрос несколько раз с backoff.
-class _TransientPollFailure implements Exception {
-  final String message;
-
-  const _TransientPollFailure(this.message);
-}
 
 /// Результат одного опроса состояния задачи.
 class _PollResult {
@@ -50,6 +44,20 @@ class _PollResult {
   bool get isDone => videoUrl.isNotEmpty;
 }
 
+/// Результат публичного опроса медиа-задачи (модель-инструмент):
+/// ссылка готова либо задача ещё выполняется.
+class _PublicJobPoll {
+  /// Готовая ссылка на медиа ('' — задача ещё выполняется).
+  final String url;
+
+  /// Текстовый статус для колбэка прогресса.
+  final String statusText;
+
+  const _PublicJobPoll({this.url = '', this.statusText = 'processing'});
+
+  bool get isDone => url.isNotEmpty;
+}
+
 /// Результат создания задачи.
 class _CreateResult {
   final AsyncJobRecord? record;
@@ -67,6 +75,11 @@ class _CreateResult {
 ///  2. При готовом результате сразу скачиваем его;
 ///  3. Иначе опрашиваем GET {baseUrl}/media/{id} каждые 5 секунд.
 /// Для Polza запасные REST-эндпоинты не используются.
+///
+/// Циклы опроса (внутренний [_watch] и публичный [pollMediaJob]) выполняются
+/// общим каркасом [MediaStatusPoller] — единым с исполнителем изображений
+/// (R6-audio-robustness-3, п.8); HTTP-коды сводятся к общей типизированной
+/// функции GenErrorMapper.fromStatusCode (расхождение 403/402 устранено).
 class AsyncJobExecutor extends GenerationExecutor {
   static const Duration _pollInterval = Duration(seconds: 5);
   static const int _maxAttempts = 150;
@@ -292,64 +305,60 @@ class AsyncJobExecutor extends GenerationExecutor {
     }
   }
 
-  /// Цикл опроса: каждые 5 секунд, максимум 150 попыток.
+  /// Цикл опроса: каждые 5 секунд, максимум 150 попыток. Каркас попыток
+  /// и транзиентных повторов общий с исполнителем изображений и публичным
+  /// опросом — [MediaStatusPoller]; различия интервалов и UI остаются здесь.
   Stream<GenerationEvent> _watch(
     http.Client client,
     String base,
     AsyncJobRecord record,
   ) async* {
     var lastPct = record.progress > 0 ? record.progress : 5.0;
-    for (int attempt = 1; attempt <= _maxAttempts; attempt++) {
-      await Future<void>.delayed(_pollInterval);
-      if (_cancelled) {
-        await ActiveJobsStore.instance.remove(record.jobId);
-        yield const GenerationFailure(
-          UnknownGenError(details: 'Задача отменена.'),
-        );
-        return;
-      }
-      _PollResult res;
-      var transientFailures = 0;
-      while (true) {
-        try {
-          res = await _pollOnce(
-            client,
-            base,
-            record.jobId,
-            record.apiKey,
-            record.createdAt,
-            attempt,
+    final poller = MediaStatusPoller<_PollResult>(
+      interval: _pollInterval,
+      maxAttempts: _maxAttempts,
+      maxTransientRetries: _maxTransientRetries,
+      transientBackoffBase: _transientBackoffBase,
+      isCancelled: () => _cancelled,
+      onTransientRetry: (attempt, retry, message) {
+        // Диагностика повторов остаётся в JSONL-журнале задачи.
+        unawaited(_logJson(<String, dynamic>{
+          'phase': 'poll_transient',
+          'n': attempt,
+          'retry': retry,
+          'error': message,
+        }));
+      },
+    );
+    try {
+      await for (final res in poller.poll(
+        (attempt) => _pollOnce(
+          client,
+          base,
+          record.jobId,
+          record.apiKey,
+          record.createdAt,
+          attempt,
+        ),
+      )) {
+        if (res.isFatal) {
+          await ActiveJobsStore.instance.remove(record.jobId);
+          yield GenerationFailure(res.fatal!, jobId: record.jobId);
+          return;
+        }
+        if (res.isDone) {
+          yield GenProgress(
+            jobId: record.jobId,
+            percent: 100,
+            debugSnippets: _debugPayload(),
+            debugLogPath: debugLogPath,
           );
-          break;
-        } on _TransientPollFailure catch (e) {
-          transientFailures++;
-          await _logJson(<String, dynamic>{
-            'phase': 'poll_transient',
-            'n': attempt,
-            'retry': transientFailures,
-            'error': e.message,
-          });
-          if (transientFailures > _maxTransientRetries) {
-            await _logJson(<String, dynamic>{
-              'phase': 'poll_give_up',
-              'n': attempt,
-              'jobId': record.jobId,
-            });
-            // Задача уже создана: не удаляем запись, чтобы её можно было
-            // возобновить без повторной оплаты.
-            yield GenerationFailure(
-              JobStatusUnknown(
-                jobId: record.jobId,
-                details: 'Не удалось получить статус задачи: ${e.message}',
-              ),
-              jobId: record.jobId,
-            );
-            return;
-          }
-          final delay = Duration(
-            seconds: _transientBackoffBase.inSeconds * transientFailures,
+          final local = await ArtifactMaterializer.materializeVideo(
+            res.videoUrl,
+            client: client,
+            prompt: record.prompt,
+            modelId: record.model,
           );
-          await Future<void>.delayed(delay);
           if (_cancelled) {
             await ActiveJobsStore.instance.remove(record.jobId);
             yield const GenerationFailure(
@@ -357,64 +366,56 @@ class AsyncJobExecutor extends GenerationExecutor {
             );
             return;
           }
-        }
-      }
-      if (_cancelled) {
-        await ActiveJobsStore.instance.remove(record.jobId);
-        yield const GenerationFailure(
-          UnknownGenError(details: 'Задача отменена.'),
-        );
-        return;
-      }
-      if (res.isFatal) {
-        await ActiveJobsStore.instance.remove(record.jobId);
-        yield GenerationFailure(res.fatal!, jobId: record.jobId);
-        return;
-      }
-      if (res.isDone) {
-        yield GenProgress(
-          jobId: record.jobId,
-          percent: 100,
-          debugSnippets: _debugPayload(),
-          debugLogPath: debugLogPath,
-        );
-        final local = await ArtifactMaterializer.materializeVideo(
-          res.videoUrl,
-          client: client,
-          prompt: record.prompt,
-          modelId: record.model,
-        );
-        if (_cancelled) {
           await ActiveJobsStore.instance.remove(record.jobId);
-          yield const GenerationFailure(
-            UnknownGenError(details: 'Задача отменена.'),
+          yield GenCompleted(
+            jobId: record.jobId,
+            localPath: local ?? '',
+            remoteUrl: local == null ? res.videoUrl : '',
           );
           return;
         }
-        await ActiveJobsStore.instance.remove(record.jobId);
-        yield GenCompleted(
+        final computed = res.percent ?? 5.0;
+        if (computed > lastPct) lastPct = computed;
+        await ActiveJobsStore.instance.updateProgress(record.jobId, lastPct);
+        yield GenProgress(
           jobId: record.jobId,
-          localPath: local ?? '',
-          remoteUrl: local == null ? res.videoUrl : '',
+          percent: lastPct,
+          indeterminate: res.indeterminate,
+          debugSnippets: _debugPayload(),
+          debugLogPath: debugLogPath,
         );
-        return;
       }
-      final computed = res.percent ?? _defaultPercent(attempt);
-      if (computed > lastPct) lastPct = computed;
-      await ActiveJobsStore.instance.updateProgress(record.jobId, lastPct);
-      yield GenProgress(
+      // Лимит попыток исчерпан без результата.
+      await ActiveJobsStore.instance.remove(record.jobId);
+      yield GenerationFailure(
+        const JobTimeout(
+          details: 'Задача не завершилась за отведённое время.',
+        ),
         jobId: record.jobId,
-        percent: lastPct,
-        indeterminate: res.indeterminate,
-        debugSnippets: _debugPayload(),
-        debugLogPath: debugLogPath,
       );
+    } on PollCancelled {
+      await ActiveJobsStore.instance.remove(record.jobId);
+      yield const GenerationFailure(
+        UnknownGenError(details: 'Задача отменена.'),
+      );
+      return;
+    } on PollTransientFailure catch (e) {
+      await _logJson(<String, dynamic>{
+        'phase': 'poll_give_up',
+        'jobId': record.jobId,
+        'error': e.message,
+      });
+      // Задача уже создана: не удаляем запись, чтобы её можно было
+      // возобновить без повторной оплаты.
+      yield GenerationFailure(
+        JobStatusUnknown(
+          jobId: record.jobId,
+          details: 'Не удалось получить статус задачи: ${e.message}',
+        ),
+        jobId: record.jobId,
+      );
+      return;
     }
-    await ActiveJobsStore.instance.remove(record.jobId);
-    yield GenerationFailure(
-      const JobTimeout(details: 'Задача не завершилась за отведённое время.'),
-      jobId: record.jobId,
-    );
   }
 
   /// Плавная оценка прогресса, когда провайдер его не сообщает.
@@ -499,10 +500,14 @@ class AsyncJobExecutor extends GenerationExecutor {
       await _logCreate('$base$path', resp.statusCode, rawCreate);
       final code = resp.statusCode;
       if (code == 404 || code == 405) {
-        if (isPolza) throw _mapStatus(code, resp.body);
+        if (isPolza) {
+          throw GenErrorMapper.fromStatusCode(code, resp.body);
+        }
         continue;
       }
-      if (code < 200 || code >= 300) throw _mapStatus(code, resp.body);
+      if (code < 200 || code >= 300) {
+        throw GenErrorMapper.fromStatusCode(code, resp.body);
+      }
       Object? json;
       try {
         json = jsonDecode(rawCreate);
@@ -570,11 +575,11 @@ class AsyncJobExecutor extends GenerationExecutor {
       } on TimeoutException catch (e) {
         await _logPollError(attempt, queryUrl, 'timeout: $e');
         _addSnippet('poll $attempt (ошибка): timeout');
-        throw _TransientPollFailure('timeout: $e');
+        throw PollTransientFailure('timeout: $e');
       } catch (e) {
         await _logPollError(attempt, queryUrl, '$e');
         _addSnippet('poll $attempt (ошибка): $e');
-        throw _TransientPollFailure('$e');
+        throw PollTransientFailure('$e');
       }
       final String rawPollBody = resp.body;
       debugPrint(
@@ -590,16 +595,12 @@ class AsyncJobExecutor extends GenerationExecutor {
         await _logPollError(attempt, queryUrl, err);
         _addSnippet('poll $attempt (http=$code): ${_excerpt(err)}');
       }
-      if (code == 401 || code == 403) {
-        return _PollResult(fatal: AuthError(details: _details(resp.body)));
-      }
-      if (code == 402) {
+      if (code == 401 || code == 403 || code == 402 || code == 429) {
+        // Единая типизированная функция: расхождения 403/402 между
+        // исполнителями устранены (R6, п.8).
         return _PollResult(
-          fatal: InsufficientFunds(details: _details(resp.body)),
+          fatal: GenErrorMapper.fromStatusCode(code, resp.body),
         );
-      }
-      if (code == 429) {
-        return _PollResult(fatal: RateLimited(details: _details(resp.body)));
       }
       if (code == 404 || code == 405) {
         notFound++;
@@ -833,7 +834,11 @@ class AsyncJobExecutor extends GenerationExecutor {
     return _urlFromMessage(json);
   }
 
-  /// Публичный опрос медиа-задачи: каждые 5 секунд, максимум 150 попыток.
+  /// Публичный опрос медиа-задачи (модель-инструмент): каждые 5 секунд,
+  /// максимум 150 попыток. Выполняется тем же каркасом [MediaStatusPoller],
+  /// что и внутренний цикл видео-задачи (единый компонент опроса, R6 п.8);
+  /// публичный контракт колбэков и исключений сохранён прежним:
+  /// GenError при 401/403, Exception при остальных неудачах.
   Future<String> pollMediaJob({
     required http.Client client,
     required String baseUrl,
@@ -845,61 +850,103 @@ class AsyncJobExecutor extends GenerationExecutor {
     final base = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     var percent = 5.0;
     onProgress(percent, 'pending');
-    for (int attempt = 1; attempt <= _maxAttempts; attempt++) {
-      await Future<void>.delayed(_pollInterval);
-      if (isCancelled?.call() ?? false) {
-        throw Exception('Задача отменена.');
-      }
-      final uri = Uri.tryParse('$base/media/$jobId');
-      if (uri == null) {
-        throw Exception('Некорректный адрес опроса задачи.');
-      }
-      http.Response resp;
-      try {
-        resp = await client
-            .get(uri, headers: _authHeaders(apiKey))
-            .timeout(_requestTimeout);
-      } catch (_) {
+    final poller = MediaStatusPoller<_PublicJobPoll>(
+      interval: _pollInterval,
+      maxAttempts: _maxAttempts,
+      maxTransientRetries: _maxTransientRetries,
+      transientBackoffBase: _transientBackoffBase,
+      isCancelled: isCancelled,
+      onTransientRetry: (attempt, retry, message) {
         onProgress(percent, 'сеть недоступна, попытка $attempt');
-        continue;
-      }
-      if (resp.statusCode == 401 || resp.statusCode == 403) {
-        throw Exception('Неверный API-ключ (401).');
-      }
-      if (resp.statusCode < 200 || resp.statusCode >= 300) {
-        onProgress(percent, 'HTTP ${resp.statusCode}, попытка $attempt');
-        continue;
-      }
-      Map<String, dynamic> json = <String, dynamic>{};
-      try {
-        final decoded = jsonDecode(resp.body);
-        if (decoded is Map) json = Map<String, dynamic>.from(decoded);
-      } catch (_) {}
-      final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
-      if (_failedStatuses.contains(status)) {
-        throw Exception(_pollErrorText(json));
-      }
-      final url = extractMediaUrl(json) ??
-          (_doneStatuses.contains(status) ? _findAnyMediaUrl(json, 0) : null) ??
-          '';
-      if (url.isNotEmpty &&
-          (_doneStatuses.contains(status) ||
-              !_runningStatuses.contains(status))) {
+      },
+    );
+    try {
+      await for (final st in poller.poll(
+        (attempt) => _publicPollAttempt(
+          client,
+          base,
+          apiKey,
+          jobId,
+          attempt,
+          onProgress: (pct, text) {
+            if (pct > percent) percent = pct;
+            onProgress(percent, text);
+          },
+        ),
+      )) {
         onProgress(100, 'completed');
-        return url;
+        return st.url;
       }
-      if (_doneStatuses.contains(status)) {
-        throw Exception('Провайдер завершил задачу, но не вернул медиа.');
-      }
-      final serverPct = _findPercent(json, 0);
-      if (serverPct != null && serverPct > percent) {
-        percent = serverPct.clamp(5.0, 95.0);
-      } else {
-        percent = (percent + 3).clamp(5.0, 92.0);
-      }
-      onProgress(percent, status.isEmpty ? 'processing' : status);
+    } on PollCancelled {
+      throw Exception('Задача отменена.');
+    } on PollTransientFailure catch (e) {
+      throw Exception('Не удалось получить статус задачи: ${e.message}');
     }
     throw Exception('Задача не завершилась за отведённое время.');
+  }
+
+  /// Одна логическая попытка публичного опроса. Фатальные коды (401/403)
+  /// сводятся к общей типизированной функции GenErrorMapper.fromStatusCode;
+  /// сбои сети — PollTransientFailure; остальные коды — «ещё не готово».
+  Future<_PublicJobPoll> _publicPollAttempt(
+    http.Client client,
+    String base,
+    String apiKey,
+    String jobId,
+    int attempt, {
+    required void Function(double percent, String statusText) onProgress,
+  }) async {
+    final uri = Uri.tryParse('$base/media/$jobId');
+    if (uri == null) {
+      throw const PollTransientFailure('Некорректный адрес опроса задачи.');
+    }
+    final http.Response resp;
+    try {
+      resp = await client
+          .get(uri, headers: _authHeaders(apiKey))
+          .timeout(_requestTimeout);
+    } on TimeoutException catch (e) {
+      throw PollTransientFailure('timeout: $e');
+    } catch (e) {
+      throw PollTransientFailure('$e');
+    }
+    final code = resp.statusCode;
+    if (code == 401 || code == 403) {
+      throw GenErrorMapper.fromStatusCode(code, resp.body);
+    }
+    if (code < 200 || code >= 300) {
+      onProgress(_defaultPercent(attempt), 'HTTP $code, попытка $attempt');
+      return const _PublicJobPoll(statusText: 'processing');
+    }
+    Map<String, dynamic> json = <String, dynamic>{};
+    try {
+      final decoded = jsonDecode(resp.body);
+      if (decoded is Map) json = Map<String, dynamic>.from(decoded);
+    } catch (_) {}
+    final status = (_findStatus(json, 0) ?? '').trim().toLowerCase();
+    if (_failedStatuses.contains(status)) {
+      throw Exception(_pollErrorText(json));
+    }
+    final url = extractMediaUrl(json) ??
+        (_doneStatuses.contains(status) ? _findAnyMediaUrl(json, 0) : null) ??
+        '';
+    if (url.isNotEmpty &&
+        (_doneStatuses.contains(status) ||
+            !_runningStatuses.contains(status))) {
+      return _PublicJobPoll(url: url, statusText: 'completed');
+    }
+    if (_doneStatuses.contains(status)) {
+      throw Exception('Провайдер завершил задачу, но не вернул медиа.');
+    }
+    final serverPct = _findPercent(json, 0);
+    final double pct;
+    if (serverPct != null && serverPct > 0) {
+      pct = serverPct.clamp(5.0, 95.0);
+    } else {
+      pct = _defaultPercent(attempt);
+    }
+    onProgress(pct, status.isEmpty ? 'processing' : status);
+    return _PublicJobPoll(statusText: status.isEmpty ? 'processing' : status);
   }
 
   // ---------- диагностика зависания (JSONL-лог) ----------
@@ -1181,25 +1228,5 @@ class AsyncJobExecutor extends GenerationExecutor {
   static String _clip(String s) {
     final t = s.trim();
     return t.length > 300 ? t.substring(0, 300) : t;
-  }
-
-  static GenError _mapStatus(int code, String body) {
-    final details = _details(body);
-    switch (code) {
-      case 401:
-      case 403:
-        return AuthError(details: details);
-      case 402:
-        return InsufficientFunds(details: details);
-      case 429:
-        return RateLimited(details: details);
-      case 400:
-      case 422:
-        return BadRequestError(details: details);
-      case 404:
-        return ModelNotFoundError(details: details);
-    }
-    if (code >= 500) return ServerError(statusCode: code, details: details);
-    return UnknownGenError(details: 'Ошибка $code. $details');
   }
 }
