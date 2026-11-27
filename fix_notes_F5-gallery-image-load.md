@@ -1,47 +1,21 @@
-# F5-gallery-image-load-heal1 — разбор упавшей сборки
+# F5-gallery-image-load-heal2 — причины и правки
 
-## Что было не так
-Сборка упала на шаге «Analyze Code» (не тесты, не сборка APK): `flutter analyze`
-возвращает ненулевой код при ЛЮБЫХ findings, включая уровень info. В коде
-приложения (`lib/`) дефектов нет — упали два новых тестовых файла коммита F5:
+CI: запуск 46013163126, ветка agent, коммит 8e5b1c7. Упал только шаг «Run tests» (flutter analyze — зелёный). Два падения — две разные причины.
 
-1. `test/f5_gallery_media_test.dart` — 7 × `prefer_const_constructors` (info):
-   строки 36, 49, 58, 59, 96, 121, 130. Все семь — это части сообщений
-   (`ImagePart.fromPath`, `VideoPart.fromUrl`, `ImagePart.fromUrl`,
-   `TextPart`, `PendingPart`), создаваемые без `const`, хотя конструкторы
-   const-оспособны. Симптом линтера, а не логическая ошибка теста.
-2. `test/f5_image_reload_test.dart` — 1 × `unused_import` (warning):
-   `package:flutter/services.dart` (строка 20). Импорт был скопирован из
-   `f1_retry_resume_test.dart`, где он нужен для мока канала path_provider
-   (`MethodChannel` + `TestDefaultBinaryMessengerBinding`). Тест F5
-   path_provider не мокает (мокать нечего — испытывается только сеть),
-   поэтому импорт не используется.
+## 1. F5-T-GALLERY-IMAGE-AND-VIDEO: 2 вместо 3
 
-## Что поправлено
-1. В `f5_gallery_media_test.dart` добавлен `const` ровно к тем семи
-   конструкторам частей, на которые указывал анализатор (обрамляющие
-   списки `<MessagePart>[...]` оставлены неизменяемыми литералами — они
-   передаются в не-const-конструктор `ChatMessage`, и lint на них не
-   указывал). Тестовая логика не изменена ни на символ.
-2. В `f5_image_reload_test.dart` импорт `flutter/services.dart` НЕ удалён
-   (правило проекта: не удалять существующие импорты) — глушится точечно
-   `// ignore: unused_import` с поясняющим комментарием, почему импорт
-   сохранён. Остальной код файла не тронут.
+**Причина (не симптом).** `GeneratedMediaCollector._fromSource` распознавал только `file://`, `data:image/video` и `http(s)`. Но `ImagePart.fromPath`/`VideoPart.fromPath` хранят ГОЛЫЙ абсолютный путь без префикса (`/storage/emulated/0/GenTech/img_a.png`) — такой источник попадал в «неподдерживаемую схему» и отбрасывался. В галерею собирались только markdown-ссылка `file://` и `VideoPart`-URL → 2 вместо 3.
 
-`TEMP-DIAG-UNMODIFIABLE` не затронут (находится в `async_job_executor.dart`,
-не связан с упавшими линтами).
+**Правка.** В `_fromSource` добавлена ветка голых локальных путей (`s.startsWith('/')`) → `GalleryMediaItem(isLocal: true)`. Дедуп не страдает и стал точнее: `file:///x/img.png` и `/x/img.png` нормализуются в один path-ключ — один и тот же файл не дублируется из двух представлений. Потребители (ArtifactsGalleryScreen) не менялись: API `GalleryMediaItem` не менялся.
+
+## 2. F5-T-IMAGE-RELOAD-NO-REGEN: TimeoutException после 2 минут
+
+**Причина (не симптом).** Фикстура поднимала живой HttpServer и ждала сеть окнами `tester.runAsync` внутри `testWidgets`. `testWidgets` работает в fake-async; сочетание «реальный HTTP + runAsync» — документированная ловушка (api.flutter.dev, WidgetTester.runAsync: «If your widget test hangs and you are using runAsync…»). Тест завис на первом же окне ожидания до таймаута. Продакшн-виджет `_RetryableNetworkImage` не виноват: его поведение (заглушка → ручной повтор того же URL без новой генерации) корректно.
+
+**Правка.** По рекомендациям того же API («restructure your code so you do not need runAsync») тест переведён на детерминированный fake-async: HttpClient замокан через HttpOverrides-зону (мгновенные microtask-ответы, счётчики GET/POST), гонка только на `pump`. Имя теста и проверяемое поведение сохранены: 503 → заглушка с кнопкой → тап «Повторить загрузку» → второй GET ТОГО ЖЕ URL (`gets.toSet().length == 1`, `gets.length == 2`) → заглушка уходит; `posts == 0`.
 
 ## Что стоит улучшить рядом
-- В `f1_retry_resume_test.dart` и `f5_image_reload_test.dart` дублируется
-  класс `_RealHttpOverrides` (тот же приём зоны). Можно вынести в общий
-  `test/helpers/real_http_overrides.dart` — при следующей правке тестов.
-- Аналогично дублируется тестовый 1x1-PNG (base64) — кандидат в общую
-  фикстуру.
-- Правило «не удалять unused-импорты» + строгий `flutter analyze` = каждый
-  такой импорт придётся глушить ignore-комментарием; стоит обсудить
-  исключение для тестовых файлов либо `errors: unused_import: ignore`
-  в `analysis_options.yaml` (не делал без согласования — это изменение
-  политики, а не точечный фикс).
-- 7 однотипных const-частей в тесте наводят на мысль о фабричках-хелперах
-  (`ChatMessage withImage(...)`), чтобы новые тесты не воспроизводили
-  шаблон с шансом снова поймать линт.
+
+- Покрыть авто-повтор `_RetryableNetworkImage` (таймер 2/4/8/… с) отдельным фикстурным тестом через `pump(Duration(seconds: 2))` — сейчас покрыт только ручной повтор.
+- Для реальных сетевых widget-фикстур держать правило: живой HttpServer — только в plain `test` (как в f1_retry_resume_test); в `testWidgets` — мок HttpClient на уровне HttpOverrides.
+- При добавлении аудио (F6) вынести нормализацию источников медиа из `_fromSource` в общий хелпер MessagePart, чтобы типы медиа не рассинхронизировались.

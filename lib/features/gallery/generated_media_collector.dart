@@ -45,9 +45,9 @@ class GalleryMediaItem {
 ///
 /// Источник правды — ChatStore: история чатов персистится в
 /// SharedPreferences и уже содержит сгенерированное медиа в двух видах:
-///  - части ImagePart/VideoPart (в том числе результат модели-инструмента
-///    и видео-задач: GenCompleted -> VideoPart, ToolMedia -> ImagePart);
-///  - markdown-ссылки `![изображение](...)` от ImagesApiExecutor.
+/// - части ImagePart/VideoPart (в том числе результат модели-инструмента
+///   и видео-задач: GenCompleted -> VideoPart, ToolMedia -> ImagePart);
+/// - markdown-ссылки `![изображение](...)` от ImagesApiExecutor.
 /// Отдельное хранилище артефактов синхронизировать не нужно: галерея
 /// всегда показывает то же самое, что и чаты, а новая генерация
 /// появляется в галерее сама после сохранения чата.
@@ -117,6 +117,22 @@ class GeneratedMediaCollector {
     if (s.startsWith('file://')) {
       s = s.substring('file://'.length);
       if (s.isEmpty) return null;
+      return GalleryMediaItem(
+        isVideo: isVideo,
+        path: s,
+        isLocal: true,
+        chatTitle: chat.title,
+        addedAt: chat.updatedAt,
+      );
+    }
+    // F5-gallery-image-load-heal2: ImagePart.fromPath / VideoPart.fromPath
+    // хранят ГОЛЫЙ абсолютный путь без префикса 'file://' — это такой же
+    // локальный файл, как и file://-ссылка. Раньше такой источник попадал
+    // в «неподдерживаемую схему» и отбрасывался: локальные ImagePart вообще
+    // не доходили до галереи (F5-T-GALLERY-IMAGE-AND-VIDEO: 2 вместо 3).
+    // Нормализация как у file://-ветки гарантирует единый path-ключ дедупа:
+    // `file:///x/img.png` и `/x/img.png` — один элемент, а не два.
+    if (s.startsWith('/')) {
       return GalleryMediaItem(
         isVideo: isVideo,
         path: s,

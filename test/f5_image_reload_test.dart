@@ -7,11 +7,22 @@
 // показывает заглушку «Не удалось загрузить изображение» с кнопкой
 // «Повторить загрузку» (виджет _RetryableNetworkImage из F1, без
 // дублирования); после нажатия повторяет ЗАГРУЗКУ ТОГО ЖЕ URL —
-// картинка появляется, ни одного POST (новой генерации) на сервере нет.
+// картинка появляется, ни одного POST (новой генерации) нет.
 //
-// Сеть настоящая: зона с реальными HttpOverrides (тот же приём, что в
-// f1_retry_resume_test.dart) — локальный HttpServer отвечает реальным
-// HttpClient, а не заглушкой binding.
+// F5-gallery-image-load-heal2: причина таймаута предыдущей версии фикстуры
+// (TimeoutException после 2 минут, шаг Run tests CI-запуска 46013163126) —
+// НЕ продакшн-код, а сама фикстура. Она поднимала живой HttpServer и ждала
+// сеть окнами tester.runAsync внутри testWidgets. testWidgets работает в
+// fake-async: фьючерсы, зависящие от реального ввода-вывода, не разрешаются
+// между окнами runAsync — документированная ловушка (api.flutter.dev,
+// WidgetTester.runAsync: «If your widget test hangs and you are using
+// runAsync… Fake async environment is unable to resolve a future…»).
+// По рекомендациям того же API («restructure your code so you do not need
+// runAsync») HttpClient замокан через HttpOverrides-зону: ответы
+// возвращаются мгновенно (microtask), весь путь загрузки детерминированно
+// разрешается в fake-async обычными pump. Проверяемое поведение не меняется:
+// первая загрузка 503 -> заглушка -> «Повторить загрузку» -> второй GET
+// ТОГО ЖЕ URL -> заглушка уходит; POST = 0.
 
 import 'dart:convert';
 import 'dart:io';
@@ -28,12 +39,148 @@ import 'package:gentech_chat/core/models/message_part.dart';
 import 'package:gentech_chat/models/chat_message.dart';
 import 'package:gentech_chat/widgets/message_view.dart';
 
-/// Зона с живыми локальными HttpServer: каждый HttpClient() получает
-/// собственный настоящий клиент через базовую реализацию dart:io.
-class _RealHttpOverrides extends HttpOverrides {
+/// Валидный 1x1 PNG для успешной (повторной) загрузки.
+const String _pngBase64 =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8'
+    'z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+/// Счётчики HTTP-вызовов фикстуры: GET — по URL (проверка «тот же URL»),
+/// POST — любая новая генерация обязана дать ноль.
+class _FixtureState {
+  final List<String> gets = <String>[];
+  final List<String> posts = <String>[];
+}
+
+/// HttpOverrides-зона теста: каждый HttpClient() (в том числе общий
+/// NetworkImage._sharedHttpClient, создаваемый при первой сетевой картинке)
+/// получает мок с мгновенными ответами — без реального ввода-вывода и
+/// без runAsync.
+class _MockHttpOverrides extends HttpOverrides {
+  _MockHttpOverrides(this.state);
+
+  final _FixtureState state;
+
   @override
   HttpClient createHttpClient(SecurityContext? context) =>
-      super.createHttpClient(context);
+      _MockHttpClient(state);
+}
+
+/// Мок HttpClient: GET-загрузки считаются по URL; первая — 503 (как
+/// DNS-сбой из живого теста), повторные — валидный PNG. Не-GET (POST) —
+/// это новая генерация/создание задачи: фиксируется, проверка требует нуля.
+class _MockHttpClient implements HttpClient {
+  _MockHttpClient(this.state);
+
+  final _FixtureState state;
+
+  Future<HttpClientRequest> _open(String method, Uri url) {
+    final String m = method.toUpperCase();
+    if (m == 'GET') {
+      state.gets.add(url.toString());
+      if (state.gets.length <= 1) {
+        return Future<HttpClientRequest>.value(
+          _MockHttpClientRequest(
+            _MockHttpClientResponse(503, const <int>[]),
+          ),
+        );
+      }
+      return Future<HttpClientRequest>.value(
+        _MockHttpClientRequest(
+          _MockHttpClientResponse(200, base64Decode(_pngBase64)),
+        ),
+      );
+    }
+    state.posts.add('$m $url');
+    return Future<HttpClientRequest>.value(
+      _MockHttpClientRequest(
+        _MockHttpClientResponse(500, const <int>[]),
+      ),
+    );
+  }
+
+  @override
+  Future<HttpClientRequest> getUrl(Uri url) => _open('GET', url);
+
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) =>
+      _open(method, url);
+
+  // NetworkImage задаёт autoUncompress; остальные незадействованные члены
+  // HttpClient закрываются noSuchMethod'ом (пустое поведение).
+  @override
+  bool get autoUncompress => false;
+
+  @override
+  set autoUncompress(bool value) {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _MockHttpClientRequest implements HttpClientRequest {
+  _MockHttpClientRequest(this.response);
+
+  final _MockHttpClientResponse response;
+
+  @override
+  Future<HttpClientResponse> close() =>
+      Future<HttpClientResponse>.value(response);
+
+  @override
+  HttpHeaders get headers => _MockHttpHeaders();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _MockHttpClientResponse extends Stream<List<int>>
+    implements HttpClientResponse {
+  _MockHttpClientResponse(this.statusCode, this.bytes)
+      : contentLength = bytes.length,
+        _inner = Stream<List<int>>.fromIterable(<List<int>>[bytes]);
+
+  @override
+  final int statusCode;
+
+  @override
+  final int contentLength;
+
+  final List<int> bytes;
+
+  final Stream<List<int>> _inner;
+
+  @override
+  StreamSubscription<List<int>> listen(
+    void Function(List<int> event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) {
+    return _inner.listen(
+      onData,
+      onError: onError,
+      onDone: onDone,
+      cancelOnError: cancelOnError ?? false,
+    );
+  }
+
+  @override
+  HttpClientResponseCompressionState get compressionState =>
+      HttpClientResponseCompressionState.notCompressed;
+
+  @override
+  HttpHeaders get headers => _MockHttpHeaders();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+class _MockHttpHeaders implements HttpHeaders {
+  @override
+  String? value(String name) => null;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }
 
 void main() {
@@ -41,98 +188,63 @@ void main() {
     'F5-T-IMAGE-RELOAD-NO-REGEN: «Повторить загрузку» перезапрашивает '
     'ТОТ ЖЕ URL — без новой генерации (ни одного POST)',
     (tester) async {
-      // Валидный 1x1 PNG.
-      const pngBase64 =
-          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8'
-          'z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+      final state = _FixtureState();
+      const url = 'http://fixture.invalid/img.png';
+      final msg = ChatMessage(
+        id: 'f5-reload',
+        role: 'assistant',
+        parts: <MessagePart>[ImagePart.fromUrl(url)],
+      );
 
       await HttpOverrides.runWithHttpOverrides<Future<void>>(() async {
-        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-        var gets = 0;
-        var posts = 0;
-        server.listen((request) async {
-          if (request.method == 'POST') {
-            // Любая новая генерация ушла бы POST-ом на этот адрес.
-            posts++;
-            await utf8.decoder.bind(request).join();
-            request.response.statusCode = 500;
-            await request.response.close();
-            return;
-          }
-          gets++;
-          if (gets <= 1) {
-            // Первая загрузка «падает» — как DNS-сбой из живого теста.
-            request.response.statusCode = 503;
-            await request.response.close();
-            return;
-          }
-          request.response.headers.contentType =
-              ContentType('image', 'png');
-          request.response.add(base64Decode(pngBase64));
-          await request.response.close();
-        });
-
-        final url = 'http://127.0.0.1:${server.port}/img.png';
-        final msg = ChatMessage(
-          id: 'f5-reload',
-          role: 'assistant',
-          parts: <MessagePart>[ImagePart.fromUrl(url)],
-        );
-
-        try {
-          await tester.pumpWidget(MaterialApp(
-            home: Scaffold(
-              body: SingleChildScrollView(
-                child: MessageView(message: msg),
-              ),
+        await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: MessageView(message: msg),
             ),
-          ));
+          ),
+        ));
 
-          // Первая загрузка стартовала; даём сетевому стеку реальное
-          // время и ждём появления заглушки ошибки.
-          var errorShown = false;
-          for (var i = 0; i < 40 && !errorShown; i++) {
-            await tester.runAsync(
-              () => Future<void>.delayed(const Duration(milliseconds: 100)),
-            );
-            await tester.pump();
-            errorShown = find
-                .text('Не удалось загрузить изображение')
-                .evaluate()
-                .isNotEmpty;
-          }
-
-          await tester.tap(find.text('Повторить загрузку'));
-          await tester.pump();
-
-          // Повтор ТОГО ЖЕ URL: ждём появления картинки (заглушка уходит).
-          var loaded = false;
-          for (var i = 0; i < 40 && !loaded; i++) {
-            await tester.runAsync(
-              () => Future<void>.delayed(const Duration(milliseconds: 100)),
-            );
-            await tester.pump();
-            loaded = find
-                .text('Не удалось загрузить изображение')
-                .evaluate()
-                .isEmpty;
-          }
-
-          expect(errorShown, isTrue,
-              reason: 'первая загрузка URL не удалась — показана заглушка');
-          expect(loaded, isTrue,
-              reason: 'картинка должна появиться после повтора загрузки '
-                  'без новой генерации');
-        } finally {
-          await server.close(force: true);
+        // Первая загрузка «падает» (503): ждём появления заглушки ошибки.
+        // Бюджет fake-времени до тапа — 1 с (< 2 с авто-повтора фикстуры):
+        // проверяется именно РУЧНАЯ кнопка «Повторить загрузку».
+        var errorShown = false;
+        for (var i = 0; i < 10 && !errorShown; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          errorShown = find
+              .text('Не удалось загрузить изображение')
+              .evaluate()
+              .isNotEmpty;
         }
+        expect(errorShown, isTrue,
+            reason: 'первая загрузка URL не удалась — показана заглушка');
+        expect(find.text('Повторить загрузку'), findsOneWidget);
 
-        expect(posts, 0,
+        await tester.tap(find.text('Повторить загрузку'));
+        await tester.pump();
+
+        // Повтор ТОГО ЖЕ URL: заглушка уходит — загрузка пошла заново,
+        // картинка появляется без какой-либо новой генерации.
+        var stubGone = false;
+        for (var i = 0; i < 10 && !stubGone; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+          stubGone = find
+              .text('Не удалось загрузить изображение')
+              .evaluate()
+              .isEmpty;
+        }
+        expect(stubGone, isTrue,
+            reason: 'картинка появляется после повтора загрузки '
+                'без новой генерации');
+
+        expect(state.posts, isEmpty,
             reason: 'повторная загрузка не должна создавать новую '
                 'задачу генерации');
-        expect(gets, greaterThanOrEqualTo(2),
-            reason: 'загрузка повторена для того же URL');
-      }, _RealHttpOverrides());
+        expect(state.gets, hasLength(2),
+            reason: 'загрузка выполнена дважды: исходная + повтор');
+        expect(state.gets.toSet().length, 1,
+            reason: 'повторяется ТОТ ЖЕ URL, а не другой источник');
+      }, _MockHttpOverrides(state));
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
