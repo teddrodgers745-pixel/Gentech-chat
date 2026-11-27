@@ -42,7 +42,7 @@ void main() {
     'F3-T-COST-LINE-BOTH: сумма с полной точностью и токены — '
     'оба показаны («≈ 1,875 ₽ · 30 ток.»)',
     (tester) async {
-      await tester.pumpWidget(host(replyWithCost(MessageCost(
+      await tester.pumpWidget(host(replyWithCost(const MessageCost(
         cost: 1.875,
         currency: 'RUB',
         promptTokens: 10,
@@ -59,7 +59,7 @@ void main() {
     'F3-T-COST-LINE-TOKENS-ONLY: сумма неизвестна — только токены, '
     'ноль и «неизвестно» не подставляются',
     (tester) async {
-      await tester.pumpWidget(host(replyWithCost(MessageCost(
+      await tester.pumpWidget(host(replyWithCost(const MessageCost(
         promptTokens: 10,
         completionTokens: 20,
       ))));
@@ -78,7 +78,7 @@ void main() {
       addTearDown(() => settings.setShowCost(was));
       settings.setShowCost(false);
 
-      await tester.pumpWidget(host(replyWithCost(MessageCost(
+      await tester.pumpWidget(host(replyWithCost(const MessageCost(
         cost: 1.875,
         currency: 'RUB',
         promptTokens: 10,
