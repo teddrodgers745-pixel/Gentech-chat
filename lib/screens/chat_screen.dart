@@ -1580,7 +1580,11 @@ class _ChatScreenState extends State<ChatScreen> {
         continue;
       }
       if (m.content.isEmpty) continue;
-      msgs.add(<Map<String, dynamic>{'role': m.role, 'content': m.content});
+      // F1-retry-resume-heal1: литерал КАРТЫ (Map<String, dynamic>) —
+      // `<String, dynamic>{...}`, а НЕ `<Map<String, dynamic>>{...}`
+      // (один тип-аргумент перед `{` = SET-литерал: Set<Map<String,
+      // dynamic>> не присваивается элементу List<Map<String, dynamic>>).
+      msgs.add(<String, dynamic>{'role': m.role, 'content': m.content});
     }
     return msgs;
   }

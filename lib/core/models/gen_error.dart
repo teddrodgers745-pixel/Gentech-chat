@@ -60,6 +60,9 @@ class RateLimited extends GenError {
   final String details;
 
   @override
+  String get code => 'rate_limit';
+
+  @override
   String get message {
     final base = 'Слишком много запросов. Подождите немного и повторите.';
     final wait = retryAfter;
@@ -92,6 +95,9 @@ class ServerError extends GenError {
 
   final int? statusCode;
   final String details;
+
+  @override
+  String get code => 'server';
 
   @override
   String get message {
