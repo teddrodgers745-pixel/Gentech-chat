@@ -30,6 +30,24 @@
 // идиом «будущее, которое никогда не завершится» — незаполняемый
 // комплитер: незавершённый Completer ждётся вечно, соединение висит
 // открытым до force-close сервера тестом.
+//
+// F1-fix-tests-2-heal2: зона с настоящими HttpOverrides сама по себе
+// НЕ спасала: настоящий HttpClient нельзя создать внутри зоны с
+// HttpOverrides — factory HttpClient() вызывает
+// HttpOverrides.current.createHttpClient(), то есть рекурсию. Прежняя
+// версия кэшировала клиент полем `final HttpClient _client =
+// HttpClient()` — поле инициализировалось при конструировании
+// _RealHttpOverrides как АРГУМЕНТА runWithHttpOverrides, то есть ещё
+// ДО входа в нашу зону и ПОД глобальной заглушкой TestWidgetsFlutterBinding
+// (binding ставит HttpOverrides.global = _MockHttpOverrides в момент
+// ensureInitialized; заглушка отвечает 400 на всё). В результате
+// «настоящая» зона раздавала всем запросам заглушку: каждый
+// POST/GET завершался 400 с пустым телом, тестовый сервер не
+// достигался, исполнитель бесконечно считал задачу «в процессе», и
+// оба теста падали по TimeoutException после 2 минут. Настоящий
+// HttpClient теперь создаётся В main() ДО TestWidgetsFlutterBinding
+// .ensureInitialized() (когда HttpOverrides.global ещё не установлен),
+// а зона _RealHttpOverrides раздаёт его всем клиентам.
 
 import 'dart:async';
 import 'dart:convert';
@@ -51,14 +69,56 @@ import 'package:gentech_chat/core/models/gen_error.dart';
 /// Настоящие HttpOverrides (настоящий HttpClient) для тестов с живыми
 /// локальными HttpServer: зона, в которой создаются клиенты, отменяет
 /// глобальную заглушку TestWidgetsFlutterBinding (все ответы 400).
+///
+/// F1-fix-tests-2-heal2: настоящий HttpClient НЕ создаётся ни внутри
+/// [createHttpClient] (рекурсия factory HttpClient() в зоне с
+/// HttpOverrides), ни полем-инициализатором (оно выполняется под
+/// заглушкой binding — все ответы 400). Единственный настоящий клиент
+/// создаёт [createRealHttpClient] в main() до инициализации binding.
 class _RealHttpOverrides extends HttpOverrides {
-  final HttpClient _client = HttpClient();
+  /// Единственный настоящий HttpClient для этой сессии тестов.
+  static HttpClient? _realClient;
+
+  /// Создаёт настоящий HttpClient, временно снимая HttpOverrides.global.
+  /// Вызов синхронный: между снятием и восстановлением заглушки ни один
+  /// другой код не выполняется (изолят однопоточный), гонок нет.
+  static HttpClient createRealHttpClient() {
+    final HttpClient? existing = _realClient;
+    if (existing != null) return existing;
+    final HttpOverrides? saved = HttpOverrides.global;
+    HttpOverrides.global = null;
+    try {
+      return _realClient = HttpClient();
+    } finally {
+      HttpOverrides.global = saved;
+    }
+  }
 
   @override
-  HttpClient createHttpClient(SecurityContext? context) => _client;
+  HttpClient createHttpClient(SecurityContext? context) {
+    final HttpClient? real = _realClient;
+    if (real == null) {
+      // Сюда попасть не должно: клиент создаётся в main() до
+      // инициализации TestWidgetsFlutterBinding. Громкий сбой вместо
+      // тихой заглушки 400, которая маскирует ошибку фикстуры.
+      throw StateError(
+        'Настоящий HttpClient не создан: _RealHttpOverrides'
+        '.createRealHttpClient() должен быть вызван до '
+        'TestWidgetsFlutterBinding.ensureInitialized().',
+      );
+    }
+    return real;
+  }
 }
 
 void main() {
+  // F1-fix-tests-2-heal2: настоящий HttpClient создаётся ДО
+  // TestWidgetsFlutterBinding.ensureInitialized(), который ставит
+  // HttpOverrides.global-заглушку (все ответы 400). Внутри зоны с
+  // HttpOverrides factory HttpClient() недоступен — createHttpClient
+  // вызывался бы рекурсивно. См. комментарий у _RealHttpOverrides.
+  _RealHttpOverrides.createRealHttpClient();
+
   TestWidgetsFlutterBinding.ensureInitialized();
 
   late Directory tempDir;
