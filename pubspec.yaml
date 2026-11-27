@@ -58,6 +58,10 @@ dependency_overrides:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  # G1-video-player: виджет-тесты подменяют платформенную реализацию
+  # video_player (VideoPlayerPlatform.instance = фейк), чтобы проверять
+  # play/pause/повтор/полный экран без реального декодера.
+  video_player_platform_interface: ^6.0.0
 
 flutter:
   uses-material-design: true

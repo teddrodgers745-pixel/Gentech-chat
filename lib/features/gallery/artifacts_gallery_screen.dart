@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 
 import '../../app_state.dart';
 import '../../theme.dart';
+import '../../widgets/video_player_card.dart';
 import 'generated_media_collector.dart';
 
 /// Галерея сгенерированного медиа (F5-gallery-image-load).
@@ -71,7 +72,9 @@ class ArtifactsGalleryScreen extends StatelessWidget {
 }
 
 /// Плитка галереи: изображение открывает полноэкранный просмотр,
-/// видео — статичная карточка (просмотр видео остаётся в чате).
+/// видео (G1-video-player) — тот же полноэкранный плеер, что и в чате:
+/// воспроизведение, скачивание и шаринг (кнопки в AppBar плеера).
+/// Раньше видео было мёртвой статичной карточкой без GestureDetector.
 class _GalleryTile extends StatelessWidget {
   final GalleryMediaItem item;
 
@@ -81,28 +84,31 @@ class _GalleryTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = settings.palette;
     if (item.isVideo) {
-      return Container(
-        decoration: BoxDecoration(
-          color: p.card,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: p.border),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.movie_outlined, size: 26, color: p.accent),
-            const SizedBox(height: 6),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 6),
-              child: Text(
-                item.displayName,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 10, color: p.muted),
+      return GestureDetector(
+        onTap: () => _openVideoViewer(context, item),
+        child: Container(
+          decoration: BoxDecoration(
+            color: p.card,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: p.border),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.play_circle_outline, size: 30, color: p.accent),
+              const SizedBox(height: 6),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6),
+                child: Text(
+                  item.displayName,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 10, color: p.muted),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       );
     }
@@ -117,6 +123,16 @@ class _GalleryTile extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Полноэкранный видеоплеер из галереи: тот же единый плеер
+/// (video_player_card.dart), что и в карточке чата.
+void _openVideoViewer(BuildContext context, GalleryMediaItem item) {
+  openFullscreenVideo(
+    context,
+    item.path,
+    name: item.displayName,
+  );
 }
 
 /// Локальный файл, https-ссылка либо data-URL; неудача загрузки —

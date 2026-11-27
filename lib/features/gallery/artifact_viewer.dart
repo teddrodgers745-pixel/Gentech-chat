@@ -10,6 +10,7 @@ import '../../app_state.dart';
 import '../../core/generation/artifact_repository.dart';
 import '../../core/models/artifact.dart';
 import '../../theme.dart';
+import '../../widgets/video_player_card.dart';
 
 /// Медиа-содержимое артефакта: локальный файл, data URL либо сетевая
 /// ссылка. [fit] — обрезать по контейнеру (сетка) либо вписать целиком
@@ -101,9 +102,10 @@ String? formatArtifactCost(double? cost) {
   return '≈ $s';
 }
 
-/// Модальное окно просмотра артефакта: изображение в InteractiveViewer
-/// (для видео — статичная карточка), промпт, модель, дата, стоимость
-/// и кнопки «Поделиться»/«Удалить». Удаление убирает артефакт из индекса
+/// Модальное окно просмотра артефакта: изображение в InteractiveViewer,
+/// видео (G1-video-player) — единый плеер с воспроизведением и
+/// скачиванием, промпт, модель, дата, стоимость и кнопки
+/// «Поделиться»/«Удалить». Удаление убирает артефакт из индекса
 /// [ArtifactRepository] и закрывает окно.
 class ArtifactViewer extends StatelessWidget {
   final Artifact artifact;
@@ -157,19 +159,26 @@ class ArtifactViewer extends StatelessWidget {
                 children: [
                   ClipRRect(
                     borderRadius: BorderRadius.circular(16),
-                    child: Container(
-                      height: 280,
-                      color: p.codeBg,
-                      child: a.kind == Artifact.kindVideo
-                          ? _videoCard(a, p)
-                          : InteractiveViewer(
+                    child: a.kind == Artifact.kindVideo
+                        ? // G1-video-player: видео проигрывается тем же
+                          // плеером, что и в чате (play/pause, перемотка,
+                          // звук, повтор), вместо статичной карточки.
+                          VideoPlayerCard(
+                            source: a.hasLocalFile
+                                ? a.localPath.trim()
+                                : a.remoteUrl.trim(),
+                          )
+                        : Container(
+                            height: 280,
+                            color: p.codeBg,
+                            child: InteractiveViewer(
                               maxScale: 8,
                               child: Center(
                                 child:
                                     artifactMedia(a, p, fit: BoxFit.contain),
                               ),
                             ),
-                    ),
+                          ),
                   ),
                   const SizedBox(height: 14),
                   if (a.prompt.trim().isNotEmpty) ...[
@@ -220,22 +229,6 @@ class ArtifactViewer extends StatelessWidget {
           ),
         );
       },
-    );
-  }
-
-  Widget _videoCard(Artifact a, Palette p) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.movie_outlined, size: 56, color: p.accent),
-          const SizedBox(height: 10),
-          Text(
-            'Видео',
-            style: TextStyle(fontSize: 14, color: p.muted),
-          ),
-        ],
-      ),
     );
   }
 

@@ -14,6 +14,11 @@ import 'package:flutter_highlight/themes/github.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
+// G1-video-player: плеер вынесен в единый VideoPlayerCard
+// (video_player_card.dart) — тот же код работает в чате, в полном
+// экране и в галерее. Сам video_player здесь больше не используется;
+// импорт сохранён по правилам проекта.
+// ignore: unused_import
 import 'package:video_player/video_player.dart';
 
 import 'package:file_picker/file_picker.dart';
@@ -35,6 +40,7 @@ import '../theme.dart';
 import 'file_card.dart';
 import 'thinking_indicator.dart';
 import 'tool_call_card.dart';
+import 'video_player_card.dart';
 
 /// Одно сообщение: пользовательское или ответ модели.
 class MessageView extends StatelessWidget {
@@ -324,7 +330,7 @@ class MessageView extends StatelessWidget {
         case ImagePart():
           out.add(_PartImage(part: part, p: p));
         case VideoPart():
-          out.add(_PartVideo(part: part, p: p));
+          out.add(_PartVideo(part: part));
         case PendingPart():
           out.add(_PartPending(part: part, p: p));
         case ErrorPart():
@@ -1266,217 +1272,22 @@ String _imageExtFor(String source) {
   return '.png';
 }
 
-/// Видео из части сообщения: карточка с воспроизведением (video_player).
-/// Локальный файл либо https-ссылка; при неудаче инициализации —
-/// статичная карточка с иконкой, как раньше.
-class _PartVideo extends StatefulWidget {
+/// Видео из части сообщения: единый видеоплеер приложения
+/// (G1-video-player). Тап — play/pause; полоса перемотки со временем,
+/// звук/без звука, кнопка «На весь экран», повтор после конца,
+/// скачивание и шаринг — всё внутри VideoPlayerCard. Один код с
+/// галереей и полноэкранным режимом (см. video_player_card.dart).
+class _PartVideo extends StatelessWidget {
   final VideoPart part;
-  final Palette p;
 
-  const _PartVideo({required this.part, required this.p});
-
-  @override
-  State<_PartVideo> createState() => _PartVideoState();
-}
-
-class _PartVideoState extends State<_PartVideo> {
-  VideoPlayerController? _controller;
-  bool _failed = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _init();
-  }
-
-  @override
-  void dispose() {
-    final c = _controller;
-    _controller = null;
-    c?.removeListener(_onTick);
-    c?.dispose();
-    super.dispose();
-  }
-
-  Future<void> _init() async {
-    VideoPlayerController? c;
-    final part = widget.part;
-    if (part.isLocal) {
-      final path = (part.localPath ?? '').trim();
-      if (path.isEmpty) {
-        _fail();
-        return;
-      }
-      c = VideoPlayerController.file(File(path));
-    } else {
-      final url = (part.remoteUrl ?? '').trim();
-      if (!url.startsWith('http://') && !url.startsWith('https://')) {
-        _fail();
-        return;
-      }
-      c = VideoPlayerController.networkUrl(Uri.parse(url));
-    }
-    try {
-      await c.initialize();
-    } catch (_) {
-      try {
-        await c.dispose();
-      } catch (_) {}
-      _fail();
-      return;
-    }
-    if (!mounted) {
-      try {
-        await c.dispose();
-      } catch (_) {}
-      return;
-    }
-    c.addListener(_onTick);
-    setState(() => _controller = c);
-  }
-
-  void _fail() {
-    if (mounted) setState(() => _failed = true);
-  }
-
-  void _onTick() {
-    if (mounted) setState(() {});
-  }
-
-  void _togglePlay() {
-    final c = _controller;
-    if (c == null || !c.value.isInitialized) return;
-    setState(() {
-      if (c.value.isPlaying) {
-        c.pause();
-      } else {
-        c.play();
-      }
-    });
-  }
-
-  String get _name {
-    final part = widget.part;
-    final src = part.isLocal ? (part.localPath ?? '') : (part.remoteUrl ?? '');
-    final clean = src.replaceFirst(RegExp(r'^file://'), '');
-    final idx = clean.lastIndexOf('/');
-    if (idx >= 0 && idx < clean.length - 1) return clean.substring(idx + 1);
-    return clean.isEmpty ? 'видео' : clean;
-  }
+  const _PartVideo({required this.part});
 
   @override
   Widget build(BuildContext context) {
-    final c = _controller;
-    if (_failed || c == null || !c.value.isInitialized) return _staticCard();
-    final ar = c.value.aspectRatio;
-    final ratio = (ar.isFinite && ar > 0) ? ar : 16 / 9;
-    final p = widget.p;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: p.border),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          GestureDetector(
-            onTap: _togglePlay,
-            child: AspectRatio(
-              aspectRatio: ratio,
-              child: VideoPlayer(c),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
-            child: Row(
-              children: [
-                Icon(Icons.movie_outlined, size: 18, color: p.accent),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    _name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: fontStyle(
-                      settings.codeFont,
-                      size: 13,
-                      weight: FontWeight.w600,
-                      color: p.text,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: c.value.isPlaying ? 'Пауза' : 'Воспроизвести',
-                  visualDensity: VisualDensity.compact,
-                  iconSize: 24,
-                  icon: Icon(
-                    c.value.isPlaying
-                        ? Icons.pause_rounded
-                        : Icons.play_arrow_rounded,
-                    color: p.accent,
-                  ),
-                  onPressed: _togglePlay,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _staticCard() {
-    final p = widget.p;
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.symmetric(vertical: 8),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: p.card,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: p.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: p.accent.withValues(alpha: 0.14),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(Icons.movie_outlined, size: 22, color: p.accent),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: fontStyle(
-                    settings.codeFont,
-                    size: 14,
-                    weight: FontWeight.w600,
-                    color: p.text,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  'Видео',
-                  style: TextStyle(fontSize: 12, color: p.muted),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
+    final src = part.isLocal ? (part.localPath ?? '') : (part.remoteUrl ?? '');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: VideoPlayerCard(source: src),
     );
   }
 }
