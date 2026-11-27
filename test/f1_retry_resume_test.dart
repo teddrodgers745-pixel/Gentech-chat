@@ -48,6 +48,18 @@
 // HttpClient теперь создаётся В main() ДО TestWidgetsFlutterBinding
 // .ensureInitialized() (когда HttpOverrides.global ещё не установлен),
 // а зона _RealHttpOverrides раздаёт его всем клиентам.
+//
+// F1-fix-tests-3: в Dart 3.9 (Flutter 3.35.7) у статического
+// HttpOverrides.global УДАЛЁН ГЕТТЕР — остался только сеттер
+// («no getter» в dart:io API; чтение доступно лишь через zone-aware
+// HttpOverrides.current, у которого наоборот нет сеттера). Прежний
+// `final saved = HttpOverrides.global` падал на flutter analyze:
+// undefined_getter 'global'. Обход см. в [_RealHttpClientFactory]:
+// клиент создаётся через runWithHttpOverrides с подклассом, который
+// наследует БАЗОВУЮ реализацию HttpOverrides.createHttpClient —
+// по документации dart:io она возвращает НАСТОЯЩИЙ HttpClient
+// (не заглушку и не рекурсию factory). Такой способ не зависит
+// ни от состояния global, ни от порядка инициализации binding.
 
 import 'dart:async';
 import 'dart:convert';
@@ -66,6 +78,17 @@ import 'package:gentech_chat/core/generation/model_type_override_store.dart'
     show ModelTypes;
 import 'package:gentech_chat/core/models/gen_error.dart';
 
+/// Подкласс HttpOverrides, который НЕ подменяет клиент: его
+/// createHttpClient наследует базовую реализацию dart:io, которая по
+/// документации «defaults to the actual HttpClient implementation» —
+/// то есть возвращает настоящий клиент, не заглушку и не рекурсию
+/// factory HttpClient() внутри зоны с HttpOverrides.
+class _RealHttpClientFactory extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) =>
+      super.createHttpClient(context);
+}
+
 /// Настоящие HttpOverrides (настоящий HttpClient) для тестов с живыми
 /// локальными HttpServer: зона, в которой создаются клиенты, отменяет
 /// глобальную заглушку TestWidgetsFlutterBinding (все ответы 400).
@@ -79,19 +102,28 @@ class _RealHttpOverrides extends HttpOverrides {
   /// Единственный настоящий HttpClient для этой сессии тестов.
   static HttpClient? _realClient;
 
-  /// Создаёт настоящий HttpClient, временно снимая HttpOverrides.global.
-  /// Вызов синхронный: между снятием и восстановлением заглушки ни один
-  /// другой код не выполняется (изолят однопоточный), гонок нет.
+  /// Создаёт настоящий HttpClient независимо от состояния
+  /// HttpOverrides.global и текущей зоны: factory HttpClient()
+  /// выполняется в зоне с [_RealHttpClientFactory], чей
+  /// createHttpClient — базовая (настоящая) реализация dart:io.
+  ///
+  /// F1-fix-tests-3: раньше здесь читали и восстанавливали
+  /// HttpOverrides.global (`final saved = HttpOverrides.global; ...`),
+  /// но в Dart 3.9 у global удалён статический ГЕТТЕР — остался только
+  /// сеттер (чтение — через HttpOverrides.current, без сеттера), поэтому
+  /// flutter analyze падал: undefined_getter 'global' на строке
+  /// `final HttpOverrides? saved = HttpOverrides.global;`. Новый вариант
+  /// ничего не читает и не восстанавливает: клиент кэшируется
+  /// статически, а construction идёт через документированную базовую
+  /// реализацию createHttpClient — она всегда даёт настоящий клиент,
+  /// даже если binding уже установил глобальную заглушку.
   static HttpClient createRealHttpClient() {
     final HttpClient? existing = _realClient;
     if (existing != null) return existing;
-    final HttpOverrides? saved = HttpOverrides.global;
-    HttpOverrides.global = null;
-    try {
-      return _realClient = HttpClient();
-    } finally {
-      HttpOverrides.global = saved;
-    }
+    return _realClient = HttpOverrides.runWithHttpOverrides<HttpClient>(
+      () => HttpClient(),
+      _RealHttpClientFactory(),
+    );
   }
 
   @override
@@ -117,6 +149,8 @@ void main() {
   // HttpOverrides.global-заглушку (все ответы 400). Внутри зоны с
   // HttpOverrides factory HttpClient() недоступен — createHttpClient
   // вызывался бы рекурсивно. См. комментарий у _RealHttpOverrides.
+  // F1-fix-tests-3: способ создания стал устойчивым и к обратному
+  // порядку (см. _RealHttpClientFactory), но контракт сохранён.
   _RealHttpOverrides.createRealHttpClient();
 
   TestWidgetsFlutterBinding.ensureInitialized();
