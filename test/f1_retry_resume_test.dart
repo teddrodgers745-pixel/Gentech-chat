@@ -23,6 +23,13 @@
 // (JobStatusUnknown, запись жива). Теперь опрос вообще не отвечает:
 // соединение принимается, ответа нет до force-close — исполнитель
 // гарантированно получает сетевую ошибку опроса.
+//
+// F1-fix-tests-2-heal1: в предыдущей версии обработчика использовался
+// несуществующий конструктор `Completer<void>.never()` (его нет в
+// dart:async, падала зелёная сборка на flutter analyze). Правильный
+// идиом «будущее, которое никогда не завершится» — незаполняемый
+// комплитер: незавершённый Completer ждётся вечно, соединение висит
+// открытым до force-close сервера тестом.
 
 import 'dart:async';
 import 'dart:convert';
@@ -214,7 +221,12 @@ void main() {
             // до force-close сервера ниже). Так исполнитель гарантированно
             // получает сетевую ошибку опроса, а не HTTP-ответ —
             // детерминированно, без гонки с server.close.
-            await Completer<void>.never().future;
+            //
+            // F1-fix-tests-2-heal1: `Completer<void>.never()` не существует
+            // в dart:async — незавершённый комплитер даёт то же поведение
+            // «future, которое никогда не завершится».
+            final never = Completer<void>();
+            await never.future;
           });
 
           final events = <GenerationEvent>[];
@@ -247,7 +259,7 @@ void main() {
             await created.future;
             await server.close(force: true);
 
-            // Транзиентные повторы: пауза 2/4/6 секунды перед сдачей.
+            // Транзиентные повторы: пауза 2/4/6 секунд перед сдачей.
             await done.future
                 .timeout(const Duration(seconds: 90), onTimeout: () {});
 
