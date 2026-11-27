@@ -424,11 +424,16 @@ class _ChatScreenState extends State<ChatScreen> {
         if (!matchesJob && !matchesMeta) continue;
 
         // Ответ ассистента следом за запросом — карточка генерации.
+        // F1-seedance-restore-heal1: раньше здесь был цикл
+        // `for (int j = i + 1; j < chat.messages.length; j++)`, тело
+        // которого ВСЕГДА завершалось break на первой итерации —
+        // инкремент j++ был недостижим (анализатор: dead_code).
+        // Прямая проверка следующего сообщения сохраняет поведение
+        // без мёртвого кода.
         ChatMessage? reply;
-        for (int j = i + 1; j < chat.messages.length; j++) {
-          if (chat.messages[j].role != 'assistant') break;
-          reply = chat.messages[j];
-          break;
+        if (i + 1 < chat.messages.length &&
+            chat.messages[i + 1].role == 'assistant') {
+          reply = chat.messages[i + 1];
         }
         final pending = PendingPart(
           name: 'Генерация видео',

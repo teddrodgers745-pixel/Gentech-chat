@@ -150,7 +150,12 @@ void main() {
         id: 'seed-msg',
         role: 'assistant',
         parts: <MessagePart>[
-          PendingPart(
+          // F1-seedance-restore-heal1: const обязателен (prefer_const_
+          // constructors в CI): PendingPart — const-конструктор, все
+          // аргументы константы. ChatMessage без const — у него нет
+          // const-конструктора (мутабельные поля), элемент списка
+          // может быть const независимо от самого списка.
+          const PendingPart(
             name: 'Генерация видео',
             jobId: 'gen_2237626207858462721',
             indeterminate: true,
