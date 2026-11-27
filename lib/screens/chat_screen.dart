@@ -2187,9 +2187,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       backgroundColor: p.accent,
                       foregroundColor: Colors.white,
                     ),
-                  );
-                },
-              ),
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 20),
             Wrap(
