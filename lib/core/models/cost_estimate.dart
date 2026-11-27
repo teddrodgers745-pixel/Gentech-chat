@@ -56,21 +56,32 @@ class _PriceTier {
 /// недоступной. При наличии одновременно model и top-provider pricing
 /// источник не выбирается автоматически: вызывающий код пока не передаёт
 /// доказательство выбранного провайдера.
+///
+/// Сырые цены передаются ЯВНО ([modelPricingRaw]/[providerPricingRaw]);
+/// поиск тех же ключей внутри mediaParams остаётся запасным каналом,
+/// пока не проверены все остальные потребители (R6, п.8).
 abstract final class CostEstimator {
   static CostEstimate estimate({
     required String modelId,
     String prompt = '',
     Pricing? pricing,
     Map<String, dynamic>? mediaParams,
+    Object? modelPricingRaw,
+    Object? providerPricingRaw,
     String? resolution,
     int? durationSeconds,
     bool? hasVideo,
   }) {
     final media = mediaParams;
-    if (media == null) return CostEstimate.unknown;
+    if (media == null &&
+        modelPricingRaw == null &&
+        providerPricingRaw == null) {
+      return CostEstimate.unknown;
+    }
 
-    final modelPrices = media['model_pricing_raw'];
-    final providerPrices = media['top_provider_pricing_raw'];
+    final modelPrices = modelPricingRaw ?? media?['model_pricing_raw'];
+    final providerPrices =
+        providerPricingRaw ?? media?['top_provider_pricing_raw'];
     if (modelPrices != null && providerPrices != null) {
       return CostEstimate.unknown;
     }

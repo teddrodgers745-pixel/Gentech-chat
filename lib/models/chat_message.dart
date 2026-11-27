@@ -1,12 +1,18 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import '../core/models/gen_error.dart';
+import '../core/models/gen_error_mapper.dart';
 import '../core/models/message_part.dart';
 
 /// Статусы специального сообщения-вызова инструмента.
 const String toolStatusRunning = 'running';
 const String toolStatusDone = 'done';
 const String toolStatusError = 'error';
+
+/// Версия схемы сериализации частей сообщения (R6-audio-robustness-2,
+/// п.7). Рост версии означает изменение формата parts: старые записи
+/// читаются терпимо, файлы будущих версий — не угадываются.
+const int partSchemaVersion = 2;
 
 /// Снимок запроса, необходимый для повторной генерации.
 ///
@@ -146,6 +152,7 @@ class ChatMessage {
         'toolStatus': toolStatus,
         'errorCode': errorCode,
         'errorText': errorText,
+        'partSchemaVersion': partSchemaVersion,
         'parts': <Map<String, dynamic>>[
           for (final p in parts) _encodePart(p),
         ],
@@ -176,6 +183,10 @@ class ChatMessage {
 }
 
 /// Сериализация части сообщения (дискриминатор 'type').
+///
+/// Версионирование: каждая запись сообщения несёт partSchemaVersion
+/// (см. [ChatMessage.toJson]). Неизвестная часть сохраняется как
+/// {'type': 'unknown', ...} и НЕ превращается в пустой текст.
 Map<String, dynamic> _encodePart(MessagePart part) {
   final p = part;
   if (p is TextPart) {
@@ -207,18 +218,36 @@ Map<String, dynamic> _encodePart(MessagePart part) {
       'localPath': p.localPath,
       'jobId': p.jobId,
       'progress': p.progress,
+      'indeterminate': p.indeterminate,
       if (p.debugSnippets != null) 'debugSnippets': p.debugSnippets,
       if (p.debugLogPath != null) 'debugLogPath': p.debugLogPath,
     };
   }
   if (p is ErrorPart) {
+    // Тип ошибки и параметры повтора сохраняются (R6, п.7): после
+    // перезапуска ошибка восстанавливается по коду, а не заглушкой.
     return <String, dynamic>{
       'type': 'error',
-      'message': p.error.message,
+      'code': p.error.code,
+      'details': GenErrorMapper.detailsOf(p.error),
       'prompt': p.originalPrompt,
+      if (p.retryParams.isNotEmpty) 'retryParams': p.retryParams,
     };
   }
-  return <String, dynamic>{'type': 'text', 'text': ''};
+  if (p is UnknownPart) {
+    return <String, dynamic>{
+      'type': 'unknown',
+      'kind': p.kind,
+      'raw': p.raw,
+    };
+  }
+  // Любая новая часть, незнакомая этой версии сериализации, сохраняется
+  // как «неизвестная» с фактическим типом — данные не теряются.
+  return <String, dynamic>{
+    'type': 'unknown',
+    'kind': p.runtimeType.toString(),
+    'raw': <String, dynamic>{},
+  };
 }
 
 MessagePart? _decodePart(Object? raw) {
@@ -242,30 +271,47 @@ MessagePart? _decodePart(Object? raw) {
         localPath: (j['localPath'] as String?) ?? '',
         jobId: (j['jobId'] as String?) ?? '',
         progress: (j['progress'] as num?)?.toDouble() ?? 0,
+        indeterminate: j['indeterminate'] == true,
         debugSnippets: rawSnippets is List
             ? <String>[for (final e in rawSnippets) if (e != null) e.toString()]
             : null,
         debugLogPath: (j['debugLogPath'] as String?),
       );
     case 'error':
+      // Восстановление типизированной ошибки: код и детали сохранены
+      // при записи. Формат v1 ('message') тоже читается.
+      final code = ((j['code'] ?? '') as String?)?.trim() ?? '';
+      final details = ((j['details'] ?? '') as String?)?.trim() ??
+          ((j['message'] ?? '') as String?)?.trim() ??
+          '';
+      final rawRetry = j['retryParams'];
+      final retry = <String, dynamic>{};
+      if (rawRetry is Map) {
+        for (final entry in rawRetry.entries) {
+          if (entry.key is String) {
+            retry[entry.key as String] = entry.value;
+          }
+        }
+      }
       return ErrorPart(
-        error: UnknownGenError(details: (j['message'] as String?) ?? ''),
+        error: code.isNotEmpty
+            ? GenErrorMapper.fromCode(code, details: details)
+            : UnknownGenError(details: details),
         originalPrompt: (j['prompt'] as String?) ?? '',
+        retryParams: retry,
+      );
+    case 'unknown':
+      final rawMap = j['raw'];
+      return UnknownPart(
+        kind: (j['kind'] as String?) ?? '',
+        raw: rawMap is Map
+            ? Map<String, dynamic>.from(rawMap)
+            : const <String, dynamic>{},
       );
     default:
-      final rawCost = j['cost'];
-      final rawSources = j['sources'];
-      return TextPart(
-        (j['text'] as String?) ?? '',
-        cost: rawCost is Map
-            ? MessageCost.fromJson(Map<String, dynamic>.from(rawCost))
-            : null,
-        sources: rawSources is List
-            ? <String>[
-                for (final e in rawSources) if (e != null) e.toString(),
-              ]
-            : const <String>[],
-      );
+      // Неизвестный тип части: данные сохраняются, пустым текстом
+      // больше не подменяются (R6, п.7).
+      return UnknownPart(kind: (j['type'] ?? '').toString(), raw: j);
   }
 }
 

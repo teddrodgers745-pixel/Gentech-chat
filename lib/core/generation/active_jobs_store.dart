@@ -66,6 +66,11 @@ class AsyncJobRecord {
 
 /// Хранилище активных асинхронных задач. Все операции терпимы
 /// к сбоям хранилища: ошибка записи/чтения не роняет генерацию.
+///
+/// Read-modify-write операции (save / updateProgress / remove)
+/// СЕРИАЛИЗОВАНЫ очередью (R6-audio-robustness-2, п.4): параллельные
+/// задачи не теряют обновления друг друга, как это было бы при
+/// независимых «прочитал — изменил — записал» над одним списком.
 class ActiveJobsStore {
   ActiveJobsStore._();
 
@@ -73,8 +78,24 @@ class ActiveJobsStore {
 
   static const String _key = 'active_async_jobs';
 
-  /// Все сохранённые задачи (в порядке добавления).
-  Future<List<AsyncJobRecord>> loadAll() async {
+  /// Хвост очереди сериализации: следующая операция стартует только
+  /// после полного завершения предыдущей (ошибки не останавливают
+  /// очередь).
+  Future<void> _queue = Future<void>.value();
+
+  /// Выполняет [action] строго после завершения всех предыдущих
+  /// операций хранилища.
+  Future<T> _synchronized<T>(Future<T> Function() action) {
+    final result = _queue.then((_) => action());
+    _queue = result.then<void>((_) {}, onError: (_) {});
+    return result;
+  }
+
+  /// Все сохранённые задачи (в порядке добавления). Чтение также
+  /// сериализуется, чтобы видеть согласованный снимок списка.
+  Future<List<AsyncJobRecord>> loadAll() => _synchronized(_readAll);
+
+  Future<List<AsyncJobRecord>> _readAll() async {
     try {
       final p = await SharedPreferences.getInstance();
       final raw = p.getString(_key);
@@ -109,40 +130,42 @@ class ActiveJobsStore {
   }
 
   /// Добавляет задачу либо обновляет существующую с тем же jobId.
-  Future<void> save(AsyncJobRecord record) async {
-    final jobs = await loadAll();
-    final i = jobs.indexWhere((j) => j.jobId == record.jobId);
-    if (i >= 0) {
-      jobs[i] = record;
-    } else {
-      jobs.add(record);
-    }
-    await _persist(jobs);
-  }
+  Future<void> save(AsyncJobRecord record) =>
+      _synchronized(() async {
+        final jobs = await _readAll();
+        final i = jobs.indexWhere((j) => j.jobId == record.jobId);
+        if (i >= 0) {
+          jobs[i] = record;
+        } else {
+          jobs.add(record);
+        }
+        await _persist(jobs);
+      });
 
   /// Обновляет прогресс задачи (запись создаётся заново: поля final).
-  Future<void> updateProgress(String jobId, double progress) async {
-    final jobs = await loadAll();
-    final i = jobs.indexWhere((j) => j.jobId == jobId);
-    if (i < 0) return;
-    final old = jobs[i];
-    jobs[i] = AsyncJobRecord(
-      jobId: old.jobId,
-      baseUrl: old.baseUrl,
-      apiKey: old.apiKey,
-      model: old.model,
-      prompt: old.prompt,
-      progress: progress,
-      createdAt: old.createdAt,
-    );
-    await _persist(jobs);
-  }
+  Future<void> updateProgress(String jobId, double progress) =>
+      _synchronized(() async {
+        final jobs = await _readAll();
+        final i = jobs.indexWhere((j) => j.jobId == jobId);
+        if (i < 0) return;
+        final old = jobs[i];
+        jobs[i] = AsyncJobRecord(
+          jobId: old.jobId,
+          baseUrl: old.baseUrl,
+          apiKey: old.apiKey,
+          model: old.model,
+          prompt: old.prompt,
+          progress: progress,
+          createdAt: old.createdAt,
+        );
+        await _persist(jobs);
+      });
 
   /// Удаляет задачу из хранилища (успех, ошибка либо отмена).
-  Future<void> remove(String jobId) async {
-    final jobs = await loadAll();
-    final before = jobs.length;
-    jobs.removeWhere((j) => j.jobId == jobId);
-    if (jobs.length != before) await _persist(jobs);
-  }
+  Future<void> remove(String jobId) => _synchronized(() async {
+        final jobs = await _readAll();
+        final before = jobs.length;
+        jobs.removeWhere((j) => j.jobId == jobId);
+        if (jobs.length != before) await _persist(jobs);
+      });
 }

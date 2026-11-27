@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../app_state.dart' show settings;
 import '../models/gen_error.dart';
+import '../models/gen_error_mapper.dart';
 import '../models/generation_schema.dart';
 import '../providers/model_catalog_adapter.dart';
 import '../providers/model_info_resolver.dart';
@@ -18,6 +19,7 @@ import 'generation_event.dart';
 import 'generation_executor.dart';
 import 'generation_request.dart';
 import 'image_dialect.dart';
+import 'media_status_poller.dart';
 import 'parameter_translator.dart';
 import 'parameter_validation_exception.dart';
 
@@ -43,12 +45,12 @@ class _ImagePollState {
 ///
 /// Для Polza используется только POST {baseUrl}/media и опрос
 /// GET {baseUrl}/media/{id}. Другие диалекты сохраняют прежние маршруты.
+/// Опрос выполняется общим каркасом [MediaStatusPoller] (единый с видео);
+/// HTTP-коды сводятся к общей типизированной функции
+/// GenErrorMapper.fromStatusCode (расхождение 403/402 устранено).
+/// Глобальный blacklist неподдерживаемых параметров убран (R6, п.5):
+/// каталог не подменяется эвристически выученным состоянием.
 class ImagesApiExecutor extends GenerationExecutor {
-  /// Stage 4.1 (d): in-memory blacklist параметров, не поддерживаемых
-  /// моделью (выучено из 'warnings' медиа-ответа).
-  static final Map<String, Set<String>> _unsupportedParamsByModel =
-      <String, Set<String>>{};
-
   /// Выбранная пропорция изображения ('1:1', '16:9', '9:16').
   final String aspectRatio;
 
@@ -142,10 +144,9 @@ class ImagesApiExecutor extends GenerationExecutor {
         final status = resp.statusCode ?? 0;
         final body = resp.data ?? '';
         if (status < 200 || status >= 300) {
-          yield GenerationFailure(_mapError(status, body));
+          yield GenerationFailure(GenErrorMapper.fromStatusCode(status, body));
           return;
         }
-        _learnWarnings(body, request.model);
         sources = _extractImageSourcesFromResponse(body);
         if (sources.isEmpty) {
           asyncJobId = _extractAsyncJobId(body);
@@ -239,7 +240,8 @@ class ImagesApiExecutor extends GenerationExecutor {
     }
   }
 
-  /// Опрос GET {baseUrl}/media/{id} каждые 4 секунды.
+  /// Опрос GET {baseUrl}/media/{id} каждые 4 секунды (каркас общий
+  /// с видео — [MediaStatusPoller]).
   Stream<_ImagePollState> _pollMediaStatus({
     required Dio dio,
     required CancelToken token,
@@ -254,83 +256,99 @@ class ImagesApiExecutor extends GenerationExecutor {
       'Authorization': 'Bearer $cleanKey',
       'Accept': 'application/json',
     };
-    for (int attempt = 1; attempt <= _maxPollAttempts; attempt++) {
-      await Future<void>.delayed(_pollInterval);
-      if (_cancelled) return;
-      Response<String> resp;
-      var transientFailures = 0;
-      while (true) {
-        try {
-          resp = await dio.get<String>(
-            '$base/media/$jobId',
-            options: Options(headers: headers),
-            cancelToken: token,
-          );
-          break;
-        } on DioException catch (e) {
-          if (e.type == DioExceptionType.cancel) rethrow;
-          transientFailures++;
-          if (transientFailures > _maxTransientRetries) {
-            throw JobStatusUnknown(
-              jobId: jobId,
-              details: 'Не удалось получить статус: ${e.message ?? e}',
-            );
-          }
-          final delay = Duration(
-            seconds: _transientBackoffBase.inSeconds * transientFailures,
-          );
-          await Future<void>.delayed(delay);
-          if (_cancelled) return;
-        }
+    final poller = MediaStatusPoller<_ImagePollState>(
+      interval: _pollInterval,
+      maxAttempts: _maxPollAttempts,
+      maxTransientRetries: _maxTransientRetries,
+      transientBackoffBase: _transientBackoffBase,
+      isCancelled: () => _cancelled,
+    );
+    try {
+      await for (final st in poller.poll(
+        (attempt) => _pollAttempt(dio, token, base, headers, jobId, attempt),
+      )) {
+        if (_cancelled) return;
+        yield st;
+        final url = st.url;
+        if ((url != null && url.isNotEmpty) || st.percent >= 100) return;
       }
-      if (_cancelled) return;
-      final code = resp.statusCode ?? 0;
-      final body = resp.data ?? '';
-      if (code == 401 || code == 403) {
-        throw AuthError(details: _errorDetails(body));
-      }
-      if (code == 402) {
-        throw InsufficientFunds(details: _errorDetails(body));
-      }
-      if (code < 200 || code >= 300) continue;
-
-      Object? json;
-      try {
-        json = jsonDecode(body);
-      } catch (_) {
-        continue;
-      }
-      if (json is! Map) continue;
-      final status = (json['status'] ?? json['state'] ?? '')
-          .toString()
-          .trim()
-          .toLowerCase();
-      if (status == 'failed' ||
-          status == 'error' ||
-          status == 'cancelled' ||
-          status == 'canceled') {
-        throw UnknownGenError(details: _errorDetails(body));
-      }
-      final extracted = _extractImageSourcesFromResponse(body);
-      if (extracted.isNotEmpty) {
-        yield _ImagePollState(url: extracted.first, percent: 100, status: status);
-        return;
-      }
-      if (status == 'completed' ||
-          status == 'succeeded' ||
-          status == 'success' ||
-          status == 'done') {
-        yield _ImagePollState(percent: 100, status: status);
-        return;
-      }
-      final pct = (10.0 + attempt * 2.0).clamp(10.0, 92.0);
-      yield _ImagePollState(
-        percent: pct,
-        status: status.isEmpty ? 'processing' : status,
+    } on PollCancelled {
+      return;
+    } on PollTransientFailure catch (e) {
+      throw JobStatusUnknown(
+        jobId: jobId,
+        details: 'Не удалось получить статус: ${e.message}',
       );
     }
-    throw const JobTimeout(
-      details: 'Генерация изображения не завершилась за отведённое время.',
+  }
+
+  /// Одна логическая попытка опроса статуса изображения. Фатальные
+  /// коды сводятся к общей типизированной функции
+  /// (GenErrorMapper.fromStatusCode); остальные коды — «ещё не готово».
+  Future<_ImagePollState> _pollAttempt(
+    Dio dio,
+    CancelToken token,
+    String base,
+    Map<String, String> headers,
+    String jobId,
+    int attempt,
+  ) async {
+    final double fallbackPct =
+        (10.0 + attempt * 2.0).clamp(10.0, 92.0);
+    Response<String> resp;
+    try {
+      resp = await dio.get<String>(
+        '$base/media/$jobId',
+        options: Options(headers: headers),
+        cancelToken: token,
+      );
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.cancel) throw const PollCancelled();
+      throw PollTransientFailure('status: ${e.message ?? e}');
+    }
+    final code = resp.statusCode ?? 0;
+    final body = resp.data ?? '';
+    if (code < 200 || code >= 300) {
+      final err = GenErrorMapper.fromStatusCode(code, body);
+      if (err is AuthError || err is InsufficientFunds) throw err;
+      return _ImagePollState(percent: fallbackPct, status: 'processing');
+    }
+    Object? json;
+    try {
+      json = jsonDecode(body);
+    } catch (_) {
+      return _ImagePollState(percent: fallbackPct, status: 'processing');
+    }
+    if (json is! Map) {
+      return _ImagePollState(percent: fallbackPct, status: 'processing');
+    }
+    final status = (json['status'] ?? json['state'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    if (status == 'failed' ||
+        status == 'error' ||
+        status == 'cancelled' ||
+        status == 'canceled') {
+      throw UnknownGenError(details: _errorDetails(body));
+    }
+    final extracted = _extractImageSourcesFromResponse(body);
+    if (extracted.isNotEmpty) {
+      return _ImagePollState(
+        url: extracted.first,
+        percent: 100,
+        status: status,
+      );
+    }
+    if (status == 'completed' ||
+        status == 'succeeded' ||
+        status == 'success' ||
+        status == 'done') {
+      return _ImagePollState(percent: 100, status: status);
+    }
+    return _ImagePollState(
+      percent: fallbackPct,
+      status: status.isEmpty ? 'processing' : status,
     );
   }
 
@@ -387,7 +405,6 @@ class ImagesApiExecutor extends GenerationExecutor {
       rawParams: rawParams,
       fallback: () => ParameterTranslator.translate(rawParams, info),
     );
-    _dropUnsupportedParams(translated, request.model);
     final isPolza = providerId == 'polza' ||
         base.toLowerCase().contains('polza.ai');
     if (isPolza) {
@@ -486,56 +503,6 @@ class ImagesApiExecutor extends GenerationExecutor {
     }
     if (cfg.isNotEmpty) body['image_config'] = cfg;
     return body;
-  }
-
-  static void _learnWarnings(String body, String modelId) {
-    Object? json;
-    try {
-      json = jsonDecode(body);
-    } catch (_) {
-      return;
-    }
-    if (json is! Map) return;
-    final raw = json['warnings'];
-    if (raw is! List) return;
-    final patterns = <RegExp>[
-      RegExp(
-        r'''(?:parameter|param)\s*[`'"]?(\w+)[`'"]?\s+(?:is\s+)?not supported''',
-        caseSensitive: false,
-      ),
-      RegExp(
-        r'''(?:parameter|param)\s*[`'"]?(\w+)[`'"]?\s+(?:is\s+)?unsupported''',
-        caseSensitive: false,
-      ),
-      RegExp(r'''[`'"]?(\w+)[`'"]?\s+ignored''', caseSensitive: false),
-    ];
-    for (final w in raw) {
-      if (w == null) continue;
-      final s = w.toString();
-      for (final re in patterns) {
-        final m = re.firstMatch(s);
-        final name = m?.group(1);
-        if (name == null || name.isEmpty) continue;
-        final set =
-            _unsupportedParamsByModel.putIfAbsent(modelId, () => <String>{});
-        if (set.add(name)) {
-          debugPrint("[media] blacklist: '$name' for modelId (warnings)");
-        }
-      }
-    }
-  }
-
-  static void _dropUnsupportedParams(
-    Map<String, dynamic> params,
-    String modelId,
-  ) {
-    final blocked = _unsupportedParamsByModel[modelId];
-    if (blocked == null || blocked.isEmpty) return;
-    for (final key in List<String>.of(params.keys)) {
-      if (!blocked.contains(key)) continue;
-      params.remove(key);
-      debugPrint("[media] dropped unsupported param '$key' for model $modelId");
-    }
   }
 
   @override
@@ -682,24 +649,5 @@ class ImagesApiExecutor extends GenerationExecutor {
       if (j is Map && j['message'] != null) return j['message'].toString();
     } catch (_) {}
     return body.length > 300 ? body.substring(0, 300) : body;
-  }
-
-  static GenError _mapError(int code, String body) {
-    final details = _errorDetails(body);
-    switch (code) {
-      case 401:
-        return AuthError(details: details);
-      case 402:
-        return InsufficientFunds(details: details);
-      case 429:
-        return RateLimited(details: details);
-      case 404:
-        return ModelNotFoundError(details: details);
-      case 400:
-      case 422:
-        return BadRequestError(details: details);
-    }
-    if (code >= 500) return ServerError(statusCode: code, details: details);
-    return UnknownGenError(details: details);
   }
 }

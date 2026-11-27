@@ -96,11 +96,23 @@ typedef _ConnectionIdentity = (String, String);
 ///
 /// Кэш и метка времени записываются только после успешного ответа с
 /// непустым списком; при ошибке используется прежний кэш.
+///
+/// Дисковый кэш (R6-audio-robustness-2, п.3):
+///  - каждая запись привязана к версии схемы и отпечатку подключения
+///    (FNV-1a от адреса и ключа; сам ключ НЕ сохраняется — только его
+///    хеш внутри отпечатка). После перезапуска запись с тем же
+///    логическим id, но изменившимся адресом/ключом, не считается
+///    пригодной для нового подключения;
+///  - имя файла включает короткий хеш исходного id: _safeId больше не
+///    сводит разные id к одному файлу.
 class ProviderCatalogService extends ChangeNotifier {
   ProviderCatalogService();
 
   static const Duration _ttl = Duration(hours: 24);
   static const Duration _timeout = Duration(seconds: 30);
+
+  /// Версия схемы дискового кэша. Рост версии инвалидирует старые файлы.
+  static const int _cacheSchemaVersion = 2;
 
   // Ключ карты — исходный id модели. Это сохраняет разные исходные id,
   // которые нормализатор мог бы привести к одному значению.
@@ -108,9 +120,11 @@ class ProviderCatalogService extends ChangeNotifier {
       <String, Map<String, CatalogEntry>>{};
   final Map<String, DateTime> _syncedAt = <String, DateTime>{};
 
-  // Идентичности и ключи авторизации не сериализуются.
-  final Map<String, _ConnectionIdentity> _identityById =
-      <String, _ConnectionIdentity>{};
+  /// Отпечаток подключения (адрес + хеш ключа), с которым был сделан
+  /// кэш/запрос. Хранится и в памяти, и на диске (без ключа в открытом
+  /// виде); после перезапуска запись с другим отпечатком пропускается.
+  final Map<String, String> _fingerprintById = <String, String>{};
+
   final Map<String, CatalogConnection> _lastConnectionById =
       <String, CatalogConnection>{};
 
@@ -138,6 +152,28 @@ class ProviderCatalogService extends ChangeNotifier {
   static _ConnectionIdentity _identityOf(CatalogConnection connection) =>
       (_baseOf(connection.baseUrl), _keyOf(connection.apiKey));
 
+  /// FNV-1a (64 бита, обрезан до 63 бит знака) — детерминированный
+  /// короткий отпечаток строки. Достаточно для имён файлов и сравнения
+  /// подключений; обратное восстановление ключа невозможно.
+  static String _fnv1a64(String input) {
+    var hash = 0xcbf29ce484222325;
+    for (final unit in input.codeUnits) {
+      hash ^= unit & 0xff;
+      hash *= 0x100000001b3;
+      hash ^= (unit >> 8) & 0xff;
+      hash *= 0x100000001b3;
+    }
+    return (hash & 0x7fffffffffffffff).toRadixString(16).padLeft(16, '0');
+  }
+
+  /// Отпечаток подключения: адрес + хеш ключа (без сохранения ключа).
+  static String _fingerprintOf(CatalogConnection connection) =>
+      _fnv1a64('${_baseOf(connection.baseUrl)}\u001f${_keyOf(connection.apiKey)}');
+
+  /// Короткий тег исходного id для имени файла: _safeId больше не
+  /// сводит разные id ('a/b' и 'a_b') к одному файлу.
+  static String _fileTagOf(String id) => _fnv1a64('file:$id');
+
   // ---------- кэш на диске ----------
 
   Future<Directory> _cacheDir() async {
@@ -162,11 +198,25 @@ class ProviderCatalogService extends ChangeNotifier {
         try {
           final decoded = jsonDecode(await f.readAsString());
           if (decoded is! Map) continue;
+          if (decoded['schemaVersion'] != _cacheSchemaVersion) {
+            // Файл старой схемы (или без отпечатка подключения): кэш
+            // не читается и удаляется, чтобы не накапливать мусор.
+            try {
+              await f.delete();
+            } catch (_) {}
+            continue;
+          }
           final cid = (decoded['connectionId'] ?? '').toString().trim();
+          final fingerprint = (decoded['identity'] ?? '').toString().trim();
           final list = decoded['entries'];
           final synced =
               DateTime.tryParse((decoded['syncedAt'] ?? '').toString());
-          if (cid.isEmpty || list is! List || synced == null) continue;
+          if (cid.isEmpty ||
+              fingerprint.isEmpty ||
+              list is! List ||
+              synced == null) {
+            continue;
+          }
           final map = <String, CatalogEntry>{};
           for (final e in list) {
             if (e is! Map) continue;
@@ -180,6 +230,7 @@ class ProviderCatalogService extends ChangeNotifier {
           if (map.isEmpty) continue;
           _byConnection[cid] = map;
           _syncedAt[cid] = synced;
+          _fingerprintById[cid] = fingerprint;
         } catch (_) {}
       }
     } catch (_) {}
@@ -187,15 +238,20 @@ class ProviderCatalogService extends ChangeNotifier {
 
   Future<void> _persist(
     String cid,
+    String fingerprint,
     List<CatalogEntry> entries,
     DateTime syncedAt,
   ) async {
     try {
       final dir = await _cacheDir();
-      final f = File('${dir.path}/catalog_${_safeId(cid)}.json');
+      final f = File(
+        '${dir.path}/catalog_${_safeId(cid)}_${_fileTagOf(cid)}.json',
+      );
       await f.writeAsString(
         jsonEncode(<String, dynamic>{
+          'schemaVersion': _cacheSchemaVersion,
           'connectionId': cid,
+          'identity': fingerprint,
           'syncedAt': syncedAt.toIso8601String(),
           'entries': <Map<String, dynamic>>[
             for (final e in entries) e.toJson(),
@@ -243,13 +299,18 @@ class ProviderCatalogService extends ChangeNotifier {
   }
 
   Map<String, CatalogEntry>? _cachedFor(CatalogConnection connection) {
-    final identity = _identityOf(connection);
+    final fingerprint = _fingerprintOf(connection);
     Map<String, CatalogEntry>? latest;
     DateTime? latestAt;
 
     for (final id in _relatedIds(connection)) {
-      final knownIdentity = _identityById[id];
-      if (knownIdentity != null && knownIdentity != identity) continue;
+      final knownFingerprint = _fingerprintById[id];
+      // Запись с тем же логическим id, но другим подключением (адрес
+      // или ключ), не считается пригодной — в том числе после
+      // перезапуска приложения (отпечаток сохранён на диске).
+      if (knownFingerprint != null && knownFingerprint != fingerprint) {
+        continue;
+      }
       final entries = _byConnection[id];
       if (entries == null || entries.isEmpty) continue;
       final at = _syncedAt[id];
@@ -269,11 +330,13 @@ class ProviderCatalogService extends ChangeNotifier {
   }
 
   DateTime? _latestSyncFor(CatalogConnection connection) {
-    final identity = _identityOf(connection);
+    final fingerprint = _fingerprintOf(connection);
     DateTime? latest;
     for (final id in _relatedIds(connection)) {
-      final knownIdentity = _identityById[id];
-      if (knownIdentity != null && knownIdentity != identity) continue;
+      final knownFingerprint = _fingerprintById[id];
+      if (knownFingerprint != null && knownFingerprint != fingerprint) {
+        continue;
+      }
       if (_byConnection[id]?.isNotEmpty != true) continue;
       final at = _syncedAt[id];
       if (at != null && (latest == null || at.isAfter(latest))) {
@@ -337,6 +400,7 @@ class ProviderCatalogService extends ChangeNotifier {
   }) async {
     final cid = connection.id.trim();
     final identity = _identityOf(connection);
+    final fingerprint = _fingerprintOf(connection);
     final cached = _cachedFor(connection);
     final at = _latestSyncFor(connection);
 
@@ -393,14 +457,14 @@ class ProviderCatalogService extends ChangeNotifier {
       if (pendingIdentity != null && pendingIdentity != identity) continue;
       _byConnection[id] = map;
       _syncedAt[id] = syncedAt;
-      _identityById[id] = identity;
+      _fingerprintById[id] = fingerprint;
       appliedIds.add(id);
     }
     _lastConnectionById[cid] = connection;
 
     final entries = map.values.toList();
     for (final id in appliedIds) {
-      await _persist(id, entries, syncedAt);
+      await _persist(id, fingerprint, entries, syncedAt);
     }
 
     final typeCounts = <String, int>{};

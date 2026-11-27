@@ -30,6 +30,20 @@ import 'user_param_override_store.dart';
 /// Источник данных о возможностях — каталог подключения
 /// ([ProviderCatalogService.lookup]); при отсутствии данных работают
 /// прежние резолверы (кэш OpenRouter, курированный каталог, эвристика).
+///
+/// R6-audio-robustness-2:
+///  - события каталога/пресета во время разрешения модели не теряются:
+///    пропуск записывается и после [_resolve] выполняется повторный
+///    пересчёт ([_resolveGuarded]);
+///  - служебные/аудио типы каталога (tts, stt, music, embedding,
+///    classification) помечаются как «неподдерживаемый тип», а не
+///    маскируются под текст ([isCurrentTypeUnsupported]); при добавлении
+///    аудио тип, маршрутизацию, событие, сохранение и UI обновлять
+///    совместно;
+///  - публикация merged-параметров индексируется только ПОЛНЫМ id
+///    (сырой и нормализованный); короткий id без префикса провайдера
+///    больше не используется — одноимённые модели не перезаписывают
+///    друг друга в общем кэше.
 class ActiveModelController extends ChangeNotifier {
   /// [SearchCapabilityResolver] пробрасывается снаружи (main.dart /
   /// место создания контроллера); по умолчанию — статический резолвер.
@@ -67,6 +81,18 @@ class ActiveModelController extends ChangeNotifier {
     'stable-diffusion',
     'stablediffusion',
   ];
+
+  /// Типы каталога, которые чат умеет выполнять (панель ввода и фасад
+  /// генерации поддерживают ровно эти маршруты).
+  static const Set<String> _supportedRouteTypes = <String>{
+    'chat', 'image', 'video',
+  };
+
+  /// Служебные/аудио типы каталога, для которых панель показывает
+  /// «неподдерживаемый тип», пока аудио не реализовано (R6, п.1).
+  static const Set<String> unsupportedCatalogTypes = <String>{
+    'tts', 'stt', 'embedding', 'music', 'classification',
+  };
 
   /// Базовые уровни размышлений, когда провайдер не сообщил данных:
   /// капсула «Мышление» остаётся видимой. Значение 'off' означает
@@ -117,19 +143,41 @@ class ActiveModelController extends ChangeNotifier {
   bool _resolving = false;
   int _resolveToken = 0;
 
+  /// Был ли запрос на пересчёт во время [_resolving]. События каталога
+  /// и пресетов во время разрешения не теряются: после завершения
+  /// [_resolveGuarded] пропущенное изменение пересчитывается (R6, п.2).
+  bool _pendingRefresh = false;
+
   /// Модель, для которой в последний раз выполнился [_resolve].
   /// Нужна, чтобы отличить «смену модели» (сброс пресетов на дефолты
   /// новой модели) от повторного резолва той же модели (сохранить выбор).
   String? _lastResolvedModelId;
 
+  /// Каталожный тип активной модели ('chat', 'tts', ...) из последнего
+  /// [_resolve]; '' — тип не определён каталогом (и ручной override).
+  String _lastCatalogType = '';
+
   ActiveModelCapabilities get current => _current;
+
+  /// Каталожный тип активной модели; '' — не определён каталогом.
+  String get currentCatalogType => _lastCatalogType;
+
+  /// true — каталог отнёс активную модель к типу, который приложение
+  /// пока не поддерживает в чате (tts, stt, embedding, music,
+  /// classification и прочие не-'chat/image/video' типы). Панель ввода
+  /// показывает «неподдерживаемый тип», а не текстовый режим (R6, п.1).
+  bool get isCurrentTypeUnsupported =>
+      _lastCatalogType.isNotEmpty &&
+      !_supportedRouteTypes.contains(_lastCatalogType);
 
   /// Stage 2c-3: реестр итоговых merged-параметров (field-level:
   /// UserParamOverrideStore > CatalogEntry/кэш OpenRouter > curated),
   /// опубликованных [_resolve]. [ParameterTranslator.translateWithCatalog]
   /// читает их как базовый источник спецификации — GenerationRequest и
   /// исполнители при этом не меняются (минимальный канал передачи без
-  /// правки UI).
+  /// правки UI). Ключ — ПОЛНЫЙ id модели (сырой и нормализованный);
+  /// короткий id без префикса провайдера не используется (R6, п.2):
+  /// одноимённые модели разных подключений не перезаписывают друг друга.
   static final Map<String, ModelParameters> _publishedMerged =
       <String, ModelParameters>{};
 
@@ -191,26 +239,23 @@ class ActiveModelController extends ChangeNotifier {
           (clean != null && clean.isNotEmpty) ? clean : null;
     }
     if (quality != null || clearNulls) {
-      final clean = quality?.trim();
       _selectedQuality = (clean != null && clean.isNotEmpty) ? clean : null;
     }
   }
 
   /// Итоговые merged-параметры для модели (результат Stage 2b (c));
   /// null — контроллер ещё не разрешал модель либо параметров нет.
-  /// Поиск: сырой id, затем нормализованный, затем без префикса провайдера.
+  /// Поиск по ПОЛНЫМ id: сырой, затем нормализованный. Короткий id без
+  /// префикса провайдера больше не ищется (R6, п.2) — он мог свести
+  /// одноимённые модели разных провайдеров к одной записи.
   static ModelParameters? mergedParamsFor(String modelId) {
     final raw = modelId.trim();
     if (raw.isEmpty || _publishedMerged.isEmpty) return null;
     final norm = ModelIdNormalizer.normalize(raw);
-    final direct = _publishedMerged[raw] ?? _publishedMerged[norm];
-    if (direct != null) return direct;
-    final short = ModelIdNormalizer.withoutProviderPrefix(norm);
-    if (short.isEmpty || short == norm) return null;
-    return _publishedMerged[short];
+    return _publishedMerged[raw] ?? _publishedMerged[norm];
   }
 
-  /// Публикует КОПИЮ [params] под сырым, нормализованным и коротким
+  /// Публикует КОПИЮ [params] под сырым и нормализованным ПОЛНЫМ
   /// идентификатором модели; прежние записи этой модели снимаются,
   /// пустые параметры регистрацию отменяют.
   static void _publishMergedParams(
@@ -219,11 +264,9 @@ class ActiveModelController extends ChangeNotifier {
   ) {
     final raw = rawModelId.trim();
     final norm = ModelIdNormalizer.normalize(rawModelId);
-    final short = ModelIdNormalizer.withoutProviderPrefix(norm);
     _publishedMerged
       ..remove(raw)
-      ..remove(norm)
-      ..remove(short);
+      ..remove(norm);
     final p = params;
     if (p == null || !p.hasAny) return;
     final d = p.durations;
@@ -247,19 +290,33 @@ class ActiveModelController extends ChangeNotifier {
       isUserDefined: p.isUserDefined,
     );
     if (raw.isNotEmpty) _publishedMerged[raw] = copy;
-    if (norm.isNotEmpty) _publishedMerged[norm] = copy;
-    if (short.isNotEmpty) _publishedMerged[short] = copy;
+    if (norm.isNotEmpty && norm != raw) _publishedMerged[norm] = copy;
   }
 
   String get currentModelId => _presetController.activePreset?.model ?? '';
+
+  /// Выполняет [body] под флагом [_resolving]. Если за это время пришли
+  /// события каталога/пресета ([_pendingRefresh]), после завершения
+  /// пересчёт повторяется — пропущенное изменение не теряется (R6, п.2).
+  Future<void> _resolveGuarded(Future<void> Function() body) async {
+    while (true) {
+      _pendingRefresh = false;
+      _resolving = true;
+      try {
+        await body();
+      } finally {
+        _resolving = false;
+      }
+      if (!_pendingRefresh) return;
+    }
+  }
 
   Future<void> setModel(
     String modelId, {
     bool vision = false,
     bool reasoning = false,
   }) async {
-    _resolving = true;
-    try {
+    await _resolveGuarded(() async {
       final owned = currentModelId.trim();
       final incoming = modelId.trim();
       if (incoming.isNotEmpty && incoming != owned) {
@@ -268,41 +325,42 @@ class ActiveModelController extends ChangeNotifier {
       }
       final target = currentModelId.isNotEmpty ? currentModelId : incoming;
       await _resolve(target);
-    } finally {
-      _resolving = false;
-    }
+    });
   }
 
   Future<void> syncModel(String modelId) async {
     final id = modelId.trim();
-    await _resolve(id);
+    await _resolveGuarded(() => _resolve(id));
   }
 
   Future<void> _onPresetChanged() async {
-    if (_resolving) return;
-    _resolving = true;
-    try {
+    if (_resolving) {
+      // Событие пресета во время разрешения не пропускается: после
+      // завершения текущего пересчёта оно будет пересчитано.
+      _pendingRefresh = true;
+      return;
+    }
+    await _resolveGuarded(() async {
       final presetModel = _presetController.active?.model.trim() ?? '';
       final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
       await _resolve(id);
-    } finally {
-      _resolving = false;
-    }
+    });
   }
 
   /// Каталог подключения обновился (sync завершился): пересчитываем
-  /// возможности выбранной модели и уведомляем интерфейс.
+  /// возможности выбранной модели и уведомляем интерфейс. Событие во
+  /// время разрешения не теряется — см. [_resolveGuarded].
   Future<void> _onCatalogChanged() async {
-    if (_resolving) return;
-    _resolving = true;
-    try {
+    if (_resolving) {
+      _pendingRefresh = true;
+      return;
+    }
+    await _resolveGuarded(() async {
       final presetModel = _presetController.active?.model.trim() ?? '';
       final id = presetModel.isNotEmpty ? presetModel : settings.model.trim();
       if (id.isEmpty) return;
       await _resolve(id);
-    } finally {
-      _resolving = false;
-    }
+    });
   }
 
   static bool isHeuristicVideo(String rawId) {
@@ -1069,11 +1127,18 @@ class ActiveModelController extends ChangeNotifier {
 
   /// Вид модели: ручной override, затем каталог с
   /// [CatalogTypeSources.catalog]. Эвристики и параметры не используются.
+  ///
+  /// Каталожный тип запоминается в [_lastCatalogType], чтобы панель
+  /// ввода могла отличить служебные/аудио типы (tts, stt, music, ...)
+  /// от текстовых и показать «неподдерживаемый тип», а не текстовый
+  /// режим (R6, п.1).
   (ActiveModelKind, String) _kindWithCatalog(
     CatalogEntry? entry,
     String? typeOverride,
   ) {
     if (typeOverride != null) {
+      // Ручной override решает тип сам: каталожная метка сбрасывается.
+      _lastCatalogType = '';
       return (
         switch (typeOverride) {
           'image' => ActiveModelKind.image,
@@ -1086,6 +1151,7 @@ class ActiveModelController extends ChangeNotifier {
     final e = entry;
     if (e != null && e.typeSource == CatalogTypeSources.catalog) {
       final type = e.type.trim().toLowerCase();
+      _lastCatalogType = type;
       switch (type) {
         case 'image':
           return (ActiveModelKind.image, 'каталог (${e.capabilitiesSource})');
@@ -1098,11 +1164,15 @@ class ActiveModelController extends ChangeNotifier {
         case 'embedding':
         case 'music':
         case 'classification':
-          return (ActiveModelKind.text, 'каталог: служебный тип $type');
+          // Пока аудио не реализовано, служебные типы не выглядят как
+          // текст: см. isCurrentTypeUnsupported.
+          return (ActiveModelKind.text,
+              'каталог: служебный тип $type (не выглядит как текст в панели)');
         default:
           return (ActiveModelKind.text, 'каталог: неизвестный тип $type');
       }
     }
+    _lastCatalogType = '';
     return (ActiveModelKind.text, 'тип неизвестен');
   }
 
