@@ -11,16 +11,15 @@ enum _ErrorAction { retry, changeModel, settings }
 
 /// Карточка ошибки генерации в стиле приложения: иконка в тёплом круге,
 /// заголовок, текст ошибки и ОДНА контекстная кнопка:
-///  - AuthError / InsufficientFunds -> «Настройки»;
-///  - ModelNotFoundError -> «Сменить модель»;
-///  - остальные -> «Повторить».
-///  - JobStatusUnknown -> «Повторить» (возобновление созданной задачи).
-///
-/// Текст карточки: для JobStatusUnknown показывается ПОЛНОЕ сообщение
-/// (смысл безопасного повтора без новой оплаты), а не только details;
-/// для остальных — детали провайдера.
+/// - AuthError / InsufficientFunds -> «Настройки»;
+/// - ModelNotFoundError -> «Сменить модель»;
+/// - остальные -> «Повторить».
 /// Действия можно переопределить колбэками; без колбэка «Настройки»
 /// открывает экран настроек сама.
+///
+/// R4-контракт (честная ошибка 402): карточка InsufficientFunds НЕ
+/// утверждает о балансе — 402 может означать и лимит ключа. Заголовок —
+/// «Ошибка оплаты или лимита», причина провайдера показывается как есть.
 class ErrorBubble extends StatelessWidget {
   final GenError error;
 
@@ -48,15 +47,15 @@ class ErrorBubble extends StatelessWidget {
         ServerError() => _ErrorAction.retry,
         NetworkError() => _ErrorAction.retry,
         JobTimeout() => _ErrorAction.retry,
-        JobStatusUnknown() => _ErrorAction.retry,
         ContentFiltered() => _ErrorAction.retry,
         BadRequestError() => _ErrorAction.retry,
+        JobStatusUnknown() => _ErrorAction.retry,
         UnknownGenError() => _ErrorAction.retry,
       };
 
   String get _title => switch (error) {
         AuthError() => 'Ошибка авторизации',
-        // HTTP 402 может означать и лимит ключа, а не только баланс.
+        // Не «Недостаточно средств»: 402 не доказывает недостаток баланса.
         InsufficientFunds() => 'Ошибка оплаты или лимита',
         RateLimited() => 'Слишком много запросов',
         ModelNotFoundError() => 'Модель недоступна',
@@ -64,8 +63,8 @@ class ErrorBubble extends StatelessWidget {
         NetworkError() => 'Проблема с сетью',
         ContentFiltered() => 'Запрос отклонён фильтром',
         JobTimeout() => 'Истекло время ожидания',
-        JobStatusUnknown() => 'Задача создана, статус неизвестен',
         BadRequestError() => 'Некорректный запрос',
+        JobStatusUnknown() => 'Статус задачи неизвестен',
         UnknownGenError() => 'Ошибка генерации',
       };
 
@@ -78,8 +77,8 @@ class ErrorBubble extends StatelessWidget {
         NetworkError() => Icons.wifi_off_rounded,
         ContentFiltered() => Icons.shield_outlined,
         JobTimeout() => Icons.hourglass_bottom_rounded,
-        JobStatusUnknown() => Icons.hourglass_bottom_rounded,
         BadRequestError() => Icons.warning_amber_rounded,
+        JobStatusUnknown() => Icons.help_outline_rounded,
         UnknownGenError() => Icons.error_outline_rounded,
       };
 
@@ -112,7 +111,7 @@ class ErrorBubble extends StatelessWidget {
 
   void _openSettings(BuildContext context) {
     Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+      MaterialPageRoute(builder: (_) => const SettingsScreen()),
     );
   }
 
@@ -121,14 +120,8 @@ class ErrorBubble extends StatelessWidget {
     final theme = Theme.of(context);
     final cs = theme.colorScheme;
     final details = GenErrorMapper.detailsOf(error);
-    // JobStatusUnknown: показываем ПОЛНОЕ сообщение (включая смысл
-    // безопасного повтора — «без новой оплаты»), а не только details.
-    final bodyText = switch (error) {
-      JobStatusUnknown() => error.message,
-      _ => details.trim().isEmpty
-          ? 'Не удалось получить ответ от модели.'
-          : details,
-    };
+    final bodyText =
+        details.trim().isEmpty ? 'Не удалось получить ответ от модели.' : details;
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.symmetric(vertical: 6),

@@ -45,10 +45,21 @@ abstract final class GenErrorMapper {
   ];
 
   /// Главная точка входа: любое исключение -> [GenError].
+  ///
+  /// Для [ChatServiceException] фактический HTTP-статус ВАЖНЕЕ цифр в
+  /// тексте сообщения: провайдер может упомянуть один код в описании
+  /// причины другого ограничения (например, «402» внутри текста лимита
+  /// 429). Разбор по тексту выполняется только когда статус неизвестен.
   static GenError fromException(Object error) {
     if (error is GenError) return error;
     if (error is DioException) return _fromDio(error);
-    if (error is ChatServiceException) return _fromText(error.message);
+    if (error is ChatServiceException) {
+      final status = error.statusCode;
+      if (status != null && status > 0) {
+        return _fromStatusCode(status, error.message);
+      }
+      return _fromText(error.message);
+    }
     if (error is TimeoutException) {
       return const JobTimeout(details: 'Превышено время ожидания ответа.');
     }
@@ -117,6 +128,7 @@ abstract final class GenErrorMapper {
 
   /// Разбор текста ошибки: ChatServiceException уже содержит код ответа
   /// провайдера в сообщении ('Неверный API-ключ (401)...').
+  /// Вызывается только когда фактический HTTP-статус неизвестен.
   static GenError _fromText(String message) {
     final m = message.trim();
     if (m.contains('401') || m.contains('403')) return AuthError(details: m);
