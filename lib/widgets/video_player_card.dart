@@ -365,7 +365,8 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
             child: Row(
               children: [
                 Text(
-                  '${_fmtTime(c.value.position)} / ${_fmtTime(c.value.duration)}',
+                  '${formatVideoTime(c.value.position)} / '
+                  '${formatVideoTime(c.value.duration)}',
                   style: const TextStyle(fontSize: 12, color: Colors.white),
                 ),
                 const Spacer(),

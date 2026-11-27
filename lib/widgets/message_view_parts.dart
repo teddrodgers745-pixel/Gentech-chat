@@ -11,6 +11,10 @@ import 'package:flutter/services.dart';
 // ignore: unused_import
 import 'package:video_player/video_player.dart';
 
+// G1-video-player-heal1: settings/palette из app_state этой панелью
+// больше не читаются (плеер берёт тему реактивно внутри VideoPlayerCard).
+// Импорт сохранён по правилам проекта (не удалять существующие импорты).
+// ignore: unused_import
 import '../app_state.dart';
 import '../core/generation/async_job_executor.dart';
 import '../core/models/message_part.dart';

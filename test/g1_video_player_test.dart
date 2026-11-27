@@ -16,7 +16,15 @@
 //  - G1-T-VIDEO-DOWNLOAD: «Скачать» сохраняет файл и подтверждает;
 //  - G1-T-VIDEO-SHARE: «Поделиться» шэрит локальный файл (замокано);
 //  - G1-T-GALLERY-VIDEO-OPENS-PLAYER: видео из галереи открывает тот же плеер.
+//
+// G1-video-player-heal1: добавлен import 'dart:async' (StreamController
+// живёт в dart:async); снят const с vpi.VideoEvent(...) — у VideoEvent
+// в video_player_platform_interface НЕ const-конструктор; buildView
+// возвращает const ColoredBox (prefer_const_constructors); снят const
+// с ChatMessage в тесте галереи — у ChatMessage нет const-конструктора
+// (мутабельные поля, см. эталонные тесты f5_gallery_media_test.dart).
 
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -59,7 +67,8 @@ class _FakeVideoPlatform extends vpi.VideoPlayerPlatform {
   Stream<vpi.VideoEvent> videoEventsFor(int playerId) {
     final controller = StreamController<vpi.VideoEvent>();
     _events[playerId] = controller;
-    controller.add(const vpi.VideoEvent(
+    // VideoEvent — не const-конструктор (video_player_platform_interface).
+    controller.add(vpi.VideoEvent(
       eventType: vpi.VideoEventType.initialized,
       duration: Duration(seconds: 30),
       size: Size(640, 360),
@@ -69,7 +78,7 @@ class _FakeVideoPlatform extends vpi.VideoPlayerPlatform {
 
   /// Платформа сообщает «воспроизведение дошло до конца».
   void complete(int playerId) {
-    _events[playerId]?.add(const vpi.VideoEvent(
+    _events[playerId]?.add(vpi.VideoEvent(
       eventType: vpi.VideoEventType.completed,
     ));
   }
@@ -110,7 +119,7 @@ class _FakeVideoPlatform extends vpi.VideoPlayerPlatform {
   }
 
   @override
-  Widget buildView(int playerId) => ColoredBox(color: Colors.black);
+  Widget buildView(int playerId) => const ColoredBox(color: Colors.black);
 
   @override
   Future<void> setMixWithOthers(bool mixWithOthers) async {}
@@ -356,11 +365,13 @@ void main() {
 
       final chat = store.createChat();
       chat.title = 'Видео';
-      chat.messages.add(const ChatMessage(
+      // ChatMessage не имеет const-конструктора (мутабельные поля) —
+      // эталон f5_gallery_media_test.dart; внутренняя VideoPart — const.
+      chat.messages.add(ChatMessage(
         id: 'g1-msg',
         role: 'assistant',
         parts: <MessagePart>[
-          VideoPart.fromUrl('https://cdn.example.com/g1.mp4'),
+          const VideoPart.fromUrl('https://cdn.example.com/g1.mp4'),
         ],
       ));
 
