@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
 import '../models/gen_error.dart';
-import '../models/message_part.dart' show ToolMedia;
+import '../models/tool_media.dart';
 
 /// Событие генерации, приходящее из [GenerationExecutor] потоковым
 /// образом. Sealed-тип: обработка switch исчерпывающая без default —
