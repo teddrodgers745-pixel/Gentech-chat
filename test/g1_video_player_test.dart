@@ -28,11 +28,11 @@
 // ВСЕ тесты файла, три причины):
 //  1) google_fonts: fontStyle(..., weight: FontWeight.w600) в карточке
 //     запрашивал вариант JetBrainsMono-SemiBold у google_fonts; в
-//     виджет-тестах сеть заглушена binding'ом (HTTP 400 на всё), и
-//     попытка загрузки шрифта кидала необработанное исключение
-//     «Failed to load font ...» — оно падает на ТЕКУЩИЙ тест, даже если
-//     инициировано более ранним тестом файла (исключение «after the test
-//     had completed» атрибутируется выполняющемуся тесту). Исправлено в
+//     виджет-тестах сеть заглушена binding'ом (HTTP 400 на всё), попытка
+//     загрузки шрифта кидала необработанное исключение «Failed to load
+//     font ...» — оно падает на ТЕКУЩИЙ тест, даже если инициировано
+//     более ранним тестом файла (исключение «after the test had
+//     completed» атрибутируется выполняющемуся тесту). Исправлено в
 //     lib/widgets/video_player_card.dart: моно-подписи имени файла без
 //     weight-варианта (fontStyle без weight provably безопасен — те же
 //     вызовы в f3/f4 зелёные; weight-варианты у fontStyle в
@@ -162,6 +162,22 @@
 //      плашки, где saveFile канальный; остальные методы по-прежнему
 //      отвечают null («отмена выбора») — поток уходит в fallback,
 //      теперь тоже детерминированный.
+//
+// H2-player (значок паузы + кнопка полного экрана):
+//  - H2-T-PAUSE-FADE: значок паузы/воспроизведения исчезает примерно
+//    за полсекунды воспроизведения (задержка 300 мс + затухание
+//    AnimatedOpacity 200 мс, ключ g1_center_fade); на паузе значок
+//    появляется снова и остаётся; таймеры снимаются на паузе и при
+//    dispose (нет утечек, нет setState после dispose).
+//  - H2-T-FULLSCREEN-BUTTON: кнопка полного экрана есть справа внизу
+//    плеера (правее строки времени, у правого края).
+//  - H2-T-FULLSCREEN-OPENS: тап по кнопке открывает полноэкранную
+//    страницу в ландшафтной ориентации; выход кнопкой «Свернуть»
+//    возвращает прежнюю (портретную) ориентацию. Ориентация
+//    проверяется через подмену хука setPreferredOrientationsHook
+//    (тот же паттерн, что shareFilesHook) — системный канал
+//    'flutter/platform' в тестовом окружении недоступен, а SystemChrome
+//    без мока кидал бы MissingPluginException из dispose страницы.
 
 import 'dart:async';
 import 'dart:io';
@@ -639,6 +655,136 @@ void main() {
       expect(shared!.length, 1);
       expect(shared!.single.path, src.path,
           reason: 'шарится сам видеофайл');
+
+      await _tearDownTree(tester);
+    },
+  );
+
+  testWidgets(
+    'H2-T-PAUSE-FADE: значок паузы исчезает примерно за полсекунды '
+    'воспроизведения; на паузе значок появляется снова и остаётся',
+    (tester) async {
+      final fake = _FakeVideoPlatform();
+      vpi.VideoPlayerPlatform.instance = fake;
+
+      await _pumpReady(
+        tester,
+        const VideoPlayerCard(source: 'https://fixture.example/h2.mp4'),
+      );
+
+      AnimatedOpacity centerFade() => tester.widget<AnimatedOpacity>(
+          find.byKey(const ValueKey('g1_center_fade')));
+
+      // Тап — воспроизведение; значок паузы виден.
+      await tester.tap(find.byKey(const ValueKey('g1_video_tap_area')));
+      await tester.pump();
+      expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
+      expect(centerFade().opacity, 1.0);
+
+      // Ждём ~0.5 с (задержка 300 мс + затухание 200 мс): значок
+      // исчез, а видео продолжает играть (pause не вызывался).
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(centerFade().opacity, 0.0,
+          reason: 'значок паузы уходит ~за полсекунды игры');
+      expect(fake.calls, contains('play'));
+      expect(fake.calls, isNot(contains('pause')),
+          reason: 'видео продолжает играть, значок не «стопорит» его');
+
+      // Пауза — значок появляется и НЕ исчезает дальше.
+      await tester.tap(find.byKey(const ValueKey('g1_video_tap_area')));
+      await tester.pump();
+      expect(centerFade().opacity, 1.0,
+          reason: 'на паузе значок снова виден');
+      await tester.pump(const Duration(milliseconds: 700));
+      expect(centerFade().opacity, 1.0,
+          reason: 'на паузе значок остаётся видимым');
+
+      await _tearDownTree(tester);
+    },
+  );
+
+  testWidgets(
+    'H2-T-FULLSCREEN-BUTTON: кнопка полного экрана есть справа внизу '
+    'плеера',
+    (tester) async {
+      final fake = _FakeVideoPlatform();
+      vpi.VideoPlayerPlatform.instance = fake;
+
+      await _pumpReady(
+        tester,
+        const VideoPlayerCard(source: 'https://fixture.example/h2.mp4'),
+      );
+
+      final fsIcon = find.byIcon(Icons.fullscreen_rounded);
+      expect(fsIcon, findsOneWidget,
+          reason: 'кнопка полного экрана присутствует в контролах');
+
+      // Она правее строки времени (Spacer прижимает её к правому краю
+        // нижней панели — «справа внизу плеера»).
+      final timeRect = tester.getRect(find.textContaining(' / '));
+      final btnRect = tester.getRect(fsIcon);
+      expect(btnRect.left, greaterThan(timeRect.right),
+          reason: 'кнопка полного экрана — справа внизу плеера');
+
+      await _tearDownTree(tester);
+    },
+  );
+
+  testWidgets(
+    'H2-T-FULLSCREEN-OPENS: тап по кнопке полного экрана открывает '
+    'видео на весь экран в горизонтальном виде; выход возвращает '
+    'прежнюю ориентацию',
+    (tester) async {
+      final fake = _FakeVideoPlatform();
+      vpi.VideoPlayerPlatform.instance = fake;
+
+      // H2: ориентация проверяется через подмену хука (паттерн
+      // shareFilesHook): системный канал в тестах недоступен.
+      final orientationLog = <List<DeviceOrientation>>[];
+      setPreferredOrientationsHook =
+          (List<DeviceOrientation> orientations) async {
+        orientationLog
+            .add(List<DeviceOrientation>.of(orientations));
+      };
+      addTearDown(() =>
+          setPreferredOrientationsHook =
+              SystemChrome.setPreferredOrientations);
+
+      await _pumpReady(
+        tester,
+        const VideoPlayerCard(source: 'https://fixture.example/h2.mp4'),
+      );
+
+      await tester.tap(find.byTooltip('На весь экран'));
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+
+      expect(find.byKey(const ValueKey('g1_fullscreen_video')),
+          findsOneWidget,
+          reason: 'полноэкранная страница открыта');
+      expect(orientationLog, isNotEmpty,
+          reason: 'вход в полный экран запрашивает смену ориентации');
+      expect(
+        orientationLog.first,
+        containsAll(<DeviceOrientation>[
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ]),
+        reason: 'полный экран — горизонтальный (ландшафтный) вид',
+      );
+
+      // Выход явной кнопкой «Свернуть» внизу полноэкранного плеера.
+      await tester.tap(find.byTooltip('Свернуть'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byKey(const ValueKey('g1_fullscreen_video')),
+          findsNothing,
+          reason: 'выход из полного экрана возвращает на прежний экран');
+      expect(orientationLog.last, everyElement(DeviceOrientation.portraitUp),
+          reason: 'при выходе прежняя (портретная) ориентация '
+              'восстанавливается');
 
       await _tearDownTree(tester);
     },

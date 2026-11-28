@@ -7,6 +7,7 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -24,7 +25,9 @@ import '../theme.dart';
 ///  - полоса перемотки (VideoProgressIndicator с scrubbing) и время
 ///    «позиция / длительность»;
 ///  - кнопка «На весь экран» — тот же плеер в полноэкранном Scaffold
-///    с автоплеем, скачиванием и шерингом в AppBar;
+///    с автоплеем, скачиванием и шерингом в AppBar (H2-player: полный
+///    экран — горизонтальная/ландшафтная ориентация, при выходе
+///    прежняя ориентация восстанавливается);
 ///  - звук / без звука (setVolume);
 ///  - повтор после конца (isCompleted -> seekTo(0) + play);
 ///  - постер-заглушка «Загрузка видео…», пока плеер инициализируется;
@@ -37,6 +40,13 @@ import '../theme.dart';
 ///
 /// Контролы появляются по тапу и угасают через 4 секунды во время
 /// воспроизведения; на паузе остаются видимыми.
+///
+/// H2-player: центральный значок play/pause исчезает БЫСТРО — примерно
+/// за полсекунды после начала воспроизведения (задержка 300 мс +
+/// плавное затухание AnimatedOpacity 200 мс). На паузе и в конце
+/// значок снова появляется и остаётся видимым. Таймеры затухания
+/// снимаются и при паузе, и при dispose — нет утечек и setState
+/// после удаления виджета.
 ///
 /// G1-video-player-heal2: моноширинные подписи имени файла НЕ
 /// запрашивают у google_fonts вариант JetBrainsMono-SemiBold
@@ -69,7 +79,28 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
   bool _failed = false;
   bool _muted = false;
   bool _controlsVisible = true;
+
+  /// H2-player: видимость центрального значка play/pause/replay.
+  bool _centerVisible = true;
+
+  /// H2-player: играло ли видео по последнему тику контроллера —
+  /// детект «пауза подтверждена платформой» (значок остаётся).
+  bool _wasPlaying = false;
+
   Timer? _hideTimer;
+
+  /// H2-player: таймер затухания центрального значка. Ставится при
+  /// показе контролов, срабатывает только когда видео реально играет.
+  Timer? _centerFadeTimer;
+
+  /// H2-player: задержка перед затуханием значка. Вместе с анимацией
+  /// AnimatedOpacity (200 мс) значок полностью исчезает примерно за
+  /// полсекунды после начала воспроизведения (300 мс + 200 мс).
+  static const Duration _centerFadeDelay = Duration(milliseconds: 300);
+
+  /// Задержка исчезновения нижних контролов (как было: 4 секунды
+  /// во время воспроизведения, на паузе не прячутся).
+  static const Duration _controlsHideDelay = Duration(seconds: 4);
 
   @override
   void initState() {
@@ -84,16 +115,26 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
       _disposeController();
       _failed = false;
       _muted = false;
+      _centerVisible = true;
+      _wasPlaying = false;
       _initController();
     }
   }
 
   @override
   void dispose() {
-    _hideTimer?.cancel();
-    _hideTimer = null;
+    // H2-player: ОБА таймера снимаются при dispose — нет утечек
+    // таймеров и вызовов setState после удаления виджета.
+    _cancelControlTimers();
     _disposeController();
     super.dispose();
+  }
+
+  void _cancelControlTimers() {
+    _hideTimer?.cancel();
+    _hideTimer = null;
+    _centerFadeTimer?.cancel();
+    _centerFadeTimer = null;
   }
 
   void _disposeController() {
@@ -107,24 +148,57 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
   void _onTick() {
     if (!mounted) return;
     final c = _controller;
-    // Видео дошло до конца — показываем контролы с кнопкой повтора.
-    if (c != null && c.value.isCompleted && !_controlsVisible) {
-      _showControls();
+    final v = c?.value;
+    if (v != null && v.isInitialized) {
+      final playingNow = v.isPlaying && !v.isCompleted;
+      if (_wasPlaying && !playingNow) {
+        // H2-player: воспроизведение остановилось (пауза либо конец) —
+        // значок и контролы остаются видимыми, таймеры затухания
+        // сняты. Сравнение с _wasPlaying исключает ложное «показать
+        // steady» в момент между init и подтверждением автоплея.
+        _cancelControlTimers();
+        if (!_centerVisible || !_controlsVisible) {
+          setState(() {
+            _centerVisible = true;
+            _controlsVisible = true;
+          });
+        }
+      } else if (v.isCompleted && !_controlsVisible) {
+        // Видео дошло до конца — показываем контролы с кнопкой повтора.
+        _showControls();
+      }
+      _wasPlaying = playingNow;
     }
     setState(() {});
   }
 
   void _showControls() {
-    _hideTimer?.cancel();
-    _hideTimer = null;
-    final playing = _controller?.value.isPlaying ?? false;
-    if (playing) {
-      _hideTimer = Timer(const Duration(seconds: 4), () {
-        if (mounted) setState(() => _controlsVisible = false);
+    _cancelControlTimers();
+    // H2-player: таймеры ставятся всегда, но в момент срабатывания
+    // проверяют состояние видео: значок прячется, только если оно
+    // реально играет. Нельзя полагаться на мгновенное чтение
+    // isPlaying при тапе — play/pause подтверждаются платформой
+    // асинхронно (значение контроллера обновляется микротаской).
+    _centerFadeTimer = Timer(_centerFadeDelay, () {
+      _centerFadeTimer = null;
+      final v = _controller?.value;
+      if (mounted && v != null && v.isPlaying && !v.isCompleted) {
+        setState(() => _centerVisible = false);
+      }
+    });
+    _hideTimer = Timer(_controlsHideDelay, () {
+      _hideTimer = null;
+      final v = _controller?.value;
+      // На паузе нижние контролы остаются видимыми (как раньше).
+      if (mounted && v != null && v.isPlaying && !v.isCompleted) {
+        setState(() => _controlsVisible = false);
+      }
+    });
+    if (mounted && (!_controlsVisible || !_centerVisible)) {
+      setState(() {
+        _controlsVisible = true;
+        _centerVisible = true;
       });
-    }
-    if (mounted && !_controlsVisible) {
-      setState(() => _controlsVisible = true);
     }
   }
 
@@ -171,6 +245,8 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
       _controller = c;
       _loading = false;
       _controlsVisible = true;
+      _centerVisible = true;
+      _wasPlaying = false;
     });
     if (widget.fullscreen && !c.value.isPlaying) {
       unawaited(c.play());
@@ -292,9 +368,13 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
           ),
           IgnorePointer(
             ignoring: true,
+            // H2-player: значок паузы/воспроизведения исчезает быстро
+            // (~0.5 с игры) — свой таймер, независимый от нижних
+            // контролов. Ключ — для живых/виджет-тестов затухания.
             child: AnimatedOpacity(
+              key: const ValueKey('g1_center_fade'),
               duration: const Duration(milliseconds: 200),
-              opacity: _controlsVisible ? 1.0 : 0.0,
+              opacity: _centerVisible ? 1.0 : 0.0,
               child: _centerButton(),
             ),
           ),
@@ -394,6 +474,8 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
                 ),
                 if (!widget.fullscreen) ...[
                   const SizedBox(width: 4),
+                  // H2-player: кнопка полного экрана — справа внизу
+                  // плеера (после времени и звука, у правого края).
                   IconButton(
                     tooltip: 'На весь экран',
                     visualDensity: VisualDensity.compact,
@@ -403,6 +485,20 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
                       color: Colors.white,
                     ),
                     onPressed: _openFullscreen,
+                  ),
+                ] else ...[
+                  const SizedBox(width: 4),
+                  // H2-player: выход из полного экрана — явная кнопка
+                  // «Свернуть» (кроме системного «назад»).
+                  IconButton(
+                    tooltip: 'Свернуть',
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(
+                      Icons.close_fullscreen_rounded,
+                      size: 22,
+                      color: Colors.white,
+                    ),
+                    onPressed: () => Navigator.of(context).maybePop(),
                   ),
                 ],
               ],
@@ -499,7 +595,7 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   // G1-video-player-heal2: без weight — см. комментарий
-                  // в _footer (вариант SemiBold = runtime-фetch google_fonts,
+                  // в _footer (вариант SemiBold = runtime-fetch google_fonts,
                   // роняющий виджет-тесты).
                   style: fontStyle(
                     settings.codeFont,
@@ -546,11 +642,42 @@ class _VideoPlayerCardState extends State<VideoPlayerCard> {
 /// Полноэкранный просмотр видео: тот же плеер (автоплей, перемотка,
 /// звук, повтор) плюс скачивание и шеринг в AppBar. Используется и из
 /// карточки в чате, и из галереи — один код, один дизайн.
-class _FullscreenVideoPage extends StatelessWidget {
+///
+/// H2-player: на время просмотра ориентация фиксируется в ландшафт
+/// (горизонтальный вид), при выходе прежняя (портретная) ориентация
+/// восстанавливается в dispose страницы — в том числе при выходе
+/// системной кнопкой «назад».
+class _FullscreenVideoPage extends StatefulWidget {
   final String source;
   final String name;
 
   const _FullscreenVideoPage({required this.source, required this.name});
+
+  @override
+  State<_FullscreenVideoPage> createState() => _FullscreenVideoPageState();
+}
+
+class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
+  @override
+  void initState() {
+    super.initState();
+    // H2-player: вход в полный экран — горизонтальный (ландшафтный) вид.
+    unawaited(setPreferredOrientationsHook(<DeviceOrientation>[
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]));
+  }
+
+  @override
+  void dispose() {
+    // H2-player: выход — возвращаем прежнюю (портретную) ориентацию.
+    // Текущие предпочтения прочитать из SystemChrome нельзя, а
+    // приложение всегда вертикальное — восстанавливаем portraitUp.
+    unawaited(setPreferredOrientationsHook(<DeviceOrientation>[
+      DeviceOrientation.portraitUp,
+    ]));
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -560,17 +687,17 @@ class _FullscreenVideoPage extends StatelessWidget {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(widget.name, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           IconButton(
             tooltip: 'Скачать',
             icon: const Icon(Icons.download),
-            onPressed: () => saveVideoToDevice(context, source),
+            onPressed: () => saveVideoToDevice(context, widget.source),
           ),
           IconButton(
             tooltip: 'Поделиться',
             icon: const Icon(Icons.share),
-            onPressed: () => shareVideo(context, source),
+            onPressed: () => shareVideo(context, widget.source),
           ),
         ],
       ),
@@ -578,7 +705,7 @@ class _FullscreenVideoPage extends StatelessWidget {
         child: Center(
           child: VideoPlayerCard(
             key: const ValueKey('g1_fullscreen_video_player'),
-            source: source,
+            source: widget.source,
             fullscreen: true,
           ),
         ),
@@ -639,6 +766,13 @@ String videoDisplayName(String source) {
   }
   return withoutQuery.isEmpty ? 'видео' : withoutQuery;
 }
+
+/// H2-player: хук управления ориентацией для полноэкранного режима.
+/// В проде — SystemChrome, в виджет-тестах подменяется записывающей
+/// заглушкой (тот же паттерн, что у shareFilesHook): системные
+/// каналы в тестовом окружении недоступны.
+Future<void> Function(List<DeviceOrientation> orientations)
+    setPreferredOrientationsHook = SystemChrome.setPreferredOrientations;
 
 /// Хук системного шеринга: в проде — share_plus (системный share sheet),
 /// в виджет-тестах G1 — подменяется замоканной функцией.
