@@ -62,6 +62,12 @@ dev_dependencies:
   # video_player (VideoPlayerPlatform.instance = фейк), чтобы проверять
   # play/pause/повтор/полный экран без реального декодера.
   video_player_platform_interface: ^6.0.0
+  # G1-fix-analyze-heal1: тест G1-T-VIDEO-DOWNLOAD подменяет
+  # PathProviderPlatform.instance фейком (детерминированный каталог
+  # загрузок вместо xdg-конфигов хост-машины CI). Импорт интерфейсного
+  # пакета обязан опираться на явную зависимость
+  # (lint depend_on_referenced_packages).
+  path_provider_platform_interface: ^2.0.0
 
 flutter:
   uses-material-design: true

@@ -130,6 +130,38 @@
 //  Заодно закрыты два info prefer_const_constructors в _FakeVideoPlatform:
 //  Duration(seconds: 30) и Size(640, 360) — const-значения (const
 //  допустим у аргументов, хотя сам VideoEvent не const-конструктор).
+//
+// G1-fix-analyze-heal1 (CI 46139518808, упал шаг Run tests — единственный
+// красный: G1-T-VIDEO-DOWNLOAD, «Found 0 widgets with text containing
+// "Видео сохранено"» на строке 510; правка G1-fix-analyze касалась
+// только _FakeVideoPlatform и на DOWNLOAD не влияла):
+//  Диагноз. Поток saveVideoToDevice после отказа FilePicker уходит в
+//  fallback: getDownloadsDirectory() ?? getApplicationDocumentsDirectory().
+//  В тестовом окружении на Linux-хосте flutter tool регистрирует
+//  dartPluginClass пакета path_provider_linux (PathProviderLinux):
+//  он читает xdg-конфиги хоста МИМО метод-канала, поэтому канальный
+//  мок 'plugins.flutter.io/path_provider' на каталоги НЕ применяется.
+//  На CI-раннере xdg-каталоги (user-dirs.dirs) отсутствуют:
+//  getDownloadsPath даёт null, getApplicationDocumentsPath даёт null —
+//  path_provider кидает MissingPlatformDirectoryException, outer catch
+//  показывает «Не удалось сохранить видео», а подтверждения «Видео
+//  сохранено: …» нет (Found 0). Доказательство из лога: канальный мок
+//  уже отвечал _tempDir.path на ЛЮБОЙ метод — если бы getDownloads-
+//  Directory() шёл через канал, fallback-запись состоялась бы и плашка
+//  появилась; значит путь обходил канал (dartPluginClass).
+//  Фикс фикстуры (детерминизм без зависимости от хост-машины):
+//   1) PathProviderPlatform.instance подменяется на _FakePathProvider,
+//      который для getDownloadsPath/getApplicationDocumentsPath (а
+//      также временного/поддержки путей) возвращает подготовленный
+//      dlDir: fallback-запись гарантированно попадает в каталог
+//      Downloads теста. Прежний экземпляр восстанавливается
+//      (addTearDown) — соседи по файлу не затронуты.
+//   2) Мок канала file_picker на метод saveFile возвращает реальный
+//      путь внутри dlDir (имя файла берётся из аргументов вызова) —
+//      основной путь сохранения (FilePicker) доводит поток до той же
+//      плашки, где saveFile канальный; остальные методы по-прежнему
+//      отвечают null («отмена выбора») — поток уходит в fallback,
+//      теперь тоже детерминированный.
 
 import 'dart:async';
 import 'dart:io';
@@ -138,6 +170,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
+// G1-fix-analyze-heal1: PathProviderPlatform подменяется фейком в
+// G1-T-VIDEO-DOWNLOAD (пакет добавлен в dev_dependencies).
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:share_plus/share_plus.dart' show XFile;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart'
@@ -244,6 +279,34 @@ class _FakeVideoPlatform extends vpi.VideoPlayerPlatform {
 
   @override
   Future<void> setMixWithOthers(bool mixWithOthers) async {}
+}
+
+/// Фейк платформенного интерфейса path_provider: все запрашиваемые
+/// каталоги — подготовленный каталог теста.
+///
+/// G1-fix-analyze-heal1: на Linux-хосте flutter tool регистрирует
+/// dartPluginClass path_provider_linux (PathProviderLinux), который
+/// читает xdg-конфиги хоста МИМО метод-канала — канальный мок на
+/// каталоги не применяется, а на CI-раннере xdg-каталоги отсутствуют
+/// (null -> MissingPlatformDirectoryException -> «Не удалось сохранить
+/// видео»). Подмена singleton даёт детерминированный каталог загрузок
+/// независимо от состояния хост-машины.
+class _FakePathProvider extends PathProviderPlatform {
+  final String dir;
+
+  _FakePathProvider(this.dir);
+
+  @override
+  Future<String?> getTemporaryPath() async => dir;
+
+  @override
+  Future<String?> getApplicationSupportPath() async => dir;
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async => dir;
+
+  @override
+  Future<String?> getDownloadsPath() async => dir;
 }
 
 Widget _host(Widget child) {
@@ -445,16 +508,28 @@ void main() {
         (call) async =>
             call.method == 'getDownloadsPath' ? dlDir.path : _tempDir!.path,
       );
+      // G1-fix-analyze-heal1: dartPluginClass path_provider_linux
+      // (PathProviderLinux) на Linux-хосте читает xdg-конфиги МИМО
+      // метод-канала, поэтому канальный мок на каталоги не действует,
+      // а на CI-раннере xdg-каталоги отсутствуют -> MissingPlatform-
+      // DirectoryException -> «Не удалось сохранить видео» вместо
+      // подтверждения (Found 0 в CI 46139518808). Подменяем
+      // PathProviderPlatform.instance фейком с детерминированным
+      // каталогом загрузок; прежний экземпляр восстанавливается.
+      final savedProvider = PathProviderPlatform.instance;
+      addTearDown(() => PathProviderPlatform.instance = savedProvider);
+      PathProviderPlatform.instance = _FakePathProvider(dlDir.path);
       // G1-fix-tests-heal2: на платформах, где FilePicker.saveFile идёт
-      // через method channel, отвечаем синхронно в fake-времени «отменой
-      // выбора» (null) — поток скачивания детерминированно переходит к
-      // fallback-записи в каталог Downloads. Мок ставится под ОБЕИМИ
-      // известными именами канала file_picker (историческая усечённая
-      // «...filepick» и полная «...filepicker»); лишняя регистрация
-      // безвредна — перехватывается тот канал, который реально
-      // используется плагином. Если реализация платформы не канальная
-      // (FFI), она в тестовом окружении падает мгновенно, поток
-      // равнозначно уходит в fallback — детерминизм обеспечен.
+      // через method channel, ответ даётся синхронно в fake-времени.
+      // G1-fix-analyze-heal1: метод saveFile возвращает реальный путь
+      // внутри dlDir (имя файла — из аргументов вызова) — основной путь
+      // сохранения доводит поток до плашки «Видео сохранено: …».
+      // Остальные методы отвечают null («отмена выбора») — поток
+      // детерминированно уходит в fallback-запись в каталог Downloads.
+      // Мок ставится под ОБЕИМИ известными именами канала file_picker
+      // (историческая усечённая «...filepick» и полная «...filepicker»);
+      // лишняя регистрация безвредна — перехватывается тот канал,
+      // который реально используется плагином.
       for (final channelName in <String>[
         'miguelruivo.flutter.plugins.filepick',
         'miguelruivo.flutter.plugins.filepicker',
@@ -463,7 +538,17 @@ void main() {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(
           MethodChannel(channelName),
-          (call) async => null,
+          (call) async {
+            if (call.method == 'saveFile') {
+              final args = call.arguments;
+              final String fileName =
+                  args is Map && args['fileName'] is String
+                      ? args['fileName'] as String
+                      : 'video.mp4';
+              return '${dlDir.path}/$fileName';
+            }
+            return null;
+          },
         );
       }
 
