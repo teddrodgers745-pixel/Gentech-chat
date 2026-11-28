@@ -33,13 +33,15 @@ class _FakeVideoPlatform extends VideoPlayerPlatform {
 
   @override
   Stream<VideoEvent> videoEventsFor(int playerId) =>
-      Stream<VideoEvent>.value(const VideoEvent(
+      Stream<VideoEvent>.value(VideoEvent(
         eventType: VideoEventType.initialized,
         duration: Duration(seconds: 6),
         size: Size(640, 360),
       ));
 
-  @override
+  // Без `@override`: в зафиксированной версии video_player_platform_interface
+  // у базового класса нет метода с таким именем (override_on_non_overriding_member).
+  // Метод оставлен как обычный no-op фейка — поведение теста не меняется.
   Future<void> setPreventsDisplaySleepDuringVideoPlayback(
     int playerId,
     bool preventsDisplaySleepDuringVideoPlayback,
@@ -70,6 +72,12 @@ class _FakeVideoPlatform extends VideoPlayerPlatform {
   Widget buildViewWithOptions(VideoViewOptions options) =>
       const SizedBox.shrink();
 }
+
+/// Пустая конкретная реализация для восстановления состояния платформы
+/// после теста (addTearDown): все методы базового класса — дефолтные
+/// (бросают UnimplementedError), но дальше видео-тестов платформа не
+/// используется.
+class _PlaceholderVideoPlatform extends VideoPlayerPlatform {}
 
 GalleryMediaItem _image(String path) => GalleryMediaItem(
       isVideo: false,

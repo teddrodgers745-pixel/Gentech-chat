@@ -1,37 +1,32 @@
 НЕДОСТАЮЩИЕ ФАЙЛЫ: нет
 
-## H1-gallery: три раздела галереи и превью-миниатюры у видео
+H1-gallery-heal1 — минимальные фиксы строго по логу flutter analyze (7 issues):
 
-### Причина бага
-Экран галереи (`artifacts_gallery_screen.dart`) рисовал единый список без
-разделов, а видео-плитка рендерилась статичным контейнером: фон `p.card` +
-иконка play + подпись — без миниатюры кадра. Коллектор
-(`generated_media_collector.dart`) отдавал элементы без типа-раздела и без
-источника миниатюры для видео.
+1. lib/features/gallery/artifacts_gallery_screen.dart
+   - undefined_method `_EmptyHint` (64:25): добавлен недостающий приватный
+     виджет `_EmptyHint({palette, section})` — заглушка пустой галереи с
+     текстом прежней пустой ветки F5 для «Все» и уточнёнными текстами для
+     «Изображения»/«Видео». Остальные методы не тронуты.
+   - unchecked_use_of_nullable_value (377), argument_type_not_assignable
+     (378), return_of_invalid_type (381): в `VideoPreviewCache.acquire`
+     замыкание внутри `.then` не сохраняет promotion nullable-локала
+     `entry`, а re-read `entry.init` остаётся nullable. Точечное
+     исправление: работа в замыкании через ненулевую ссылку
+     `final current = entry;`, а возвращаемое будущее фиксируется как
+     `final init = current.init ??= ...; return init;`. Семантика кэша
+     (uses/lastUsed/LRU-вытеснение/чёрный список) не изменена.
 
-### Что изменено по слоям
+2. test/h1_gallery_sections_test.dart
+   - const_with_non_const (36:32): убран `const` перед `VideoEvent(...)` —
+     в зафиксированной версии video_player_platform_interface конструктор
+     VideoEvent не константный.
+   - override_on_non_overriding_member (43): снят `@override` с
+     `setPreventsDisplaySleepDuringVideoPlayback` — в данной версии
+     интерфейса у базового класса метода с таким именем нет; сам метод
+     оставлен обычным no-op фейка (поведение теста не меняется).
+   - undefined_function `_PlaceholderVideoPlatform` (141): добавлена
+     пустая конкретная реализация
+     `class _PlaceholderVideoPlatform extends VideoPlayerPlatform {}`
+     для восстановления платформы в addTearDown.
 
-**State/Service-слой — `lib/features/gallery/generated_media_collector.dart`** (точечные правки, публичный API сохранён):
-- Добавлен `enum GallerySection { all, images, videos }`.
-- `GalleryMediaItem` получил поле `thumbnailSource` (источник миниатюры для видео — путь/URL того же источника; для изображений `null`). Все прежние поля и конструктор совместимы — существующие потребители (F5-тест) не ломаются.
-- `collect(chats, {section = GallerySection.all})` применяет фильтр к итоговому списку; добавлен статический `filter(items, section)` — исчерпывающий switch по разделу.
-
-**UI-слой — `lib/features/gallery/artifacts_gallery_screen.dart`**:
-- Экран стал StatefulWidget с `_section = GallerySection.all` (выбор по умолчанию «Все», сохранение не требуется).
-- Над сеткой — переключатель `_SectionSwitcher`: три сегмента «Все / Изображения / Видео» в стиле приложения (палитра `Palette`, радиусы 12/9, accent-подсветка выбранного), ключи `gallery_section_all/images/videos`.
-- Видео-плитка переделана: `Stack` c `GalleryVideoPreview` (превью-кадр, `BoxFit.cover` без искажения), поверх — треугольник play с тенью и подпись с мягким градиентом снизу. Для видео без превью-источника (data-URL, отсутствующий файл) — прежний фон.
-- Новый публичный виджет `GalleryVideoPreview`: кадр через video_player — контроллер инициализируется, ставится на паузу и сматывается на 150 мс, чтобы платформа отрисовала кадр; отрисовка без искажения пропорций (`FittedBox` cover + `ClipRect`). Любая ошибка (нет файла, сеть, платформа) — аккуратный фолбэк, галерея не падает.
-- Кэш `VideoPreviewCache` (in-memory, H1-T-THUMBNAIL/требование кэша): готовые контроллеры кэшируются по пути источника, переиспользуются между открытиями галереи; контроллер, видимый плитке (uses > 0), не вытесняется; неиспользуемые вытесняются по LRU (лимит 24) и освобождаются; неудачные пути не ретраятся. Выбор палитры «кадр через плеер» вместо пакета `video_thumbnail` осознанный: не добавляет тяжёлой нативной зависимости (ffmpeg_kit) в APK-сборку CI.
-- Опциональный параметр `chats` у экрана — переопределение источника для тестов, `const ArtifactsGalleryScreen()` остаётся валидным.
-
-**Storage/Serialization**: сериализация чатов не менялась — превью вычисляются из уже сохранённых VideoPart/markdown-ссылок, кэш lives только в памяти экрана.
-
-### Проверка живым тестом
-Добавлен `test/h1_gallery_sections_test.dart`:
-- **H1-T-SECTIONS** — pump `ArtifactsGalleryScreen`: `expect(find.text('Все'), findsOneWidget)` и аналогично «Изображения», «Видео», плюс ключи сегментов.
-- **H1-T-FILTER** — `GeneratedMediaCollector.filter`: «Видео» — только `isVideo`, «Изображения» — только картинки, «Все» — 4 из 4.
-- **H1-T-THUMBNAIL** — pump `GalleryVideoPreview` с фейком платформы video_player (как в G1): `expect(find.byType(VideoPlayer), findsOneWidget)` — рендерится кадр, а не фон с треугольником.
-
-Живой тест вручную: открыть drawer → «Галерея» → три вкладки; «Видео» показывает только ролики с миниатюрой кадра под play; «Изображения» — только картинки; «Все» — всё вместе.
-
-Мёртвый дубли `artifact_viewer.dart` не тронут. Импортов-мусора нет: в экране добавлены только используемые `video_player` и `models.dart` (тип `Chat` для параметра).
+Другие файлы не менялись; TEMP-DIAG-UNMODIFIABLE не затронут.

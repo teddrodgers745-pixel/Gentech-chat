@@ -145,6 +145,56 @@ class _SectionSwitcher extends StatelessWidget {
   }
 }
 
+/// Заглушка пустой галереи (H1-gallery): своя подсказка для каждого
+/// раздела — «Все» повторяет текст прежней пустой ветки (F5),
+/// «Изображения»/«Видео» уточняют, чего именно пока нет.
+class _EmptyHint extends StatelessWidget {
+  final Palette palette;
+  final GallerySection section;
+
+  const _EmptyHint({required this.palette, required this.section});
+
+  @override
+  Widget build(BuildContext context) {
+    final String message;
+    switch (section) {
+      case GallerySection.all:
+        message = 'Пока нет сгенерированных изображений и видео.\n'
+            'Создайте картинку или видео в чате — оно появится здесь.';
+        break;
+      case GallerySection.images:
+        message = 'В разделе «Изображения» пока пусто.\n'
+            'Сгенерируйте картинку в чате — она появится здесь.';
+        break;
+      case GallerySection.videos:
+        message = 'В разделе «Видео» пока пусто.\n'
+            'Сгенерируйте видео в чате — оно появится здесь.';
+        break;
+    }
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.photo_library_outlined,
+              size: 40,
+              color: palette.muted,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: palette.muted, fontSize: 13),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Плитка галереи: изображение открывает полноэкранный просмотр,
 /// видео (G1-video-player) — тот же полноэкранный плеер, что и в чате.
 /// H1-gallery: у видео-плитки под play и подписью показывается превью
@@ -369,16 +419,23 @@ class VideoPreviewCache {
       entry = _PreviewEntry();
       _entries[key] = entry;
     }
-    entry
+    // Ненулевая локальная ссылка: замыкание ниже не сохраняет promotion
+    // переменной [entry] (объявлена как `_PreviewEntry?`), поэтому работа
+    // с записью внутри `.then` идёт через `current`.
+    final current = entry;
+    current
       ..uses += 1
       ..lastUsed = DateTime.now();
-    entry.init ??= _startInit(key, isLocal).then((c) {
-      final attached = identical(_entries[key], entry);
-      entry.controller = c;
-      if (!attached) _disposeEntry(entry);
+    // `??=` возвращает присвоенное (уже ненулевое) будущее: и существующая
+    // инициализация «в полёте», и только что запущенная возвращаются как
+    // `Future<VideoPlayerController?>` без лишнего re-read nullable-поля.
+    final init = current.init ??= _startInit(key, isLocal).then((c) {
+      final attached = identical(_entries[key], current);
+      current.controller = c;
+      if (!attached) _disposeEntry(current);
       return attached ? c : null;
     });
-    return entry.init;
+    return init;
   }
 
   /// Уменьшает счётчик использований; неиспользуемая запись сверх лимита
