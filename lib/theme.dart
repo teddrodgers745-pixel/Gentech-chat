@@ -147,6 +147,23 @@ TextStyle fontStyle(
     height: height,
     fontWeight: weight,
   );
+  // G1-fix-tests-heal1 (CI 46118065258): в процессе, где runtime-догрузка
+  // шрифтов ЗАПРЕЩЕНА (GoogleFonts.config.allowRuntimeFetching == false —
+  // сегодня это только виджет-тесты g1_video_player_test.dart), google_fonts
+  // не может взять шрифт ни из assets (не бандлены), ни из сети — и кидает
+  // Exception из fire-and-forget future (loadFontIfNecessary вызывается
+  // через .then без onError, google_fonts_base.dart:112 -> :179).
+  // Необработанное async-исключение роняет любой выполняющийся тест:
+  // «allowRuntimeFetching is false but font JetBrainsMono-Regular was not
+  // found in the application assets» (до правки — «Failed to load font with
+  // url: ...», тот же необработанный путь). Поэтому при запрещённой
+  // runtime-догрузке fontStyle вообще не вызывает GoogleFonts.getFont и
+  // возвращает обычный TextStyle: нагрузка loadFontIfNecessary не
+  // планируется, источник исключений исчезает. В проде флаг не меняется
+  // (true по умолчанию) — ветка google_fonts работает как раньше.
+  if (!GoogleFonts.config.allowRuntimeFetching) {
+    return base;
+  }
   try {
     return GoogleFonts.getFont(family, textStyle: base);
   } catch (_) {
