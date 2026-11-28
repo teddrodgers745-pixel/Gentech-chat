@@ -115,7 +115,13 @@ void main() {
     'G2-T-LIMIT-AND-STRIP: миниатюры референсов с удалением и '
     'счётчиком «N / max»; свыше лимита файлы не добавляются',
     (tester) async {
-      final dir = await Directory.systemTemp.createTemp('g2_refs');
+      // G2-fix-analyze-heal1: createTempSync вместо `await createTemp`.
+      // В testWidgets тело выполняется в fake-async зоне: настоящий
+      // dart:io I/O завершается только через реальный event loop,
+      // к которому тело не возвращается, поэтому `await createTemp`
+      // никогда не разрешался — тест висел до TimeoutException
+      // (10 минут). Синхронный вызов fake-async не перехватывает.
+      final dir = Directory.systemTemp.createTempSync('g2_refs');
       addTearDown(() {
         try {
           dir.deleteSync(recursive: true);
