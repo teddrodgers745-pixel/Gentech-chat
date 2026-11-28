@@ -3,6 +3,12 @@
 import '../../core/models/message_part.dart';
 import '../../models.dart';
 
+/// Раздел галереи сгенерированного медиа (H1-gallery).
+///
+/// «Все» — общий список (изображения + видео); «Изображения» и «Видео» —
+/// фильтр по типу медиа. Порядок значений = порядку вкладок в UI.
+enum GallerySection { all, images, videos }
+
 /// Один элемент галереи сгенерированного медиа (F5-gallery-image-load).
 class GalleryMediaItem {
   /// true — видео, false — изображение.
@@ -21,12 +27,20 @@ class GalleryMediaItem {
   /// Момент последнего обновления чата-источника.
   final DateTime addedAt;
 
+  /// Источник миниатюры для видео (H1-gallery): тот же путь/ссылка, что и
+  /// [path] — кадр превью рендерится через video_player (инициализация,
+  /// пауза, сматывание на 150 мс) и кэшируется в памяти экрана галереи,
+  /// чтобы не переинициализировать то же видео при каждом открытии.
+  /// Для изображений — null (миниатюра не нужна, плитка и есть картинка).
+  final String? thumbnailSource;
+
   const GalleryMediaItem({
     required this.isVideo,
     required this.path,
     required this.isLocal,
     required this.chatTitle,
     required this.addedAt,
+    this.thumbnailSource,
   });
 
   /// Короткое имя для подписи: последний сегмент пути без query.
@@ -64,7 +78,13 @@ class GeneratedMediaCollector {
 
   /// Свежие медиа — первыми: чаты сортируются по updatedAt по убыванию,
   /// внутри чата сообщения обходятся с конца.
-  static List<GalleryMediaItem> collect(List<Chat> chats) {
+  ///
+  /// [section] (H1-gallery) фильтрует результат: «Все» возвращает полный
+  /// список, «Изображения»/«Видео» — только соответствующий тип медиа.
+  static List<GalleryMediaItem> collect(
+    List<Chat> chats, {
+    GallerySection section = GallerySection.all,
+  }) {
     final ordered = List<Chat>.of(chats)
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
     final seen = <String>{};
@@ -84,7 +104,24 @@ class GeneratedMediaCollector {
         }
       }
     }
-    return out;
+    return filter(out, section);
+  }
+
+  /// Фильтрует готовый список по разделу (H1-gallery). «Все» возвращает
+  /// исходный список без копирования; остальные разделы — новый список
+  /// только с изображениями либо только с видео.
+  static List<GalleryMediaItem> filter(
+    List<GalleryMediaItem> items,
+    GallerySection section,
+  ) {
+    switch (section) {
+      case GallerySection.all:
+        return items;
+      case GallerySection.images:
+        return items.where((e) => !e.isVideo).toList(growable: false);
+      case GallerySection.videos:
+        return items.where((e) => e.isVideo).toList(growable: false);
+    }
   }
 
   /// Часть сообщения -> элемент галереи; не-медиа части игнорируются.
@@ -123,6 +160,7 @@ class GeneratedMediaCollector {
         isLocal: true,
         chatTitle: chat.title,
         addedAt: chat.updatedAt,
+        thumbnailSource: isVideo ? s : null,
       );
     }
     // F5-gallery-image-load-heal2: ImagePart.fromPath / VideoPart.fromPath
@@ -139,6 +177,7 @@ class GeneratedMediaCollector {
         isLocal: true,
         chatTitle: chat.title,
         addedAt: chat.updatedAt,
+        thumbnailSource: isVideo ? s : null,
       );
     }
     if (s.startsWith('data:image') || s.startsWith('data:video')) {
@@ -148,6 +187,7 @@ class GeneratedMediaCollector {
         isLocal: false,
         chatTitle: chat.title,
         addedAt: chat.updatedAt,
+        thumbnailSource: isVideo ? s : null,
       );
     }
     if (s.startsWith('http://') || s.startsWith('https://')) {
@@ -157,6 +197,7 @@ class GeneratedMediaCollector {
         isLocal: false,
         chatTitle: chat.title,
         addedAt: chat.updatedAt,
+        thumbnailSource: isVideo ? s : null,
       );
     }
     return null;
