@@ -72,8 +72,8 @@ void main() {
     'maxReferenceImages: 7 в медиа-композере видна скрепка',
     (tester) async {
       await tester.pumpWidget(_host(
-        AdaptiveChatInputBar(
-          config: const TextModelConfig(),
+        const AdaptiveChatInputBar(
+          config: TextModelConfig(),
           capabilities: _capsWithRefs,
           modelType: ModelTypes.video,
         ),
@@ -94,8 +94,8 @@ void main() {
     'maxReferenceImages скрепки в медиа-композере нет',
     (tester) async {
       await tester.pumpWidget(_host(
-        AdaptiveChatInputBar(
-          config: const TextModelConfig(),
+        const AdaptiveChatInputBar(
+          config: TextModelConfig(),
           capabilities: _capsNoRefs,
           modelType: ModelTypes.video,
         ),
