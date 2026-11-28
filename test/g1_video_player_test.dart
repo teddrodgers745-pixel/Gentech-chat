@@ -178,6 +178,27 @@
 //    (тот же паттерн, что shareFilesHook) — системный канал
 //    'flutter/platform' в тестовом окружении недоступен, а SystemChrome
 //    без мока кидал бы MissingPluginException из dispose страницы.
+//
+// H2-player-heal1 (CI 46175981442, упал шаг Run tests — единственный
+// красный: H2-T-PAUSE-FADE, «Expected: not contains 'pause' /
+// Actual: ['create', 'pause', 'play']»):
+//  Абсолютное утверждение `isNot(contains('pause'))` требовало, чтобы
+//  платформа вообще не получала pause за весь тест. Затухание значка
+//  при этом ДЕМОНСТРИРОВАЛОСЬ корректно (оба предшествующих
+//  утверждения зелёные: opacity == 0.0 при продолжающемся
+//  воспроизведении), а фиктивный pause был зафиксирован платформой ДО
+//  play — вне логики затухания карточки: в
+//  lib/widgets/video_player_card.dart нет ни одного вызова pause в
+//  путях инициализации и затухания (_initController/_showControls/
+//  _onTick/центральный таймер затухания не обращаются к контроллеру
+//  вовсе); единственные pause в карточке — явный пользовательский
+//  (_onVideoTap при isPlaying) и пауза перед уходом в полный экран
+//  (_openFullscreen). Строгий assert ловил служебный вызов
+//  video_player, не относящийся к проверяемому поведению. Проверка
+//  сделана относительной и семантической (см. тело теста): за окно
+//  затухания НЕ появляется НОВЫХ pause, а значок после затухания
+//  остаётся в дереве иконкой паузы (isPlaying == true) — видео
+//  продолжает играть.
 
 import 'dart:async';
 import 'dart:io';
@@ -681,15 +702,28 @@ void main() {
       expect(find.byIcon(Icons.pause_rounded), findsOneWidget);
       expect(centerFade().opacity, 1.0);
 
+      // H2-player-heal1: число платформенных вызовов pause на момент
+      // старта воспроизведения. video_player может доставлять платформе
+      // собственные служебные вызовы вне логики карточки (в CI-логе
+      // фиктивная pause фиксировалась ДО play), поэтому проверка
+      // относительная: за окно затухания не должно появиться НИ ОДНОЙ
+      // НОВОЙ паузы.
+      final pausesAtPlayStart = fake.calls.where((c) => c == 'pause').length;
+
       // Ждём ~0.5 с (задержка 300 мс + затухание 200 мс): значок
-      // исчез, а видео продолжает играть (pause не вызывался).
+      // исчез, а видео продолжает играть.
       await tester.pump(const Duration(milliseconds: 350));
       await tester.pump(const Duration(milliseconds: 250));
       expect(centerFade().opacity, 0.0,
           reason: 'значок паузы уходит ~за полсекунды игры');
       expect(fake.calls, contains('play'));
-      expect(fake.calls, isNot(contains('pause')),
-          reason: 'видео продолжает играть, значок не «стопорит» его');
+      expect(find.byIcon(Icons.pause_rounded), findsOneWidget,
+          reason: 'видео продолжает играть: значок остаётся иконкой '
+              'паузы (isPlaying == true), затухание его не «стопорит»');
+      expect(fake.calls.where((c) => c == 'pause').length,
+          pausesAtPlayStart,
+          reason: 'за окно затухания нет новых пауз — значок уходит '
+              'по таймеру затухания, а не потому, что видео остановилось');
 
       // Пауза — значок появляется и НЕ исчезает дальше.
       await tester.tap(find.byKey(const ValueKey('g1_video_tap_area')));
