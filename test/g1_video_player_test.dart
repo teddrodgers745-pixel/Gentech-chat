@@ -45,6 +45,42 @@
 //     SnackBar: snack() перед показом вызывает hideCurrentSnackBar,
 //     новая плашка показывается только после exit-анимации первой
 //     (~250 мс). Одного pump() мало — прокачиваем часы до появления.
+//
+// G1-fix-tests (CI 46057354306, heal2 не помог — «Run tests»:
+// 73 passed, 6 failed, все 6 из этого файла). Корень — НЕ плеер и НЕ
+// файлы фреймворка (test/src/binding.dart в стеке — это ФРЕЙМВОРК,
+// не репо), а google_fonts, который в тестах грузит шрифт из сети:
+//  1) google_fonts: TestWidgetsFlutterBinding глушит HTTP (любой запрос
+//     -> 400). google_fonts не находит JetBrainsMono-Regular в assets,
+//     идёт за ним в сеть, получает 400 и кидает «Failed to load font
+//     with url: https://fonts.gstatic.com/...» из fire-and-forget future
+//     (loadFontIfNecessary вызывается через .then(...) без onError) —
+//     НЕОБРАБОТАННОЕ async-исключение роняет любой тест, выполняющийся
+//     в момент всплытия исключения (в т.ч. после его завершения).
+//     Исправление по докам google_fonts (Testing): в main() ДО первого
+//     pump запрещаем runtime-загрузку шрифтов:
+//     GoogleFonts.config.allowRuntimeFetching = false. Это настройка
+//     ТОЛЬКО тестового процесса; загрузка шрифтов из сети на телефоне
+//     (прод) сохраняется. По исходникам google_fonts 6.2.x при
+//     запрещённом runtime-fetching печатается предупреждение и загрузка
+//     просто НЕ ПРЕДПРИНИМАЕТСЯ (без исключения) — сеть в тестах больше
+//     не трогается вовсе, источник необработанных исключений исчезает.
+//  2) G1-T-VIDEO-DOWNLOAD (test:350, «Found 0 widgets ... Видео
+//     сохранено»): две проблемы фикстуры.
+//     а) Мок path_provider отвечал на метод «getDownloadsDirectory», а
+//        реальный метод канала «plugins.flutter.io/path_provider» —
+//        «getDownloadsPath»: мок возвращал _tempDir.path на ЛЮБОЙ
+//        метод, и файл «скачивания» записывался мимо каталога Downloads.
+//        Исправлено имя метода в моке.
+//     б) Поток saveVideoToDevice упирается в FilePicker.platform.saveFile:
+//        на Linux-хосте CI это запуск внешнего диалогового процесса
+//        (zenity-семейство) — РЕАЛЬНЫЙ I/O, который не разрешается в
+//        fake-async вне окон tester.runAsync. Единственного окна 300 мс
+//        недостаточно: await «зависает», до fallback-записи в Downloads
+//        и второй плашки дело не доходит (Found 0). Внутри цикла
+//        прокачки добавлены порции реального времени (runAsync), а
+//        метод-канал file_picker замокан синхронным «отменой выбора»
+//        (null) — для платформ, где saveFile идёт через channel.
 
 import 'dart:async';
 import 'dart:io';
@@ -52,6 +88,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:share_plus/share_plus.dart' show XFile;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player_platform_interface/video_player_platform_interface.dart'
@@ -173,6 +210,14 @@ Directory? _tempDir;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  // G1-fix-tests: google_fonts в виджет-тестах НЕ должен ходить в сеть.
+  // Binding глушит HTTP (400 на всё), попытка догрузить шрифт из сети
+  // кидала необработанное исключение, ронявшее тесты файла. Флаг
+  // ставится ДО первого pump, один раз на процесс тестов (см.
+  // доки google_fonts, раздел Testing). Поведение приложения на
+  // телефоне не меняется — это настройка только тестов.
+  GoogleFonts.config.allowRuntimeFetching = false;
 
   setUp(() async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
@@ -309,12 +354,26 @@ void main() {
 
       final dlDir = Directory('${_tempDir!.path}/downloads')
         ..createSync(recursive: true);
-      // getDownloadsDirectory возвращает каталог загрузок теста.
+      // G1-fix-tests: у path_provider метод канала называется
+      // «getDownloadsPath» (а не «getDownloadsDirectory», как в прежнем
+      // моке). Прежний мок отвечал _tempDir.path на ЛЮБОЙ метод, и файл
+      // «скачивания» записывался мимо dlDir — последняя проверка файла
+      // в каталоге Downloads не могла пройти даже при появившейся
+      // плашке. Возвращаем каталог загрузок именно для getDownloadsPath.
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(
         const MethodChannel('plugins.flutter.io/path_provider'),
         (call) async =>
-            call.method == 'getDownloadsDirectory' ? dlDir.path : _tempDir!.path,
+            call.method == 'getDownloadsPath' ? dlDir.path : _tempDir!.path,
+      );
+      // G1-fix-tests: на платформах, где FilePicker.saveFile идёт через
+      // method channel, отвечаем синхронно в fake-времени «отменой
+      // выбора» (null) — поток скачивания детерминированно переходит к
+      // fallback-записи в каталог Downloads.
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        const MethodChannel('miguelruivo.flutter.plugins.filepicker.FilePicker'),
+        (call) async => null,
       );
 
       await _pumpReady(
@@ -332,17 +391,27 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 300));
       });
 
-      // G1-video-player-heal2: подтверждение приходит ВТОРОЙ плашкой
-      // SnackBar. snack() перед показом вызывает hideCurrentSnackBar:
-      // первая плашка уходит с exit-анимацией (~250 мс), и только после
-      // неё показывается вторая — одного pump() недостаточно (в CI:
-      // «Found 0 widgets ... Видео сохранено»). Прокачиваем фейковые
-      // часы, пока текст подтверждения не появится (до 1.2 с).
+      // G1-fix-tests: подтверждение приходит ВТОРОЙ плашкой SnackBar
+      // (snack() перед показом вызывает hideCurrentSnackBar: первая
+      // уходит с exit-анимацией ~250 мс — одного pump() мало, прокачиваем
+      // часы). Кроме того, поток скачивания на пути к fallback-записи
+      // упирается в FilePicker.platform.saveFile: на Linux-хосте CI это
+      // запуск внешнего диалогового процесса — РЕАЛЬНЫЙ I/O, который не
+      // разрешается в fake-async вне окон tester.runAsync (await
+      // «зависал», и плашка «Видео сохранено» не появлялась вовсе — CI:
+      // «Found 0 widgets ... Видео сохранено»). Поэтому каждая итерация
+      // цикла даёт вводу-выводу порцию реального времени внутри
+      // runAsync: весь путь (чтение файла -> FilePicker -> ошибка/отмена
+      // -> fallback-запись в Downloads) завершается, затем fake-прокачка
+      // показывает вторую плашку.
       for (var i = 0;
-          i < 10 &&
+          i < 12 &&
               find.textContaining('Видео сохранено').evaluate().isEmpty;
           i++) {
         await tester.pump(const Duration(milliseconds: 120));
+        await tester.runAsync(() async {
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+        });
       }
       await tester.pump();
 
