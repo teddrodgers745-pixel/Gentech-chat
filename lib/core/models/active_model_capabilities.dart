@@ -58,6 +58,13 @@ class ActiveModelCapabilities {
   /// по каталогу и fallback-префиксу; false — нативного поиска нет.
   final bool supportsNativeSearch;
 
+  /// G2-media-references: максимум референсных изображений, который
+  /// каталог разрешает передать медиа-модели (Polza parameters.images.max,
+  /// например 7 у grok-imagine-video-1-5 на эндпоинте /api/v1/media).
+  /// null — каталог не сообщил лимит: скрепка референсов в медиа-композере
+  /// скрыта, изображения в запрос не передаются.
+  final int? maxReferenceImages;
+
   const ActiveModelCapabilities({
     required this.modelId,
     required this.normalizedId,
@@ -69,6 +76,7 @@ class ActiveModelCapabilities {
     this.reasoningDefault = '',
     this.reasoningNoneAllowed = true,
     this.supportsNativeSearch = false,
+    this.maxReferenceImages,
   });
 
   /// Пустое состояние: модель ещё не выбрана.
@@ -88,10 +96,16 @@ class ActiveModelCapabilities {
     return p != null && p.hasAny;
   }
 
+  /// G2-media-references: модель принимает референсные изображения
+  /// (input.images POST /v1/media). true — скрепка и полоса миниатюр
+  /// показываются в медиа-композере; false — скрыты.
+  bool get supportsReferenceImages => (maxReferenceImages ?? 0) > 0;
+
   @override
   String toString() =>
       'ActiveModelCapabilities($modelId, ${kind.name}, '
       'vision: $vision, reasoning: $reasoning, '
       'default: ${reasoningDefault.isEmpty ? '-' : reasoningDefault}, '
-      'noneAllowed: $reasoningNoneAllowed)';
+      'noneAllowed: $reasoningNoneAllowed, '
+      'maxRefs: ${maxReferenceImages ?? '-'})';
 }

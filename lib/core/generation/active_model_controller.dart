@@ -1019,6 +1019,9 @@ class ActiveModelController extends ChangeNotifier {
     // ChatService.reasoningMandatoryProbe отвечал корректно.
     _activeReasoningNorm = norm;
     _activeReasoningNoneAllowed = reasoningNoneAllowed;
+    // G2-media-references: лимит референсов из каталога Polza
+    // (parameters.images.max) — единственный источник правды.
+    final maxRefs = _maxReferenceImagesFromCatalog(entry);
     _current = ActiveModelCapabilities(
       modelId: modelId,
       normalizedId: norm,
@@ -1030,12 +1033,14 @@ class ActiveModelController extends ChangeNotifier {
       reasoningDefault: reasoningDefault,
       reasoningNoneAllowed: reasoningNoneAllowed,
       supportsNativeSearch: nativeSearch,
+      maxReferenceImages: maxRefs,
     );
     debugPrint(
       '[caps] $modelId (conn: ${cid ?? 'нет'}): '
       'type=${(entry?.type.isNotEmpty ?? false) ? entry!.type : '?'}, '
       'kind=${kind.name} [$kindSource], '
       'params=${params == null ? 'нет' : params.confidence} [$paramsSource], '
+      'maxRefs=${maxRefs ?? '-'} '
       'reasoning=[${reasoningLevels.join(',')}] '
       'default=${reasoningDefault.isEmpty ? '-' : reasoningDefault} '
       'noneAllowed=$reasoningNoneAllowed '
@@ -1116,6 +1121,25 @@ class ActiveModelController extends ChangeNotifier {
     if (raw is int) return raw;
     if (raw is num) return raw.round();
     if (raw is String) return int.tryParse(raw.trim());
+    return null;
+  }
+
+  /// Максимум референсных изображений медиа-модели (G2-media-references):
+  /// параметры.images.max каталога Polza («Входные изображения
+  /// (image-to-video)», например 7 у grok-imagine-video-1-5). null —
+  /// каталог не сообщил лимит: скрепка референсов скрыта. Запасной
+  /// путь — карта `images` в mediaParams (max/maxImages).
+  static int? _maxReferenceImagesFromCatalog(CatalogEntry? e) {
+    final en = e;
+    if (en == null) return null;
+    if (en.maxReferenceImages != null) return en.maxReferenceImages;
+    final raw = en.mediaParams['images'];
+    if (raw is Map) {
+      final max = raw['max'] ?? raw['maxImages'] ?? raw['maximum'];
+      if (max is int) return max;
+      if (max is num) return max.round();
+      if (max is String) return int.tryParse(max.trim());
+    }
     return null;
   }
 

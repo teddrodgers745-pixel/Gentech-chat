@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Minkail. All rights reserved.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -66,6 +67,12 @@ const Set<String> _imageExtensions = <String>{
   'jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'heic', 'heif',
 };
 
+/// G2-media-references: типы файлов, допустимые в качестве референсов
+/// медиа-модели (input.images POST /v1/media).
+const Set<String> kMediaReferenceExtensions = <String>{
+  'jpg', 'jpeg', 'png', 'webp',
+};
+
 /// Расширение файла в нижнем регистре ('' — расширения нет).
 String attachmentExtension(String path) {
   final clean = path.replaceAll('\\', '/');
@@ -82,6 +89,101 @@ String attachmentName(String path) {
   return slash >= 0 && slash + 1 < clean.length
       ? clean.substring(slash + 1)
       : clean;
+}
+
+/// G2-media-references: результат отбора референсных изображений
+/// медиа-модели из выбранных пользователем файлов.
+///
+/// Правила — только из каталога Polza Media API:
+///  - типы: только jpg/jpeg/png/webp ([kMediaReferenceExtensions]);
+///  - лимит: не более [maxReferenceImages] референсов на запрос,
+///    уже прикреплённые учитываются в [MediaReferenceSelection].
+class MediaReferenceSelection {
+  /// Отобранные пути (в исходном порядке, не более свободного лимита).
+  final List<String> accepted;
+
+  /// Сколько файлов отброшено по типу (не изображение-референс).
+  final int rejectedWrongType;
+
+  /// Сколько допустимых по типу файлов не влезло в лимит.
+  final int rejectedOverLimit;
+
+  /// true — лимит исчерпан ещё ДО отбора (свободного места нет):
+  /// ничего добавить нельзя, UI показывает сообщение о лимите.
+  final bool limitAlreadyReached;
+
+  const MediaReferenceSelection({
+    required this.accepted,
+    this.rejectedWrongType = 0,
+    this.rejectedOverLimit = 0,
+    this.limitAlreadyReached = false,
+  });
+}
+
+/// Отбирает референсы медиа-модели из [paths]:
+///  - фильтрует по типу (jpg/jpeg/png/webp);
+///  - не пускает больше (maxReferenceImages - currentCount) файлов;
+///  - при maxReferenceImages <= 0 или исчерпанном лимите ничего
+///    не добавляет ([MediaReferenceSelection.limitAlreadyReached]).
+MediaReferenceSelection selectMediaReferenceFiles({
+  required List<String> paths,
+  int currentCount = 0,
+  int? maxReferenceImages,
+}) {
+  final byType = <String>[
+    for (final p in paths)
+      if (kMediaReferenceExtensions.contains(attachmentExtension(p))) p,
+  ];
+  final wrong = paths.length - byType.length;
+  final max = maxReferenceImages ?? 0;
+  final room = max - currentCount;
+  if (max <= 0 || room <= 0) {
+    return MediaReferenceSelection(
+      accepted: const <String>[],
+      rejectedWrongType: wrong,
+      rejectedOverLimit: byType.length,
+      limitAlreadyReached: true,
+    );
+  }
+  final take = byType.length < room ? byType.length : room;
+  return MediaReferenceSelection(
+    accepted: List<String>.of(byType.take(take)),
+    rejectedWrongType: wrong,
+    rejectedOverLimit: byType.length - take,
+    limitAlreadyReached: false,
+  );
+}
+
+/// G2-media-references: MIME-тип референсного изображения по расширению;
+/// '' — файл не является референсом (поддерживаются только форматы
+/// input.images Polza Media API: jpeg/png/webp).
+String mediaReferenceMime(String path) {
+  switch (attachmentExtension(path)) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'webp':
+      return 'image/webp';
+    default:
+      return '';
+  }
+}
+
+/// Кодирует файл референса в data-URI `data:<mime>;base64,<...>` —
+/// формат входных изображений POST /v1/media (input.images). null —
+/// файл не изображение поддерживаемого типа либо не читается.
+Future<String?> mediaReferenceDataUri(File file) async {
+  final mime = mediaReferenceMime(file.path);
+  if (mime.isEmpty) return null;
+  try {
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) return null;
+    return 'data:$mime;base64,${base64Encode(bytes)}';
+  } catch (_) {
+    return null;
+  }
 }
 
 /// Обрабатывает вложение: изображения (jpg/jpeg/png/webp) сжимаются

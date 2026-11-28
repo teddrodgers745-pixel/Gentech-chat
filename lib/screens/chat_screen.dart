@@ -726,15 +726,48 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _attach() async {
     if (_streaming) return;
+    // G2-media-references: в режиме генерации изображения/видео скрепка
+    // прикрепляет РЕФЕРЕНСЫ — только изображения (jpg/jpeg/png/webp) и
+    // не больше maxReferenceImages из каталога активной модели. Лимит и
+    // типы берутся только из каталога, без списков-исключений.
+    final effType = _effectiveModelType;
+    final maxRefs =
+        (effType == ModelTypes.image || effType == ModelTypes.video)
+            ? (_activeModel.current.maxReferenceImages ?? 0)
+            : 0;
     try {
       final res = await FilePicker.platform.pickFiles(allowMultiple: true);
       if (!mounted) return;
       if (res == null) return;
-      final fresh =
+      var fresh =
           res.files.where((f) => f.path != null && f.path!.isNotEmpty).toList();
       if (fresh.isEmpty) {
         _snack('Файлы недоступны для чтения');
         return;
+      }
+      if (maxRefs > 0) {
+        final sel = selectMediaReferenceFiles(
+          paths: <String>[for (final f in fresh) f.path!],
+          currentCount: _attachments.length,
+          maxReferenceImages: maxRefs,
+        );
+        if (sel.accepted.isEmpty) {
+          if (sel.limitAlreadyReached) {
+            _snack('Максимум референсов для этой модели: $maxRefs');
+          } else {
+            _snack('Референсы — только изображения jpg, jpeg, png, webp');
+          }
+          return;
+        }
+        if (sel.rejectedOverLimit > 0) {
+          _snack('Максимум референсов для этой модели: $maxRefs — '
+              'лишние файлы не добавлены');
+        } else if (sel.rejectedWrongType > 0) {
+          _snack('Файлы не-изображения пропущены: референсы — '
+              'только jpg, jpeg, png, webp');
+        }
+        final accepted = Set<String>.of(sel.accepted);
+        fresh = fresh.where((f) => accepted.contains(f.path!)).toList();
       }
       // Каждое вложение проходит обработку: изображения сжимаются
       // в изоляте, статус виден в чипе вложения.
@@ -1020,6 +1053,23 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  /// Собирает data-URI референсов из готовых вложений (не более [maxRefs])
+  /// для params['images'] Polza Media API (G2-media-references):
+  /// каждая строка — `data:<mime>;base64,<base64>`, mime по расширению
+  /// (image/jpeg | image/png | image/webp). Неготовые, нечитаемые и
+  /// не-изображения пропускаются.
+  Future<List<String>> _mediaReferenceImages(int maxRefs) async {
+    final out = <String>[];
+    if (maxRefs <= 0) return out;
+    for (final a in _attachments) {
+      if (out.length >= maxRefs) break;
+      if (a.status != AttachmentStatus.ready) continue;
+      final uri = await mediaReferenceDataUri(a.file);
+      if (uri != null) out.add(uri);
+    }
+    return out;
+  }
+
   /// Генерация изображения: результат попадает в чат как сообщение
   /// ассистента с markdown-ссылкой на изображение.
   Future<void> _sendImage(String txt) async {
@@ -1031,12 +1081,26 @@ class _ChatScreenState extends State<ChatScreen> {
     final cfg = effectiveConfig();
     final modelId = cfg.model.trim();
     final ratio = _aspectRatio.trim();
+    // G2-media-references: готовые вложения кодируются в data-URI
+    // (data:<mime>;base64,...) и уходят в params['images'] тела
+    // POST /v1/media — не больше maxReferenceImages каталога модели.
+    final caps = _activeModel.current;
+    final maxRefs =
+        caps.supportsReferenceImages ? (caps.maxReferenceImages ?? 0) : 0;
+    final refs = await _mediaReferenceImages(maxRefs);
     final params = <String, dynamic>{
       if (ratio.isNotEmpty) ParamKeys.aspectRatio: ratio,
       if ((_mediaResolution ?? '').trim().isNotEmpty)
         ParamKeys.resolution: _mediaResolution!.trim(),
       if ((_mediaQuality ?? '').trim().isNotEmpty)
         ParamKeys.quality: _mediaQuality!.trim(),
+    };
+    // Референсы уходят ТОЛЬКО в тело запроса: в снимок повтора они не
+    // попадают — base64 раздувало бы хранилище чатов, а повтор и так
+    // честно создаёт новую генерацию.
+    final requestParams = <String, dynamic>{
+      ...params,
+      if (refs.isNotEmpty) 'images': refs,
     };
     final typeOverride = await _typeOverrideFor(modelId);
     final snap = GenerationSnapshot(
@@ -1058,6 +1122,9 @@ class _ChatScreenState extends State<ChatScreen> {
       chat.title = txt.length > 40 ? '${txt.substring(0, 40)}…' : txt;
     }
     _input.clear();
+    // G2-media-references: референсы отправлены — вложения расходованы.
+    _attachments.clear();
+    if (mounted) setState(() {});
     await _generateImage(
       chat: chat,
       prompt: txt,
@@ -1066,7 +1133,7 @@ class _ChatScreenState extends State<ChatScreen> {
         apiKey: cfg.apiKey,
         model: modelId,
       ),
-      parameters: params,
+      parameters: requestParams,
       snapshot: snap,
     );
   }
@@ -1202,6 +1269,13 @@ class _ChatScreenState extends State<ChatScreen> {
     final cfg = effectiveConfig();
     final modelId = cfg.model.trim();
     final ratio = _aspectRatio.trim();
+    // G2-media-references: референсы image-to-video — готовые вложения
+    // в data-URI, params['images'] тела POST /v1/media, не больше
+    // maxReferenceImages каталога (например, 7 у grok-imagine-video-1-5).
+    final caps = _activeModel.current;
+    final maxRefs =
+        caps.supportsReferenceImages ? (caps.maxReferenceImages ?? 0) : 0;
+    final refs = await _mediaReferenceImages(maxRefs);
     final params = <String, dynamic>{
       if (ratio.isNotEmpty) ParamKeys.aspectRatio: ratio,
       if (_videoDuration != null) ParamKeys.duration: _videoDuration!,
@@ -1209,6 +1283,11 @@ class _ChatScreenState extends State<ChatScreen> {
         ParamKeys.resolution: _mediaResolution!.trim(),
       if ((_mediaQuality ?? '').trim().isNotEmpty)
         ParamKeys.quality: _mediaQuality!.trim(),
+    };
+    // В снимок повтора референсы не попадают (base64 раздувает хранилище).
+    final requestParams = <String, dynamic>{
+      ...params,
+      if (refs.isNotEmpty) 'images': refs,
     };
     final typeOverride = await _typeOverrideFor(modelId);
     final snap = GenerationSnapshot(
@@ -1230,6 +1309,9 @@ class _ChatScreenState extends State<ChatScreen> {
       chat.title = txt.length > 40 ? '${txt.substring(0, 40)}…' : txt;
     }
     _input.clear();
+    // G2-media-references: референсы отправлены — вложения расходованы.
+    _attachments.clear();
+    if (mounted) setState(() {});
     await _generateVideo(
       chat: chat,
       prompt: txt,
@@ -1238,7 +1320,7 @@ class _ChatScreenState extends State<ChatScreen> {
         apiKey: cfg.apiKey,
         model: modelId,
       ),
-      parameters: params,
+      parameters: requestParams,
       snapshot: snap,
     );
   }
@@ -2204,6 +2286,19 @@ class _ChatScreenState extends State<ChatScreen> {
                       onAttach: _attach,
                       onSend: _send,
                       onStop: _stop,
+                      // G2-media-references: референсы и их удаление —
+                      // только когда каталог модели разрешил лимит.
+                      mediaAttachments: caps.supportsReferenceImages
+                          ? List<AttachmentDraft>.of(_attachments)
+                          : const <AttachmentDraft>[],
+                      onRemoveMediaAttachment:
+                          caps.supportsReferenceImages
+                              ? (i) => setState(() {
+                                    if (i >= 0 && i < _attachments.length) {
+                                      _attachments.removeAt(i);
+                                    }
+                                  })
+                              : null,
                       onStartLive: () {
                         ttsService.stop();
                         final key = effectiveConfig().apiKey.trim();
@@ -2451,13 +2546,21 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
               ],
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 
   Widget _attachmentActions(Palette p) {
+    // G2-media-references: в режиме генерации с поддержкой референсов
+    // полоса миниатюр рисуется внутри медиа-композера (со счётчиком
+    // «N / max»), здесь её не дублируем.
+    final effType = _effectiveModelType;
+    if ((effType == ModelTypes.image || effType == ModelTypes.video) &&
+        _activeModel.current.supportsReferenceImages) {
+      return const SizedBox.shrink();
+    }
     return AttachmentStrip(
       attachments: _attachments,
       onRemove: (i) => setState(() {

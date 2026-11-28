@@ -354,6 +354,12 @@ abstract final class ParameterTranslator {
     final isHeuristicVid = ActiveModelController.isHeuristicVideo(modelId);
     final p = UniversalParams.fromRaw(rawParams, useControllerFallback: true);
 
+    // G2-media-references: референсные изображения — ДАННЫЕ запроса,
+    // а не параметр генерации: они проходят через трансляцию как есть
+    // (список строк URL/data-URI). Лимит каталога контролирует слой,
+    // собравший запрос (ChatScreen), поэтому здесь не обрезается.
+    final refs = _referenceImagesFrom(rawParams['images']);
+
     if (spec == null || !spec.hasAny) {
       final fb = Map<String, dynamic>.of(fallback());
       if (p.aspectRatio != null &&
@@ -377,6 +383,7 @@ abstract final class ParameterTranslator {
       if (p.quality != null && !fb.containsKey(ParamKeys.quality)) {
         fb[ParamKeys.quality] = p.quality!;
       }
+      if (refs != null) fb['images'] = refs;
       return fb;
     }
 
@@ -386,7 +393,12 @@ abstract final class ParameterTranslator {
         p.duration != null ||
         isHeuristicVid;
     final body = isVideo ? toVideoBody(p, spec) : toImageBody(p, spec);
-    if (body.isEmpty) return fallback();
+    if (body.isEmpty) {
+      final fb = Map<String, dynamic>.of(fallback());
+      if (refs != null) fb['images'] = refs;
+      return fb;
+    }
+    if (refs != null) body['images'] = refs;
     return body;
   }
 
@@ -395,16 +407,31 @@ abstract final class ParameterTranslator {
   /// Параметры генерации лежат внутри объекта `input`. Этот метод
   /// нормализует имена и типы, но не фильтрует поля по схеме модели —
   /// фильтрация выполняется в [toImageBody]/[toVideoBody] до вызова.
+  ///
+  /// G2-media-references: референсные изображения передаются во входе
+  /// `input.images` — список строк, где каждая строка это URL либо
+  /// data-URI вида `data:image/jpeg;base64,...` (доки Polza:
+  /// gaidy/media-input.md, api-reference/media/create.md). Список
+  /// берётся из `translated['images']` (туда его сохраняет
+  /// [translateWithCatalog]); если задан [maxReferenceImages] — список
+  /// обрезается до лимита каталога. Референсов нет — ключ не создаётся.
   static Map<String, dynamic> toPolzaMediaInput(
     String prompt,
     Map<String, dynamic> translated, {
     bool isVideo = false,
+    int? maxReferenceImages,
   }) {
     final out = <String, dynamic>{'prompt': prompt};
     final ratio = UniversalParams._aspectRatio(
       translated[ParamKeys.aspectRatio] ?? translated['aspect_ratio'],
     );
     if (ratio != null) out['aspect_ratio'] = ratio;
+
+    final images = _referenceImagesFrom(
+      translated['images'],
+      maxReferenceImages,
+    );
+    if (images != null) out['images'] = images;
 
     if (isVideo) {
       final duration = UniversalParams._int(
@@ -434,6 +461,22 @@ abstract final class ParameterTranslator {
     if (size != null) out['size'] = size;
 
     return out;
+  }
+
+  /// Список референсных изображений (input.images POST /v1/media) из
+  /// параметров запроса: непустые строки (URL либо data-URI), не более
+  /// [max] элементов при заданном лимите. null — референсов нет.
+  static List<String>? _referenceImagesFrom(Object? raw, [int? max]) {
+    if (raw is! List) return null;
+    final out = <String>[];
+    for (final e in raw) {
+      if (e == null) continue;
+      final s = e.toString().trim();
+      if (s.isEmpty) continue;
+      out.add(s);
+      if (max != null && max > 0 && out.length >= max) break;
+    }
+    return out.isEmpty ? null : out;
   }
 
   /// Разрешение вида «1K»/«2K»/«4K» — это image_resolution, а не

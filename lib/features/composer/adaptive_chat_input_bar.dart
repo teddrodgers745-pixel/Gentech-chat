@@ -10,8 +10,10 @@ import '../../core/generation/user_param_override_store.dart';
 import 'widgets/manual_params_sheet.dart';
 import '../../core/models/active_model_capabilities.dart';
 import '../../core/models/param_spec.dart';
+import '../../models/attachment_draft.dart';
 import '../../models/model_config.dart';
 import '../../theme.dart';
+import '../../widgets/attachment_strip.dart';
 import '../../widgets/inputs/live_voice_input.dart';
 import '../../widgets/inputs/text_chat_input.dart';
 import 'modes/image_gen_mode.dart';
@@ -24,6 +26,10 @@ import 'modes/image_gen_mode.dart';
 ///  - Text (и любые остальные по умолчанию) -> полный [TextChatInput]
 ///    с капсулами «Мышление», «Поиск», скрепкой, микрофоном и отправкой.
 /// Поле ввода никогда не исчезает: у каждой рабочей модели есть панель.
+///
+/// G2-media-references: в медиа-композере скрепка референсов и полоса
+/// миниатюр показываются ТОЛЬКО когда каталог активной модели сообщил
+/// maxReferenceImages > 0 (ActiveModelCapabilities.supportsReferenceImages).
 class AdaptiveChatInputBar extends StatefulWidget {
   final ModelConfig config;
   final ActiveModelCapabilities capabilities;
@@ -47,6 +53,14 @@ class AdaptiveChatInputBar extends StatefulWidget {
   final VoidCallback? onStop;
   final VoidCallback? onStartLive;
 
+  /// G2-media-references: референсные изображения медиа-модели
+  /// (image/video) — черновики вложений для полосы миниатюр в
+  /// медиа-композере. Пустой список — полоса скрыта.
+  final List<AttachmentDraft> mediaAttachments;
+
+  /// Удаление референса по индексу; null — удаление недоступно.
+  final ValueChanged<int>? onRemoveMediaAttachment;
+
   const AdaptiveChatInputBar({
     super.key,
     required this.config,
@@ -67,6 +81,8 @@ class AdaptiveChatInputBar extends StatefulWidget {
     this.onSend,
     this.onStop,
     this.onStartLive,
+    this.mediaAttachments = const <AttachmentDraft>[],
+    this.onRemoveMediaAttachment,
   });
 
   @override
@@ -271,6 +287,12 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
           widget.capabilities.kind == ActiveModelKind.image ||
           widget.config is ImageGenModelConfig);
 
+  /// G2-media-references: поддержка референсов — ТОЛЬКО по каталогу
+  /// (maxReferenceImages > 0). Никаких захардкоженных списков моделей:
+  /// что дал каталог — то и показываем.
+  bool get _supportsReferences =>
+      widget.capabilities.supportsReferenceImages;
+
   @override
   void dispose() {
     _focus.removeListener(_onFocusChange);
@@ -362,7 +384,8 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
   }
 
   /// Композитор медиа-генерации (изображение/видео): чипсы параметров
-  /// из каталога модели, поле промпта, голосовой ввод и кнопка отправки.
+  /// из каталога модели, скрепка референсов (только по каталогу),
+  /// полоса миниатюр референсов, поле промпта, голосовой ввод и отправка.
   Widget _buildMediaComposer(BuildContext context, {required bool isVideo}) {
     return ListenableBuilder(
       listenable: settings,
@@ -545,6 +568,12 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                     ],
                   ),
                   const SizedBox(height: 6),
+                  // G2-media-references: полоса миниатюр референсов со
+                  // счётчиком «N / max» над полем ввода — только когда
+                  // каталог модели разрешил референсы и они есть.
+                  if (_supportsReferences &&
+                      widget.mediaAttachments.isNotEmpty)
+                    _referenceStrip(p),
                   TextField(
                     controller: _effectiveController,
                     focusNode: _focus,
@@ -594,6 +623,33 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
                         ),
                       ),
                       const Spacer(),
+                      // G2-media-references: скрепка референсов в
+                      // медиа-режиме — строго по каталогу модели.
+                      if (_supportsReferences) ...[
+                        IconButton(
+                          key: const ValueKey('g2_media_attach'),
+                          tooltip: 'Прикрепить референс',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 34,
+                            minHeight: 34,
+                          ),
+                          style: IconButton.styleFrom(
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                          iconSize: 24,
+                          icon: Icon(
+                            Icons.attach_file,
+                            size: 24,
+                            color: p.muted,
+                          ),
+                          onPressed: widget.streaming
+                              ? null
+                              : widget.onAttach,
+                        ),
+                        const SizedBox(width: 4),
+                      ],
                       IconButton(
                         tooltip: 'Голосовой ввод',
                         padding: EdgeInsets.zero,
@@ -658,6 +714,36 @@ class _AdaptiveChatInputBarState extends State<AdaptiveChatInputBar> {
           ),
         );
       },
+    );
+  }
+
+  /// Полоса миниатюр референсов со счётчиком лимита «N / max».
+  /// Удаление каждого вложения — кнопкой в углу миниатюры
+  /// (делегирует в [AdaptiveChatInputBar.onRemoveMediaAttachment]).
+  Widget _referenceStrip(Palette p) {
+    final refs = widget.mediaAttachments;
+    final max = widget.capabilities.maxReferenceImages ?? 0;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Expanded(
+          child: AttachmentStrip(
+            attachments: refs,
+            onRemove: (i) => widget.onRemoveMediaAttachment?.call(i),
+          ),
+        ),
+        const SizedBox(width: 4),
+        if (max > 0)
+          Text(
+            '${refs.length} / $max',
+            key: const ValueKey('g2_ref_counter'),
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: p.muted,
+            ),
+          ),
+      ],
     );
   }
 
