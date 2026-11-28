@@ -47,6 +47,20 @@ class _FakeVideoPlatform extends VideoPlayerPlatform {
     bool preventsDisplaySleepDuringVideoPlayback,
   ) async {}
 
+  // H1-gallery-heal2: VideoPlayerController.initialize() в eventListener
+  // события `initialized` применяет ЗНАЧЕНИЯ контроллера к платформе —
+  // в том числе looping (по умолчанию false) и playbackSpeed (по умолчанию
+  // 1.0) через VideoPlayerPlatform.setLooping / .setPlaybackSpeed. Базовая
+  // реализация обоих методов бросает UnimplementedError — превью-инициализация
+  // падала с «setLooping() has not been implemented» (лог CI-запуска
+  // 46174410394). Фейк реализует оба как no-op: значения контроллера
+  // превью (пауза, сматывание на 150 мс) не зависят от looping/speed.
+  @override
+  Future<void> setLooping(int playerId, bool looping) async {}
+
+  @override
+  Future<void> setPlaybackSpeed(int playerId, double speed) async {}
+
   @override
   Future<void> setVolume(int playerId, double volume) async {}
 

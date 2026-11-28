@@ -1,32 +1,31 @@
 НЕДОСТАЮЩИЕ ФАЙЛЫ: нет
 
-H1-gallery-heal1 — минимальные фиксы строго по логу flutter analyze (7 issues):
+H1-gallery-heal2 — минимальный фикс по логу упавшего шага «Run tests».
 
-1. lib/features/gallery/artifacts_gallery_screen.dart
-   - undefined_method `_EmptyHint` (64:25): добавлен недостающий приватный
-     виджет `_EmptyHint({palette, section})` — заглушка пустой галереи с
-     текстом прежней пустой ветки F5 для «Все» и уточнёнными текстами для
-     «Изображения»/«Видео». Остальные методы не тронуты.
-   - unchecked_use_of_nullable_value (377), argument_type_not_assignable
-     (378), return_of_invalid_type (381): в `VideoPreviewCache.acquire`
-     замыкание внутри `.then` не сохраняет promotion nullable-локала
-     `entry`, а re-read `entry.init` остаётся nullable. Точечное
-     исправление: работа в замыкании через ненулевую ссылку
-     `final current = entry;`, а возвращаемое будущее фиксируется как
-     `final init = current.init ??= ...; return init;`. Семантика кэша
-     (uses/lastUsed/LRU-вытеснение/чёрный список) не изменена.
+Единственная ошибка запуска 46174410394 — фикстура
+H1-T-THUMBNAIL в test/h1_gallery_sections_test.dart:
 
-2. test/h1_gallery_sections_test.dart
-   - const_with_non_const (36:32): убран `const` перед `VideoEvent(...)` —
-     в зафиксированной версии video_player_platform_interface конструктор
-     VideoEvent не константный.
-   - override_on_non_overriding_member (43): снят `@override` с
-     `setPreventsDisplaySleepDuringVideoPlayback` — в данной версии
-     интерфейса у базового класса метода с таким именем нет; сам метод
-     оставлен обычным no-op фейка (поведение теста не меняется).
-   - undefined_function `_PlaceholderVideoPlatform` (141): добавлена
-     пустая конкретная реализация
-     `class _PlaceholderVideoPlatform extends VideoPlayerPlatform {}`
-     для восстановления платформы в addTearDown.
+  UnimplementedError: setLooping() has not been implemented.
+  #0 VideoPlayerPlatform.setLooping (video_player_platform_interface.dart:70)
+  #1 VideoPlayerController._applyLooping (video_player.dart:614)
+  #2 VideoPlayerController.initialize.eventListener (video_player.dart:513)
 
-Другие файлы не менялись; TEMP-DIAG-UNMODIFIABLE не затронут.
+Причина: VideoPlayerController.initialize() в eventListener события
+`initialized` применяет значения контроллера к платформе через
+VideoPlayerPlatform.setLooping (looping, по умолчанию false) и
+далее setPlaybackSpeed (по умолчанию 1.0) — базовая реализация обоих
+методов интерфейса бросает UnimplementedError, а фейк _FakeVideoPlatform
+их не переопределял. Лог показал setLooping, потому что он вызывается
+первым; следующим упало бы setPlaybackSpeed.
+
+Исправление: в _FakeVideoPlatform добавлены no-op переопределения
+`setLooping` и `setPlaybackSpeed` (оба существуют в базовом классе —
+@override корректен, в отличие от setPreventsDisplaySleepDuringVideoPlayback,
+который не тронут). Продакшн-код (VideoPreviewCache /
+artifacts_gallery_screen.dart) НЕ изменялся: падение было в фейке
+платформы, а не в приложении.
+
+Проверено по всем потребителям: превью вызывает initialize() → pause() →
+seekTo() — все три уже переопределены в фейке; VideoPlayer-виджет после
+инициализации других платформенных вызовов не делает. Остальные тесты
+файла (H1-T-SECTIONS, H1-T-FILTER) платформенный фейк не используют.
