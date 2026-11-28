@@ -90,7 +90,7 @@
 //     видео_плеер доставляет события платформы АСИНХРОННО (микротаски),
 //     а tester.pump() рендерит кадр синхронно в момент вызова —
 //     значение контроллера, обновлённое событием completed, попадает в
-//     кадр только на СЛЕДУЮЩЕЙ прокачку (контраст: PLAY-PAUSE проходит —
+//     кадр только на СЛЕДУЮЩУЮ прокачку (контраст: PLAY-PAUSE проходит —
 //     там setState вызывается синхронно из тапа ДО pump; в _pumpReady
 //     события initialized доехали именно благодаря второму pump).
 //     Исправление фикстуры: событие completed фейк-платформы теперь
@@ -114,6 +114,22 @@
 //     финальная прокачка до завершения анимаций. Проверяемое поведение
 //     не меняется: тап «Скачать» -> «Сохранение видео…» -> файл в
 //     каталоге Downloads -> плашка «Видео сохранено: …».
+//
+// G1-fix-analyze (CI 46134313665, шаг Analyze Code: 1 error + 2 info):
+//  Правка G1-fix-tests-heal2 передавала в vpi.VideoEvent именованный
+//  параметр `position:` — у VideoEvent в video_player_platform_interface
+//  ТАКОГО ПАРАМЕТРА НЕТ (конструктор принимает только eventType,
+//  duration, size, rotationCorrection, buffered, isPlaying —
+//  pub.dev/docs 6.7.x), тест не компилировался:
+//  «The named parameter 'position' isn't defined». Параметр убран —
+//  поведение replay от этого НЕ зависит: video_player в собственном
+//  eventListener при событии completed сам обновляет VideoPlayerValue:
+//  position = value.duration И isCompleted = true (см.
+//  packages/video_player/lib/video_player.dart), а карточка показывает
+//  replay по инварианту «v.isCompleted || v.position >= v.duration».
+//  Заодно закрыты два info prefer_const_constructors в _FakeVideoPlatform:
+//  Duration(seconds: 30) и Size(640, 360) — const-значения (const
+//  допустим у аргументов, хотя сам VideoEvent не const-конструктор).
 
 import 'dart:async';
 import 'dart:io';
@@ -159,28 +175,32 @@ class _FakeVideoPlatform extends vpi.VideoPlayerPlatform {
   Stream<vpi.VideoEvent> videoEventsFor(int playerId) {
     final controller = StreamController<vpi.VideoEvent>();
     _events[playerId] = controller;
-    // VideoEvent — не const-конструктор (video_player_platform_interface).
+    // VideoEvent — не const-конструктор (video_player_platform_interface),
+    // но его аргументы — const-значения.
     controller.add(vpi.VideoEvent(
       eventType: vpi.VideoEventType.initialized,
-      duration: Duration(seconds: 30),
-      size: Size(640, 360),
+      duration: const Duration(seconds: 30),
+      size: const Size(640, 360),
     ));
     return controller.stream;
   }
 
   /// Платформа сообщает «воспроизведение дошло до конца».
   ///
-  /// G1-fix-tests-heal2: событие completed несёт duration И position,
-  /// равную длительности (как реальная платформа: к моменту completed
-  /// позиция дошла до конца). Контроллер обновляет value по этим полям,
-  /// и карточка показывает replay по инварианту
-  /// «v.isCompleted || v.position >= v.duration» — независимо от того,
-  /// какую из двух веток прокладывает конкретная версия video_player.
+  /// G1-fix-analyze: у vpi.VideoEvent (video_player_platform_interface)
+  /// НЕТ именованного параметра `position` — прежняя правка передавала
+  /// `position:` и файл не компилировался (CI 46134313665,
+  /// undefined_named_parameter). Событию completed достаточно
+  /// eventType + duration: сам video_player при получении completed
+  /// обновляет VideoPlayerValue — position = duration и isCompleted =
+  /// true (eventListener в video_player/lib/video_player.dart) —
+  /// карточка показывает replay по инварианту
+  /// «v.isCompleted || v.position >= v.duration» независимо от того,
+  /// какая из двух веток сработала.
   void complete(int playerId) {
     _events[playerId]?.add(vpi.VideoEvent(
       eventType: vpi.VideoEventType.completed,
       duration: const Duration(seconds: 30),
-      position: const Duration(seconds: 30),
     ));
   }
 
