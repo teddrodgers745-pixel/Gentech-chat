@@ -81,6 +81,39 @@
 //        прокачки добавлены порции реального времени (runAsync), а
 //        метод-канал file_picker замокан синхронным «отменой выбора»
 //        (null) — для платформ, где saveFile идёт через channel.
+//
+// G1-fix-tests-heal2 (CI 46133475467: после heal1 с шрифтами разобрались
+// — PLAY-PAUSE/FULLSCREEN/SHARE/GALLERY зелёные — но REPLAY и DOWNLOAD
+// всё ещё падают, теперь уже на собственных утверждениях; шрифтовых
+// исключений в логе больше нет):
+//  1) G1-T-VIDEO-REPLAY («Found 0 widgets with icon U+F00FC»):
+//     видео_плеер доставляет события платформы АСИНХРОННО (микротаски),
+//     а tester.pump() рендерит кадр синхронно в момент вызова —
+//     значение контроллера, обновлённое событием completed, попадает в
+//     кадр только на СЛЕДУЮЩЕЙ прокачку (контраст: PLAY-PAUSE проходит —
+//     там setState вызывается синхронно из тапа ДО pump; в _pumpReady
+//     события initialized доехали именно благодаря второму pump).
+//     Исправление фикстуры: событие completed фейк-платформы теперь
+//     несёт duration И position (= 30 с) — как реальная платформа,
+//     где к моменту completed позиция равна длительности; карточка
+//     показывает replay по ИНВАРИАНТУ «позиция >= длительность»
+//     (v.isCompleted || v.position >= v.duration в _centerButton),
+//     а проверка выполняется циклом прокачки до появления иконки.
+//  2) G1-T-VIDEO-DOWNLOAD («Found 0 widgets ... Видео сохранено»):
+//     поток скачивания в fake-async suspend-ится на КАЖДОМ реальном
+//     I/O (чтение исходника, запись в Downloads) и на
+//     FilePicker.platform.saveFile; прежние окна (300 мс + 12×80 мс)
+//     на CI-машине не гарантировали завершение всей цепочки до
+//     финального expect. Исправление фикстуры: канал file_picker
+//     замокан под ОБЕИМИ известными именами канала плагина
+//     («...filepick» и «...filepicker») — синхронный «отказ от выбора»
+//     (null) для любой платформы, где saveFile идёт через channel;
+//     цикл прокачки расширен (24 итерации: pump 150 мс fake-времени —
+//     прокачка exit/enter-анимаций второй плашки — плюс окно 150 мс
+//     реального времени на реальный I/O); после цикла добавлена
+//     финальная прокачка до завершения анимаций. Проверяемое поведение
+//     не меняется: тап «Скачать» -> «Сохранение видео…» -> файл в
+//     каталоге Downloads -> плашка «Видео сохранено: …».
 
 import 'dart:async';
 import 'dart:io';
@@ -136,9 +169,18 @@ class _FakeVideoPlatform extends vpi.VideoPlayerPlatform {
   }
 
   /// Платформа сообщает «воспроизведение дошло до конца».
+  ///
+  /// G1-fix-tests-heal2: событие completed несёт duration И position,
+  /// равную длительности (как реальная платформа: к моменту completed
+  /// позиция дошла до конца). Контроллер обновляет value по этим полям,
+  /// и карточка показывает replay по инварианту
+  /// «v.isCompleted || v.position >= v.duration» — независимо от того,
+  /// какую из двух веток прокладывает конкретная версия video_player.
   void complete(int playerId) {
     _events[playerId]?.add(vpi.VideoEvent(
       eventType: vpi.VideoEventType.completed,
+      duration: const Duration(seconds: 30),
+      position: const Duration(seconds: 30),
     ));
   }
 
@@ -283,14 +325,31 @@ void main() {
       );
 
       // Платформа сообщает: воспроизведение дошло до конца.
+      //
+      // G1-fix-tests-heal2: события платформы доставляются контроллеру
+      // асинхронно (микротаски), а pump() рисует кадр синхронно —
+      // обновлённое значение попадает в дерево на следующей прокачке.
+      // Прокачиваем часы до появления иконки повтора.
       fake.complete(0);
-      await tester.pump();
-      expect(find.byIcon(Icons.replay_rounded), findsOneWidget,
+      var replayShown = false;
+      for (var i = 0; i < 12 && !replayShown; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+        replayShown =
+            find.byIcon(Icons.replay_rounded).evaluate().isNotEmpty;
+      }
+      expect(replayShown, isTrue,
           reason: 'после конца видео предлагается повтор');
 
       // Тап по видео — повтор с начала, а не «второй тап — стоп».
+      // seekTo/play — асинхронные вызовы платформы: прокачиваем до
+      // фиксации обоих вызовов в фейке.
       await tester.tap(find.byKey(const ValueKey('g1_video_tap_area')));
-      await tester.pump();
+      var replayed = false;
+      for (var i = 0; i < 12 && !replayed; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        replayed = fake.calls.contains('seekTo:0') &&
+            fake.calls.contains('play');
+      }
       expect(fake.calls, contains('seekTo:0'),
           reason: 'повтор обязан перематывать в начало');
       expect(fake.calls, contains('play'),
@@ -366,15 +425,27 @@ void main() {
         (call) async =>
             call.method == 'getDownloadsPath' ? dlDir.path : _tempDir!.path,
       );
-      // G1-fix-tests: на платформах, где FilePicker.saveFile идёт через
-      // method channel, отвечаем синхронно в fake-времени «отменой
+      // G1-fix-tests-heal2: на платформах, где FilePicker.saveFile идёт
+      // через method channel, отвечаем синхронно в fake-времени «отменой
       // выбора» (null) — поток скачивания детерминированно переходит к
-      // fallback-записи в каталог Downloads.
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(
-        const MethodChannel('miguelruivo.flutter.plugins.filepicker.FilePicker'),
-        (call) async => null,
-      );
+      // fallback-записи в каталог Downloads. Мок ставится под ОБЕИМИ
+      // известными именами канала file_picker (историческая усечённая
+      // «...filepick» и полная «...filepicker»); лишняя регистрация
+      // безвредна — перехватывается тот канал, который реально
+      // используется плагином. Если реализация платформы не канальная
+      // (FFI), она в тестовом окружении падает мгновенно, поток
+      // равнозначно уходит в fallback — детерминизм обеспечен.
+      for (final channelName in <String>[
+        'miguelruivo.flutter.plugins.filepick',
+        'miguelruivo.flutter.plugins.filepicker',
+        'miguelruivo.flutter.plugins.filepicker.FilePicker',
+      ]) {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          MethodChannel(channelName),
+          (call) async => null,
+        );
+      }
 
       await _pumpReady(
         tester,
@@ -394,25 +465,25 @@ void main() {
       // G1-fix-tests: подтверждение приходит ВТОРОЙ плашкой SnackBar
       // (snack() перед показом вызывает hideCurrentSnackBar: первая
       // уходит с exit-анимацией ~250 мс — одного pump() мало, прокачиваем
-      // часы). Кроме того, поток скачивания на пути к fallback-записи
-      // упирается в FilePicker.platform.saveFile: на Linux-хосте CI это
-      // запуск внешнего диалогового процесса — РЕАЛЬНЫЙ I/O, который не
-      // разрешается в fake-async вне окон tester.runAsync (await
-      // «зависал», и плашка «Видео сохранено» не появлялась вовсе — CI:
-      // «Found 0 widgets ... Видео сохранено»). Поэтому каждая итерация
-      // цикла даёт вводу-выводу порцию реального времени внутри
-      // runAsync: весь путь (чтение файла -> FilePicker -> ошибка/отмена
-      // -> fallback-запись в Downloads) завершается, затем fake-прокачка
-      // показывает вторую плашку.
+      // часы). Кроме того, поток скачивания на каждом реальном I/O
+      // (чтение исходника, FilePicker, запись в Downloads) suspend-ится
+      // в fake-async: вне окон tester.runAsync await не разрешается.
+      // G1-fix-tests-heal2: на CI-машине прежних 12×80 мс реального
+      // времени не хватило, чтобы вся цепочка дошла до второй плашки
+      // (Found 0). Расширяем цикл: 24 итерации, каждая даёт вводу-выводу
+      // окно 150 мс реального времени и прокачивает 150 мс fake-времени
+      // (exit/enter-анимации второй плашки ~500 мс суммарно).
       for (var i = 0;
-          i < 12 &&
+          i < 24 &&
               find.textContaining('Видео сохранено').evaluate().isEmpty;
           i++) {
-        await tester.pump(const Duration(milliseconds: 120));
+        await tester.pump(const Duration(milliseconds: 150));
         await tester.runAsync(() async {
-          await Future<void>.delayed(const Duration(milliseconds: 80));
+          await Future<void>.delayed(const Duration(milliseconds: 150));
         });
       }
+      // Финальная прокачка: завершение анимаций плашки.
+      await tester.pump(const Duration(milliseconds: 300));
       await tester.pump();
 
       // Подтверждение с именем файла.
